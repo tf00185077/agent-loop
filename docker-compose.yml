@@ -1,39 +1,40 @@
 services:
 
-  # ── 主服務：跑 agent ──────────────────────────────────────────────────────
-  auto-agent:
+  # ── Dashboard server（開發模式，hot reload）────────────────────────────────
+  server:
     build:
       context: .
       target: runtime
     image: auto-agent:local
-    container_name: auto-agent
+    container_name: auto-agent-server
 
-    # TTY + stdin 開啟，引導式 login prompt 才能運作
     tty: true
     stdin_open: true
 
+    ports:
+      - "3000:3000"
+
     environment:
-      # 優先從 .env 或 host env 注入 token；有了就跳過引導
+      - RUNNING_IN_DOCKER=true
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GH_TOKEN=${GH_TOKEN:-}
       - COPILOT_GITHUB_TOKEN=${COPILOT_GITHUB_TOKEN:-}
-      # 讓 login.ts 知道現在在容器內（無法開瀏覽器）
-      - RUNNING_IN_DOCKER=true
 
     volumes:
-      # 把 host 專案目錄掛進去當 workspace（agent 讀寫檔案用）
-      - .:/workspace
-
-    # gh auth 登入狀態放在 named volume，重啟容器不會掉
-    # （gh 預設存在 ~/.config/gh/）
+      # source code 掛進來，tsx watch 偵測變更自動 reload
+      - ./src:/app/src
+      - ./dashboard:/app/dashboard
+      # node_modules 用容器內的，不混用 Windows 版
+      - /app/node_modules
+      # gh 登入狀態 & copilot session 持久化
       - gh-config:/root/.config/gh
-
-    # Copilot SDK 的 session state / cache
       - copilot-home:/root/.copilot
 
-    command: ["node", "/app/dist/index.js"]
+    working_dir: /app
 
-  # ── 登入工具：只跑 gh auth login 後結束 ──────────────────────────────────
+    command: ["npx", "tsx", "watch", "src/server/index.ts"]
+
+  # ── 登入工具：跑一次 gh device flow 後結束 ────────────────────────────────
   login:
     build:
       context: .
@@ -51,9 +52,34 @@ services:
       - gh-config:/root/.config/gh
       - copilot-home:/root/.copilot
 
-    # gh device flow 不需要瀏覽器，照著指示在 github.com/login/device 輸入 code
     entrypoint: ["gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "https"]
     command: []
+
+  # ── CLI agent（terminal 直接用）────────────────────────────────────────────
+  agent:
+    build:
+      context: .
+      target: runtime
+    image: auto-agent:local
+    container_name: auto-agent
+
+    tty: true
+    stdin_open: true
+
+    environment:
+      - RUNNING_IN_DOCKER=true
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GH_TOKEN=${GH_TOKEN:-}
+      - COPILOT_GITHUB_TOKEN=${COPILOT_GITHUB_TOKEN:-}
+
+    volumes:
+      - .:/workspace
+      - /app/node_modules
+      - gh-config:/root/.config/gh
+      - copilot-home:/root/.copilot
+
+    working_dir: /workspace
+    command: ["node", "/app/dist/index.js"]
 
 volumes:
   gh-config:
