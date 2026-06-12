@@ -1,0 +1,30 @@
+{
+  "name": "auto-agent",
+  "version": "1.0.0",
+  "description": "Spawn and orchestrate GitHub Copilot custom agents via the Copilot SDK",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "login": "tsx src/login.ts",
+    "list-models": "tsx src/list-models.ts",
+    "demo:researcher": "tsx src/demos/researcher.ts",
+    "demo:orchestrator": "tsx src/demos/orchestrator.ts"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.5.1",
+    "@github/copilot-sdk": "^1.0.0",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}
