@@ -87,27 +87,32 @@ npm install
 # 引導式登入（第一次執行）
 npm run login
 
-# 執行主程式
-npm run dev "你的 prompt"
+# 啟動 Dashboard（瀏覽器開 http://localhost:3000）
+npm run server
 
-# 其他 demo
+# 其他 CLI 指令
+npm run dev "你的 prompt"          # 直接跑 agent（terminal）
+npm run list-models                # 列出可用 model
 npm run demo:researcher "問題"
 npm run demo:orchestrator "任務描述"
-
-# 編譯
-npm run build
-npm start "你的 prompt"
 ```
 
-### Docker 啟動
+### Docker 啟動（推薦）
 
 ```bash
-# 第一次：走 device flow 登入
+# 第一次：build image
+docker compose build
+
+# 第一次：gh device flow 登入
 # gh 會印出驗證碼，前往 github.com/login/device 輸入
 docker compose run --rm login
 
-# 執行 agent
-docker compose run --rm auto-agent "你的 prompt"
+# 啟動 Dashboard server（hot reload，改 code 自動重啟）
+docker compose up server
+# 瀏覽器開 http://localhost:3000
+
+# CLI agent（terminal 直接用）
+docker compose run --rm agent "你的 prompt"
 ```
 
 ### 環境變數（選填）
@@ -144,8 +149,10 @@ Agent runtime 永遠跑在 Docker（Linux）容器內，跨平台差異在架構
 - [x] AgentSpawner
 - [x] 引導式登入（gh OAuth / device flow / PAT）
 - [x] Docker（multi-stage build，named volume 保留登入狀態）
+- [x] Dashboard（auth 確認、model 選擇、即時串流聊天）
+- [x] API server（/api/auth、/api/models、/api/chat SSE）
 - [ ] LoopController
 - [ ] GoalPlanner
 - [ ] TaskVerifier
-- [ ] WebSocket server
-- [ ] Dashboard
+- [ ] WebSocket server（目前用 SSE，未來升級）
+- [ ] Dashboard — agent loop 進度視覺化

@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>auto-agent</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0d0d;
+      --surface: #151515;
+      --border: #2a2a2a;
+      --text: #e8e8e8;
+      --muted: #6b6b6b;
+      --accent: #7c6af7;
+      --accent-dim: #3d3466;
+      --green: #3fb950;
+      --red: #f85149;
+      --yellow: #d29922;
+      --radius: 10px;
+      --font: "Inter", system-ui, sans-serif;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ─────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      height: 52px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .logo {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+      color: var(--text);
+    }
+
+    .logo span { color: var(--accent); }
+
+    .user-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      padding: 4px 12px 4px 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .user-pill .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      flex-shrink: 0;
+    }
+
+    /* ── Pages ──────────────────────────────────────────── */
+    .page { display: none; flex: 1; overflow: hidden; }
+    .page.active { display: flex; }
+
+    /* ── Login page ─────────────────────────────────────── */
+    #page-login {
+      align-items: center;
+      justify-content: center;
+    }
+
+    .login-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 40px 36px;
+      width: 360px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .login-card h2 {
+      font-size: 18px;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    .login-card p {
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    .login-card .hint {
+      background: #1a1a1a;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* ── Dashboard ──────────────────────────────────────── */
+    #page-dashboard {
+      flex-direction: column;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .toolbar label {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    select {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 13px;
+      padding: 6px 10px;
+      cursor: pointer;
+      outline: none;
+      min-width: 200px;
+    }
+
+    select:focus { border-color: var(--accent); }
+
+    .model-status {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* ── Chat area ──────────────────────────────────────── */
+    .chat-wrap {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .chat-wrap::-webkit-scrollbar { width: 6px; }
+    .chat-wrap::-webkit-scrollbar-track { background: transparent; }
+    .chat-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .msg {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-width: 760px;
+      width: 100%;
+    }
+
+    .msg.user { align-self: flex-end; align-items: flex-end; }
+    .msg.assistant { align-self: flex-start; }
+
+    .msg-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .msg-bubble {
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .msg.user .msg-bubble {
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      color: var(--text);
+    }
+
+    .msg.assistant .msg-bubble {
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+
+    .msg-bubble.streaming::after {
+      content: "▋";
+      animation: blink 1s step-end infinite;
+      color: var(--accent);
+    }
+
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .subagent-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--accent);
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      border-radius: 99px;
+      padding: 2px 10px;
+    }
+
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: var(--muted);
+    }
+
+    .empty-state .big { font-size: 32px; }
+
+    /* ── Input bar ──────────────────────────────────────── */
+    .input-bar {
+      display: flex;
+      gap: 10px;
+      padding: 14px 20px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    textarea {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 14px;
+      font-family: var(--font);
+      padding: 10px 14px;
+      resize: none;
+      outline: none;
+      line-height: 1.5;
+      min-height: 44px;
+      max-height: 160px;
+      overflow-y: auto;
+    }
+
+    textarea:focus { border-color: var(--accent); }
+    textarea::placeholder { color: var(--muted); }
+
+    button {
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 10px 20px;
+      transition: opacity 0.15s;
+      white-space: nowrap;
+      align-self: flex-end;
+    }
+
+    button:hover:not(:disabled) { opacity: 0.85; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.secondary {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    /* ── Toast ───────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #222;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 13px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      z-index: 999;
+    }
+
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo">auto<span>-agent</span></div>
+    <div id="user-pill" class="user-pill" style="display:none">
+      <div class="dot"></div>
+      <span id="user-name"></span>
+    </div>
+  </header>
+
+  <!-- ── Login Page ─────────────────────────────────────────── -->
+  <div id="page-login" class="page">
+    <div class="login-card" style="width:420px; gap:20px;">
+
+      <!-- Step 1：選方式 -->
+      <div id="login-step-1">
+        <h2 style="text-align:center; margin-bottom:8px;">連接 GitHub Copilot</h2>
+        <p style="text-align:center; margin-bottom:20px;">選擇取得 token 的方式</p>
+
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <button class="secondary" id="btn-method-gh" style="text-align:left; padding:14px 16px; border-radius:8px;">
+            <div style="font-weight:600; margin-bottom:4px;">⚡ 使用 GitHub CLI（推薦）</div>
+            <div style="font-size:12px; color:var(--muted);">已安裝 gh CLI，跑一個指令就好</div>
+          </button>
+          <button class="secondary" id="btn-method-pat" style="text-align:left; padding:14px 16px; border-radius:8px;">
+            <div style="font-weight:600; margin-bottom:4px;">🔑 手動建立 Personal Access Token</div>
+            <div style="font-size:12px; color:var(--muted);">從 GitHub Settings 建立 PAT</div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 2a：gh CLI 流程 -->
+      <div id="login-step-gh" style="display:none; flex-direction:column; gap:16px;">
+        <div>
+          <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">Step 1 — 在 PowerShell / Terminal 執行</div>
+          <div class="hint" style="font-size:13px; display:flex; align-items:center; justify-content:space-between;">
+            <span>gh auth token</span>
+            <button id="btn-copy-cmd" class="secondary" style="padding:4px 10px; font-size:11px; border-radius:5px;">複製</button>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">Step 2 — 貼上輸出的 token</div>
+          <input id="token-input-gh" type="password" placeholder="gho_xxxxxxxxxxxxxxxxxxxx"
+            style="background:#1a1a1a; border:1px solid var(--border); border-radius:6px;
+                   color:var(--text); font-family:monospace; font-size:13px;
+                   padding:10px 14px; outline:none; width:100%;" />
+        </div>
+        <div id="token-error-gh" style="color:var(--red); font-size:13px; display:none;"></div>
+        <div style="display:flex; gap:8px;">
+          <button class="secondary" id="btn-back-gh" style="flex:1;">← 返回</button>
+          <button id="btn-submit-gh" style="flex:2;">驗證並登入</button>
+        </div>
+      </div>
+
+      <!-- Step 2b：PAT 流程 -->
+      <div id="login-step-pat" style="display:none; flex-direction:column; gap:16px;">
+        <div>
+          <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">Step 1 — 前往 GitHub 建立 Token</div>
+          <a href="https://github.com/settings/tokens/new?scopes=read:user&description=auto-agent"
+             target="_blank"
+             style="display:block; background:#1a1a1a; border:1px solid var(--border);
+                    border-radius:6px; padding:10px 14px; font-size:13px; color:var(--accent);
+                    text-decoration:none;">
+            github.com/settings/tokens → 開新 token ↗
+          </a>
+          <div style="font-size:12px; color:var(--muted); margin-top:8px; line-height:1.6;">
+            Scopes 勾選：<code style="color:var(--text);">read:user</code><br>
+            有 Copilot 訂閱的帳號不需要額外 scope
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">Step 2 — 貼上 token</div>
+          <input id="token-input-pat" type="password" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+            style="background:#1a1a1a; border:1px solid var(--border); border-radius:6px;
+                   color:var(--text); font-family:monospace; font-size:13px;
+                   padding:10px 14px; outline:none; width:100%;" />
+        </div>
+        <div id="token-error-pat" style="color:var(--red); font-size:13px; display:none;"></div>
+        <div style="display:flex; gap:8px;">
+          <button class="secondary" id="btn-back-pat" style="flex:1;">← 返回</button>
+          <button id="btn-submit-pat" style="flex:2;">驗證並登入</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Dashboard Page ─────────────────────────────────── -->
+  <div id="page-dashboard" class="page">
+
+    <div class="toolbar">
+      <label>Model</label>
+      <select id="model-select" disabled>
+        <option value="">載入中...</option>
+      </select>
+      <span id="model-status" class="model-status"></span>
+    </div>
+
+    <div class="chat-wrap" id="chat-wrap">
+      <div class="empty-state" id="empty-state">
+        <div class="big">⚡</div>
+        <div>選好 model，輸入你的目標</div>
+      </div>
+    </div>
+
+    <div class="input-bar">
+      <textarea
+        id="prompt-input"
+        placeholder="輸入你的目標或問題..."
+        rows="1"
+      ></textarea>
+      <button id="btn-send" disabled>送出</button>
+    </div>
+
+  </div>
+
+  <div id="toast"></div>
+
+<script type="module">
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+
+function showPage(id) {
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+}
+
+function toast(msg, duration = 3000) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), duration);
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+async function checkAuth() {
+  try {
+    const res = await fetch("/api/auth");
+    const data = await res.json();
+    if (data.loggedIn) {
+      document.getElementById("user-pill").style.display = "flex";
+      document.getElementById("user-name").textContent = data.user;
+      showPage("page-dashboard");
+      loadModels();
+    } else {
+      showPage("page-login");
+    }
+  } catch {
+    showPage("page-login");
+  }
+}
+
+// 步驟切換
+function showLoginStep(id) {
+  ["login-step-1", "login-step-gh", "login-step-pat"].forEach(s => {
+    const el = document.getElementById(s);
+    el.style.display = "none";
+  });
+  const target = document.getElementById(id);
+  target.style.display = id === "login-step-1" ? "block" : "flex";
+}
+
+document.getElementById("btn-method-gh").addEventListener("click", () => showLoginStep("login-step-gh"));
+document.getElementById("btn-method-pat").addEventListener("click", () => showLoginStep("login-step-pat"));
+document.getElementById("btn-back-gh").addEventListener("click", () => showLoginStep("login-step-1"));
+document.getElementById("btn-back-pat").addEventListener("click", () => showLoginStep("login-step-1"));
+
+// 複製指令
+document.getElementById("btn-copy-cmd").addEventListener("click", () => {
+  navigator.clipboard.writeText("gh auth token").then(() => {
+    const btn = document.getElementById("btn-copy-cmd");
+    btn.textContent = "已複製 ✓";
+    setTimeout(() => btn.textContent = "複製", 2000);
+  });
+});
+
+// 共用 submit 邏輯
+async function submitToken(inputId, errorId, btnId) {
+  const input = document.getElementById(inputId);
+  const errEl = document.getElementById(errorId);
+  const btn   = document.getElementById(btnId);
+  const t = input.value.trim();
+
+  if (!t) {
+    errEl.textContent = "請貼上 token";
+    errEl.style.display = "block";
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "驗證中...";
+  errEl.style.display = "none";
+
+  try {
+    const res = await fetch("/api/auth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: t }),
+    });
+    const data = await res.json();
+
+    if (res.ok && data.ok) {
+      document.getElementById("user-pill").style.display = "flex";
+      document.getElementById("user-name").textContent = data.user;
+      showPage("page-dashboard");
+      loadModels();
+    } else {
+      errEl.textContent = data.error ?? "token 無效，請確認帳號是否有 Copilot 訂閱";
+      errEl.style.display = "block";
+    }
+  } catch (e) {
+    errEl.textContent = "連線失敗：" + e.message;
+    errEl.style.display = "block";
+  }
+
+  btn.disabled = false;
+  btn.textContent = "驗證並登入";
+}
+
+document.getElementById("btn-submit-gh").addEventListener("click",
+  () => submitToken("token-input-gh", "token-error-gh", "btn-submit-gh"));
+document.getElementById("btn-submit-pat").addEventListener("click",
+  () => submitToken("token-input-pat", "token-error-pat", "btn-submit-pat"));
+
+// ── Models ────────────────────────────────────────────────────────────────────
+
+async function loadModels() {
+  const sel = document.getElementById("model-select");
+  const status = document.getElementById("model-status");
+  status.textContent = "載入中...";
+
+  try {
+    const res = await fetch("/api/models");
+    const data = await res.json();
+
+    if (!data.models?.length) {
+      status.textContent = "無可用 model";
+      return;
+    }
+
+    sel.innerHTML = data.models
+      .map(m => `<option value="${m.id}">${m.name}</option>`)
+      .join("");
+
+    // 預設選 claude-sonnet-4.6，找不到就選第一個
+    const preferred = data.models.find(m => m.id.includes("claude-sonnet-4.6"));
+    if (preferred) sel.value = preferred.id;
+
+    sel.disabled = false;
+    document.getElementById("btn-send").disabled = false;
+    status.textContent = `${data.models.length} 個可用`;
+  } catch (e) {
+    status.textContent = "載入失敗";
+    toast("無法載入 model 清單");
+  }
+}
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+
+const chatWrap = document.getElementById("chat-wrap");
+const emptyState = document.getElementById("empty-state");
+
+function addMessage(role, content = "", streaming = false) {
+  if (emptyState) emptyState.remove();
+
+  const msg = document.createElement("div");
+  msg.className = `msg ${role}`;
+
+  const label = document.createElement("div");
+  label.className = "msg-label";
+  label.textContent = role === "user" ? "You" : "Agent";
+
+  const bubble = document.createElement("div");
+  bubble.className = "msg-bubble" + (streaming ? " streaming" : "");
+  bubble.textContent = content;
+
+  msg.appendChild(label);
+  msg.appendChild(bubble);
+  chatWrap.appendChild(msg);
+  chatWrap.scrollTop = chatWrap.scrollHeight;
+
+  return bubble;
+}
+
+function addSubagentTag(name) {
+  const tag = document.createElement("div");
+  tag.className = "msg assistant";
+  const bubble = document.createElement("div");
+  bubble.className = "subagent-tag";
+  bubble.innerHTML = `<span>⚙</span> ${name}`;
+  tag.appendChild(bubble);
+  chatWrap.appendChild(tag);
+  chatWrap.scrollTop = chatWrap.scrollHeight;
+}
+
+async function sendPrompt() {
+  const input = document.getElementById("prompt-input");
+  const sel = document.getElementById("model-select");
+  const btn = document.getElementById("btn-send");
+  const prompt = input.value.trim();
+  const model = sel.value;
+
+  if (!prompt || !model) return;
+
+  input.value = "";
+  input.style.height = "auto";
+  btn.disabled = true;
+
+  addMessage("user", prompt);
+  const bubble = addMessage("assistant", "", true);
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, model }),
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullText = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const event = JSON.parse(line.slice(6));
+
+          if (event.type === "delta") {
+            fullText += event.content;
+            bubble.textContent = fullText;
+            bubble.classList.add("streaming");
+            chatWrap.scrollTop = chatWrap.scrollHeight;
+          }
+
+          if (event.type === "subagent") {
+            addSubagentTag(event.agentName);
+          }
+
+          if (event.type === "done") {
+            bubble.textContent = event.content || fullText;
+            bubble.classList.remove("streaming");
+          }
+
+          if (event.type === "error") {
+            bubble.textContent = "錯誤：" + event.message;
+            bubble.classList.remove("streaming");
+            bubble.style.color = "var(--red)";
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    bubble.textContent = "連線失敗：" + e.message;
+    bubble.classList.remove("streaming");
+    bubble.style.color = "var(--red)";
+  }
+
+  btn.disabled = false;
+  input.focus();
+}
+
+document.getElementById("btn-send").addEventListener("click", sendPrompt);
+
+// Enter 送出，Shift+Enter 換行
+document.getElementById("prompt-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendPrompt();
+  }
+});
+
+// textarea 自動高度
+document.getElementById("prompt-input").addEventListener("input", function () {
+  this.style.height = "auto";
+  this.style.height = Math.min(this.scrollHeight, 160) + "px";
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+checkAuth();
+
+</script>
+</body>
+</html>

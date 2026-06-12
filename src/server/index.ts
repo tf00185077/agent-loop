@@ -1,173 +1,191 @@
 import express from "express";
-import { execSync } from "node:child_process";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { CopilotClient, approveAll } from "@github/copilot-sdk";
-import { AgentSpawner } from "../AgentSpawner.js";
+import { join } from "node:path";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(express.json());
 
-// Serve dashboard static files
-app.use(express.static(join(__dirname, "../../dashboard")));
+const dashboardPath = join(process.cwd(), "dashboard");
+console.log("Serving dashboard from:", dashboardPath);
+app.use(express.static(dashboardPath));
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+// ── Token store ───────────────────────────────────────────────────────────────
+// 優先讀 env var（啟動時帶），也可透過 /api/auth/token 在 dashboard 設定
 
-/** 確認 gh 是否已登入，回傳帳號名稱 */
-function getGhUser(): string | null {
-  try {
-    const out = execSync("gh auth status 2>&1", { encoding: "utf8" });
-    const match = out.match(/Logged in to github\.com account (\S+)/);
-    return match?.[1] ?? null;
-  } catch {
-    return null;
-  }
+let token: string =
+  process.env.GITHUB_TOKEN ||
+  process.env.GH_TOKEN ||
+  process.env.COPILOT_GITHUB_TOKEN ||
+  "";
+
+const COPILOT = "https://api.githubcopilot.com";
+const GITHUB  = "https://api.github.com";
+
+function copilotHeaders() {
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    "Copilot-Integration-Id": "vscode-chat",
+    "editor-version": "vscode/1.85.0",
+  };
 }
 
-/** 取得 gh token */
-function getGhToken(): string | null {
-  try {
-    return execSync("gh auth token", { encoding: "utf8" }).trim();
-  } catch {
-    return null;
-  }
-}
+// ── Auth ──────────────────────────────────────────────────────────────────────
 
-// GET /api/auth — 確認登入狀態
-app.get("/api/auth", (_req, res) => {
-  const user = getGhUser();
-  if (!user) {
+// GET /api/auth — 確認 token 是否有效，回傳帳號名稱
+app.get("/api/auth", async (_req, res) => {
+  if (!token) {
     res.json({ loggedIn: false });
     return;
   }
-  const token = getGhToken();
-  if (token) process.env.GITHUB_TOKEN = token;
-  res.json({ loggedIn: true, user });
+  try {
+    const r = await fetch(`${GITHUB}/user`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (!r.ok) {
+      token = "";
+      res.json({ loggedIn: false });
+      return;
+    }
+    const user = (await r.json()) as any;
+    res.json({ loggedIn: true, user: user.login });
+  } catch {
+    res.json({ loggedIn: false });
+  }
 });
 
-// ── Models ───────────────────────────────────────────────────────────────────
+// POST /api/auth/token — 使用者貼上 token，server 驗證後存起來
+app.post("/api/auth/token", async (req, res) => {
+  const { token: input } = req.body as { token: string };
+  if (!input?.trim()) {
+    res.status(400).json({ error: "token is required" });
+    return;
+  }
+  try {
+    const r = await fetch(`${GITHUB}/user`, {
+      headers: {
+        Authorization: `Bearer ${input.trim()}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (!r.ok) {
+      res.status(401).json({ error: "invalid token" });
+      return;
+    }
+    const user = (await r.json()) as any;
+    token = input.trim();
+    res.json({ ok: true, user: user.login });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? "validation failed" });
+  }
+});
 
-// GET /api/models — 列出可用 model
+// ── Models ────────────────────────────────────────────────────────────────────
+
+// GET /api/models — 列出 Copilot 可用 model
 app.get("/api/models", async (_req, res) => {
-  const token = getGhToken();
   if (!token) {
     res.status(401).json({ error: "not logged in" });
     return;
   }
-  process.env.GITHUB_TOKEN = token;
-
   try {
-    const client = new CopilotClient();
-    await client.start();
-    const models = await client.listModels();
-    await client.stop();
-    res.json({ models: models.map((m) => ({ id: m.id, name: m.name ?? m.id })) });
+    const r = await fetch(`${COPILOT}/models`, {
+      headers: copilotHeaders(),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      res.status(r.status).json({ error: text });
+      return;
+    }
+    const data = (await r.json()) as any;
+    // OpenAI-compatible: { data: [{ id, name, ... }] }
+    const models = (data.data ?? []).map((m: any) => ({
+      id: m.id,
+      name: m.name ?? m.id,
+    }));
+    res.json({ models });
   } catch (e: any) {
     res.status(500).json({ error: e?.message ?? "failed to list models" });
   }
 });
 
-// ── Chat ─────────────────────────────────────────────────────────────────────
+// ── Chat ──────────────────────────────────────────────────────────────────────
 
-// POST /api/chat — 送出 prompt，SSE 串流回應
+// POST /api/chat — SSE 串流，OpenAI-compatible
 app.post("/api/chat", async (req, res) => {
-  const { prompt, model } = req.body as { prompt: string; model: string };
+  const { prompt, model, history = [] } = req.body as {
+    prompt: string;
+    model: string;
+    history?: Array<{ role: string; content: string }>;
+  };
 
   if (!prompt || !model) {
     res.status(400).json({ error: "prompt and model are required" });
     return;
   }
-
-  const token = getGhToken();
   if (!token) {
     res.status(401).json({ error: "not logged in" });
     return;
   }
-  process.env.GITHUB_TOKEN = token;
 
-  // SSE headers
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
-  const send = (type: string, data: object) => {
+  const send = (type: string, data: object) =>
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
-  };
 
   try {
-    const spawner = new AgentSpawner([
-      {
-        name: "researcher",
-        displayName: "Research Agent",
-        description: "Answers questions, reads files, summarizes code.",
-        tools: ["grep", "glob", "view"],
-        prompt: "You are a research assistant. Analyze code and answer questions. Do not modify files.",
-        infer: true,
-      },
-      {
-        name: "editor",
-        displayName: "Editor Agent",
-        description: "Makes targeted code changes.",
-        tools: ["view", "edit", "bash"],
-        prompt: "You are a code editor. Make minimal, surgical changes. Explain each change.",
-        infer: true,
-      },
-    ]);
-
-    // 直接用底層 client 讓 delta 可以串流
-    const client = new CopilotClient();
-    await client.start();
-
-    const session = await client.createSession({
-      model,
-      customAgents: [
-        {
-          name: "researcher",
-          displayName: "Research Agent",
-          description: "Answers questions, reads files, summarizes code.",
-          tools: ["grep", "glob", "view"],
-          prompt: "You are a research assistant. Analyze code and answer questions. Do not modify files.",
-          infer: true,
-        },
-        {
-          name: "editor",
-          displayName: "Editor Agent",
-          description: "Makes targeted code changes.",
-          tools: ["view", "edit", "bash"],
-          prompt: "You are a code editor. Make minimal, surgical changes. Explain each change.",
-          infer: true,
-        },
-      ],
-      onPermissionRequest: approveAll,
+    const r = await fetch(`${COPILOT}/chat/completions`, {
+      method: "POST",
+      headers: copilotHeaders(),
+      body: JSON.stringify({
+        model,
+        stream: true,
+        messages: [...history, { role: "user", content: prompt }],
+      }),
     });
 
-    session.on("subagent.selected", (e: any) => {
-      send("subagent", { agentName: e.data?.agentName ?? "unknown" });
-    });
+    if (!r.ok) {
+      const text = await r.text();
+      send("error", { message: `Copilot API ${r.status}: ${text}` });
+      res.end();
+      return;
+    }
 
-    session.on("assistant.message_delta", (e: any) => {
-      const delta = e.data?.deltaContent ?? "";
-      if (delta) send("delta", { content: delta });
-    });
+    const reader = r.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let full = "";
 
-    const idle = new Promise<void>((resolve) => {
-      session.on("session.idle", () => resolve());
-    });
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    await session.send({ prompt });
-    await idle;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
 
-    const allEvents = await session.getEvents();
-    const last = [...allEvents].reverse().find((e: any) => e.type === "assistant.message");
-    const full = (last as any)?.data?.content ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          const chunk = JSON.parse(payload);
+          const delta = chunk.choices?.[0]?.delta?.content ?? "";
+          if (delta) {
+            full += delta;
+            send("delta", { content: delta });
+          }
+        } catch {}
+      }
+    }
 
     send("done", { content: full });
     res.end();
-
-    await session.disconnect();
-    await client.stop();
   } catch (e: any) {
     send("error", { message: e?.message ?? "unknown error" });
     res.end();
@@ -179,4 +197,6 @@ app.post("/api/chat", async (req, res) => {
 const PORT = 3000;
 app.listen(PORT, () => {
   console.log(`Dashboard running at http://localhost:${PORT}`);
+  if (token) console.log("Token loaded from environment.");
+  else console.log("No token found. Open http://localhost:3000 to set it.");
 });
