@@ -14,13 +14,13 @@
 
 ## 3. Backend API
 
-- [ ] 3.1 Add Express backend bootstrap with JSON parsing, error handling, and health check.
-- [ ] 3.2 Implement `POST /api/goals` with input validation and `goal.created` event persistence.
-- [ ] 3.3 Implement `GET /api/goals` for the dashboard goal list.
-- [ ] 3.4 Implement `GET /api/goals/:id` for the dashboard goal detail snapshot.
-- [ ] 3.5 Implement `GET /api/goals/:id/events` for the durable timeline.
-- [ ] 3.6 Implement `POST /api/goals/:id/start` as the only MVP runtime action endpoint.
-- [ ] 3.7 Add API tests covering create, list, detail, start, and events without using run or step query endpoints.
+- [x] 3.1 Add Express backend bootstrap with JSON parsing, error handling, and health check.
+- [x] 3.2 Implement `POST /api/goals` with input validation and `goal.created` event persistence.
+- [x] 3.3 Implement `GET /api/goals` for the dashboard goal list.
+- [x] 3.4 Implement `GET /api/goals/:id` for the dashboard goal detail snapshot.
+- [x] 3.5 Implement `GET /api/goals/:id/events` for the durable timeline.
+- [x] 3.6 Implement `POST /api/goals/:id/start` as the only MVP runtime action endpoint.
+- [x] 3.7 Add API tests covering create, list, detail, start, and events without using run or step query endpoints.
 
 ## 4. Mock Runtime
 
