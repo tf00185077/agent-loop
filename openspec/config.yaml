@@ -1,20 +1,70 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Project: auto-agent, a goal-driven agent dashboard and runtime.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Product direction:
+  - The primary object is a user goal, not a one-off chat conversation.
+  - A user creates a goal in the dashboard; the backend persists it and starts an agent run.
+  - The agent loop plans, executes, observes, and updates durable progress.
+  - The dashboard should show goal status, run state, steps, and event history.
+  - Chat-like messages can appear as events inside a run, but chat must not become the main architecture.
+
+  Target MVP stack:
+  - TypeScript on Node.js 20.19+.
+  - React/Vite dashboard.
+  - Express backend REST API.
+  - SQLite as the durable local system of record.
+  - In-process single-agent runtime loop.
+  - Model provider adapter boundary with mock and OpenAI-compatible provider options.
+
+  Current repository state:
+  - The repo is in architecture cleanup / foundation stage.
+  - Existing implementation is limited to strict TypeScript domain types under src/domain.
+  - Backend API, SQLite persistence, agent loop, provider adapter, tests, and dashboard are not implemented yet.
+  - README.md and ARCHITECTURE.md define the current MVP direction and should be treated as source-of-truth context.
+
+  Domain vocabulary:
+  - Goal: top-level user intent with status, priority, agent type, and timestamps.
+  - Run: one execution attempt for a goal.
+  - Step: ordered unit of work inside a run.
+  - Event: durable timeline item used by the dashboard for observability.
+
+  Architectural conventions:
+  - Keep dashboard code separate from backend/provider credentials.
+  - Dashboard communicates only through backend REST endpoints.
+  - SQLite owns durable goal, run, step, and event state.
+  - Runtime state may be in memory only as a short-lived execution detail.
+  - The runtime must write durable events before and after meaningful actions.
+  - Prefer a mock provider first for tests and local development.
+  - Optimize the MVP for a local single-user product, not distributed execution.
+
+  TypeScript conventions:
+  - Use strict TypeScript with ES2022 and NodeNext modules.
+  - Use .js extensions in relative TypeScript imports for NodeNext compatibility.
+  - Export domain types through src/domain/index.ts.
+  - Keep shared domain contracts small, explicit, and framework-agnostic.
+  - Use string literal union types for lifecycle/status values.
+  - Represent persisted timestamps as strings unless a later storage layer standardizes otherwise.
+
+  MVP non-goals:
+  - Multi-user authentication.
+  - Distributed queues or workers.
+  - Multi-agent orchestration.
+  - Complex permission policy.
+  - Full artifact management.
+  - Billing or token-cost accounting.
+
+rules:
+  proposal:
+    - Keep the change goal-centric and aligned with README.md and ARCHITECTURE.md.
+    - Include explicit non-goals for anything outside the local single-user MVP.
+    - Avoid reintroducing chat-first or GitHub-login-first architecture.
+  design:
+    - Describe boundaries between dashboard, backend API, persistence, runtime, and provider adapter when relevant.
+    - Prefer incremental MVP design over future-platform design.
+    - Call out durable event behavior for runtime-visible actions.
+  tasks:
+    - Break implementation into verifiable steps.
+    - Include tests appropriate to the changed layer.
+    - Sequence persistence/API/runtime/dashboard work so each layer has a usable contract.
