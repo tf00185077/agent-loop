@@ -1,8 +1,8 @@
 ## 1. Project Foundation
 
-- [ ] 1.1 Add development scripts for typecheck, tests, backend dev server, dashboard dev server, and full local development.
-- [ ] 1.2 Add the initial test framework and one smoke test so verification commands have a baseline.
-- [ ] 1.3 Create backend, persistence, runtime, and dashboard folder boundaries that keep shared domain types framework-agnostic.
+- [x] 1.1 Add development scripts for typecheck, tests, backend dev server, dashboard dev server, and full local development.
+- [x] 1.2 Add the initial test framework and one smoke test so verification commands have a baseline.
+- [x] 1.3 Create backend, persistence, runtime, and dashboard folder boundaries that keep shared domain types framework-agnostic.
 
 ## 2. SQLite State Store
 
