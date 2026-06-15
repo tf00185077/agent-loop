@@ -7,7 +7,7 @@
 ## 2. SQLite State Store
 
 - [x] 2.1 Add SQLite dependency and database connection configuration with a local default path.
-- [ ] 2.2 Create schema initialization for goals, runs, steps, and events.
+- [x] 2.2 Create schema initialization for goals, runs, steps, and events.
 - [ ] 2.3 Implement goal repository functions for create, list, get by id, and lifecycle status updates.
 - [ ] 2.4 Implement run, step, and event repository functions needed by the mock runtime lifecycle.
 - [ ] 2.5 Add persistence tests proving created goals and events survive database reopen.
