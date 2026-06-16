@@ -33,7 +33,7 @@
 
 ## 5. Thin Dashboard
 
-- [ ] 5.1 Add React/Vite dashboard scaffold wired to the backend API.
+- [x] 5.1 Add React/Vite dashboard scaffold wired to the backend API.
 - [ ] 5.2 Implement goal list view using `GET /api/goals`.
 - [ ] 5.3 Implement create goal form using `POST /api/goals`.
 - [ ] 5.4 Implement goal detail view using `GET /api/goals/:id`.
