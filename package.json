@@ -7,7 +7,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "dev:api": "tsx watch src/backend/server.ts",
-    "dev:web": "vite --host 127.0.0.1 --config src/dashboard/vite.config.ts",
+    "dev:web": "vite --config src/dashboard/vite.config.ts",
     "dev": "node scripts/dev.mjs"
   },
   "dependencies": {
