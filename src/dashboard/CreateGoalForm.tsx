@@ -1,19 +1,19 @@
 import React, { useState } from "react";
-import { createGoal } from "./api";
+import { createGoal, Goal } from "./api";
 
 interface Props {
   onCreated: () => void;
 }
 
-const PRIORITIES = ["low", "medium", "high"];
-const AGENT_TYPES = ["mock", "general"];
+const PRIORITIES = ["low", "normal", "high"] as const;
+const AGENT_TYPES = ["general"] as const;
 
 export default function CreateGoalForm({ onCreated }: Props) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [priority, setPriority] = useState("medium");
-  const [agentType, setAgentType] = useState("mock");
+  const [priority, setPriority] = useState<Goal["priority"]>("normal");
+  const [agentType, setAgentType] = useState<Goal["agentType"]>("general");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,8 +25,8 @@ export default function CreateGoalForm({ onCreated }: Props) {
       await createGoal({ title, description, priority, agentType });
       setTitle("");
       setDescription("");
-      setPriority("medium");
-      setAgentType("mock");
+      setPriority("normal");
+      setAgentType("general");
       setOpen(false);
       onCreated();
     } catch (err) {
@@ -82,14 +82,14 @@ export default function CreateGoalForm({ onCreated }: Props) {
       <div style={{ display: "flex", gap: 16 }}>
         <label style={{ ...labelStyle, flex: 1 }}>
           Priority
-          <select value={priority} onChange={(e) => setPriority(e.target.value)} style={inputStyle}>
+          <select value={priority} onChange={(e) => setPriority(e.target.value as Goal["priority"])} style={inputStyle}>
             {PRIORITIES.map((p) => <option key={p}>{p}</option>)}
           </select>
         </label>
 
         <label style={{ ...labelStyle, flex: 1 }}>
           Agent Type
-          <select value={agentType} onChange={(e) => setAgentType(e.target.value)} style={inputStyle}>
+          <select value={agentType} onChange={(e) => setAgentType(e.target.value as Goal["agentType"])} style={inputStyle}>
             {AGENT_TYPES.map((a) => <option key={a}>{a}</option>)}
           </select>
         </label>

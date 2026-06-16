@@ -4,21 +4,23 @@ export interface Goal {
   id: string;
   title: string;
   description: string;
-  priority: string;
-  agentType: string;
+  priority: "low" | "normal" | "high";
+  agentType: "general";
   status: string;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
   completedAt: string | null;
-  blockedAt: string | null;
 }
 
 export interface GoalEvent {
   id: string;
   goalId: string;
+  runId: string | null;
+  stepId: string | null;
   type: string;
-  payload: Record<string, unknown>;
+  message: string;
+  data: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -37,8 +39,8 @@ export async function getGoal(id: string): Promise<Goal> {
 export async function createGoal(body: {
   title: string;
   description: string;
-  priority: string;
-  agentType: string;
+  priority: Goal["priority"];
+  agentType: Goal["agentType"];
 }): Promise<Goal> {
   const res = await fetch(`${BASE}/goals`, {
     method: "POST",

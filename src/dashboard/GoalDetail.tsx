@@ -63,7 +63,6 @@ export default function GoalDetail({ goalId, refreshKey, onStarted }: Props) {
           <Row label="Created" value={fmt(goal.createdAt)} />
           {goal.startedAt && <Row label="Started" value={fmt(goal.startedAt)} />}
           {goal.completedAt && <Row label="Completed" value={fmt(goal.completedAt)} />}
-          {goal.blockedAt && <Row label="Blocked" value={fmt(goal.blockedAt)} />}
         </tbody>
       </table>
     </div>

@@ -39,7 +39,7 @@
 - [x] 5.4 Implement goal detail view using `GET /api/goals/:id`.
 - [x] 5.5 Implement start button using `POST /api/goals/:id/start`.
 - [x] 5.6 Implement event timeline using `GET /api/goals/:id/events`.
-- [ ] 5.7 Verify the dashboard demo path works after browser refresh without dedicated run or step query APIs.
+- [x] 5.7 Verify the dashboard demo path works after browser refresh without dedicated run or step query APIs.
 
 ## 6. MVP Validation And Documentation
 

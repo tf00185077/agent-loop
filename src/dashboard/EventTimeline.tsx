@@ -41,18 +41,7 @@ export default function EventTimeline({ goalId, refreshKey }: Props) {
               <span style={{ fontWeight: 500 }}>{e.type}</span>
               <span style={{ color: "#888" }}>{fmt(e.createdAt)}</span>
             </div>
-            {Object.keys(e.payload ?? {}).length > 0 && (
-              <pre
-                style={{
-                  margin: "4px 0 0",
-                  fontSize: 12,
-                  color: "#666",
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {JSON.stringify(e.payload)}
-              </pre>
-            )}
+            <div style={{ marginTop: 2 }}>{e.message}</div>
           </li>
         ))}
       </ul>
