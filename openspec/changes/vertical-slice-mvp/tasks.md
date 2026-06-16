@@ -43,7 +43,7 @@
 
 ## 6. MVP Validation And Documentation
 
-- [ ] 6.1 Add an end-to-end or integration verification for create goal, start goal, and read event timeline.
-- [ ] 6.2 Update README with local setup, run commands, and the MVP demo path.
-- [ ] 6.3 Run typecheck, tests, and OpenSpec validation for `vertical-slice-mvp`.
-- [ ] 6.4 Review the implementation against proposal non-goals and remove any accidental scope creep.
+- [x] 6.1 Add an end-to-end or integration verification for create goal, start goal, and read event timeline.
+- [x] 6.2 Update README with local setup, run commands, and the MVP demo path.
+- [x] 6.3 Run typecheck, tests, and OpenSpec validation for `vertical-slice-mvp`.
+- [x] 6.4 Review the implementation against proposal non-goals and remove any accidental scope creep.

@@ -151,8 +151,10 @@ export function createEventRepository(db: AppDatabase): EventRepository {
     },
 
     listForGoal(goalId) {
+      // Order by creation time, falling back to insertion order (rowid) so
+      // events written within the same millisecond stay in creation order.
       return db
-        .prepare("SELECT * FROM events WHERE goal_id = ? ORDER BY created_at ASC, id ASC")
+        .prepare("SELECT * FROM events WHERE goal_id = ? ORDER BY created_at ASC, rowid ASC")
         .all(goalId)
         .map(mapEventRow);
     },
