@@ -36,7 +36,7 @@
 - [x] 5.1 Add React/Vite dashboard scaffold wired to the backend API.
 - [x] 5.2 Implement goal list view using `GET /api/goals`.
 - [x] 5.3 Implement create goal form using `POST /api/goals`.
-- [ ] 5.4 Implement goal detail view using `GET /api/goals/:id`.
+- [x] 5.4 Implement goal detail view using `GET /api/goals/:id`.
 - [ ] 5.5 Implement start button using `POST /api/goals/:id/start`.
 - [ ] 5.6 Implement event timeline using `GET /api/goals/:id/events`.
 - [ ] 5.7 Verify the dashboard demo path works after browser refresh without dedicated run or step query APIs.

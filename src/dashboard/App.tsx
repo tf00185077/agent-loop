@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import GoalList from "./GoalList";
 import CreateGoalForm from "./CreateGoalForm";
+import GoalDetail from "./GoalDetail";
 
 type View = { page: "list" } | { page: "detail"; goalId: string };
 
@@ -33,7 +34,7 @@ export default function App() {
         {view.page === "detail" && (
           <div>
             <button onClick={goList} style={{ marginBottom: 16 }}>← Back</button>
-            <p style={{ color: "#888" }}>Goal detail coming in 5.4 (id: {view.goalId})</p>
+            <GoalDetail goalId={view.goalId} refreshKey={refreshKey} />
           </div>
         )}
       </main>
