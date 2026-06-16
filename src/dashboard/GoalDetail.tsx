@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { getGoal, Goal } from "./api";
+import { getGoal, startGoal, Goal } from "./api";
 
 interface Props {
   goalId: string;
@@ -10,6 +10,8 @@ export default function GoalDetail({ goalId, refreshKey }: Props) {
   const [goal, setGoal] = useState<Goal | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [starting, setStarting] = useState(false);
+  const [version, setVersion] = useState(0);
 
   useEffect(() => {
     setLoading(true);
@@ -17,7 +19,20 @@ export default function GoalDetail({ goalId, refreshKey }: Props) {
       .then(setGoal)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [goalId, refreshKey]);
+  }, [goalId, refreshKey, version]);
+
+  async function handleStart() {
+    setStarting(true);
+    setError(null);
+    try {
+      await startGoal(goalId);
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setStarting(false);
+    }
+  }
 
   if (loading) return <p>Loading…</p>;
   if (error) return <p style={{ color: "red" }}>{error}</p>;
@@ -28,6 +43,11 @@ export default function GoalDetail({ goalId, refreshKey }: Props) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
         <h2 style={{ margin: 0 }}>{goal.title}</h2>
         <StatusBadge status={goal.status} />
+        {goal.status === "draft" && (
+          <button onClick={handleStart} disabled={starting} style={{ marginLeft: "auto", padding: "6px 14px", cursor: "pointer" }}>
+            {starting ? "Starting…" : "Start"}
+          </button>
+        )}
       </div>
 
       {goal.description && (
