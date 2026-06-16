@@ -4,9 +4,10 @@ import { getGoal, startGoal, Goal } from "./api";
 interface Props {
   goalId: string;
   refreshKey: number;
+  onStarted?: () => void;
 }
 
-export default function GoalDetail({ goalId, refreshKey }: Props) {
+export default function GoalDetail({ goalId, refreshKey, onStarted }: Props) {
   const [goal, setGoal] = useState<Goal | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -27,6 +28,7 @@ export default function GoalDetail({ goalId, refreshKey }: Props) {
     try {
       await startGoal(goalId);
       setVersion((v) => v + 1);
+      onStarted?.();
     } catch (e) {
       setError(String(e));
     } finally {

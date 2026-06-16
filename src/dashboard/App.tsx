@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import GoalList from "./GoalList";
 import CreateGoalForm from "./CreateGoalForm";
 import GoalDetail from "./GoalDetail";
+import EventTimeline from "./EventTimeline";
 
 type View = { page: "list" } | { page: "detail"; goalId: string };
 
@@ -34,7 +35,12 @@ export default function App() {
         {view.page === "detail" && (
           <div>
             <button onClick={goList} style={{ marginBottom: 16 }}>← Back</button>
-            <GoalDetail goalId={view.goalId} refreshKey={refreshKey} />
+            <GoalDetail
+              goalId={view.goalId}
+              refreshKey={refreshKey}
+              onStarted={() => setRefreshKey((k) => k + 1)}
+            />
+            <EventTimeline goalId={view.goalId} refreshKey={refreshKey} />
           </div>
         )}
       </main>
