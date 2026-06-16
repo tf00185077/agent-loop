@@ -24,12 +24,12 @@
 
 ## 4. Mock Runtime
 
-- [ ] 4.1 Implement an in-process mock runtime service that starts from a persisted draft goal.
-- [ ] 4.2 On start, create a run, mark the goal running, and record a `run.started` event.
-- [ ] 4.3 Create and complete mock steps while recording `step.started`, `agent.message`, and `step.completed` events.
-- [ ] 4.4 Complete the happy path by marking the run and goal completed and recording `run.completed` and `goal.completed` events.
-- [ ] 4.5 Add a deterministic blocked path that marks the goal blocked and records `goal.blocked`.
-- [ ] 4.6 Add runtime tests proving the event timeline is sufficient to understand lifecycle progress.
+- [x] 4.1 Implement an in-process mock runtime service that starts from a persisted draft goal.
+- [x] 4.2 On start, create a run, mark the goal running, and record a `run.started` event.
+- [x] 4.3 Create and complete mock steps while recording `step.started`, `agent.message`, and `step.completed` events.
+- [x] 4.4 Complete the happy path by marking the run and goal completed and recording `run.completed` and `goal.completed` events.
+- [x] 4.5 Add a deterministic blocked path that marks the goal blocked and records `goal.blocked`.
+- [x] 4.6 Add runtime tests proving the event timeline is sufficient to understand lifecycle progress.
 
 ## 5. Thin Dashboard
 
