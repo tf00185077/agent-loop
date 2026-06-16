@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import GoalList from "./GoalList";
+import CreateGoalForm from "./CreateGoalForm";
 
 type View = { page: "list" } | { page: "detail"; goalId: string };
 
@@ -22,6 +23,7 @@ export default function App() {
       <main>
         {view.page === "list" && (
           <>
+            <CreateGoalForm onCreated={() => setRefreshKey((k) => k + 1)} />
             <GoalList
               refreshKey={refreshKey}
               onSelect={(id) => setView({ page: "detail", goalId: id })}
