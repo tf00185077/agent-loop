@@ -1,25 +1,38 @@
 import React, { useState } from "react";
+import GoalList from "./GoalList";
 
 type View = { page: "list" } | { page: "detail"; goalId: string };
 
 export default function App() {
   const [view, setView] = useState<View>({ page: "list" });
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  function goList() {
+    setView({ page: "list" });
+    setRefreshKey((k) => k + 1);
+  }
 
   return (
     <div style={{ fontFamily: "sans-serif", maxWidth: 800, margin: "0 auto", padding: 24 }}>
       <header style={{ borderBottom: "1px solid #ddd", paddingBottom: 12, marginBottom: 24 }}>
-        <h1
-          style={{ margin: 0, cursor: "pointer" }}
-          onClick={() => setView({ page: "list" })}
-        >
+        <h1 style={{ margin: 0, cursor: "pointer" }} onClick={goList}>
           auto-agent
         </h1>
       </header>
       <main>
-        {view.page === "list" ? (
-          <p style={{ color: "#888" }}>Goal list coming in 5.2</p>
-        ) : (
-          <p style={{ color: "#888" }}>Goal detail coming in 5.4</p>
+        {view.page === "list" && (
+          <>
+            <GoalList
+              refreshKey={refreshKey}
+              onSelect={(id) => setView({ page: "detail", goalId: id })}
+            />
+          </>
+        )}
+        {view.page === "detail" && (
+          <div>
+            <button onClick={goList} style={{ marginBottom: 16 }}>← Back</button>
+            <p style={{ color: "#888" }}>Goal detail coming in 5.4 (id: {view.goalId})</p>
+          </div>
         )}
       </main>
     </div>
