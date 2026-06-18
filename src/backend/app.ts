@@ -2,6 +2,7 @@ import express from "express";
 
 import type { AppDatabase } from "../persistence/database.js";
 import { createGoalRepository } from "../persistence/goal-repository.js";
+import { createProviderSettingsRepository } from "../persistence/provider-settings-repository.js";
 import {
   createEventRepository,
   createRunRepository,
@@ -13,9 +14,16 @@ import { createOpenAILocalAgentProvider } from "../runtime/openai-local-agent-pr
 import { loadProviderConfig, type ProviderEnvironment } from "../runtime/provider-config.js";
 import { createProviderRuntime } from "../runtime/provider-runtime.js";
 import { createGoalRouter } from "./routes/goals.js";
+import {
+  createProviderSettingsRouter,
+  type ProviderSettingsRouterDeps,
+} from "./routes/provider-settings.js";
 
 export interface CreateAppOptions {
   env?: ProviderEnvironment;
+  codexCliDetection?: ProviderSettingsRouterDeps["codexCliDetection"];
+  detectCodexCliCommand?: ProviderSettingsRouterDeps["detectCodexCliCommand"];
+  testCodexLocalConnection?: ProviderSettingsRouterDeps["testCodexLocalConnection"];
 }
 
 export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
@@ -26,6 +34,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
   const runRepo = createRunRepository(db);
   const stepRepo = createStepRepository(db);
   const eventRepo = createEventRepository(db);
+  const providerSettingsRepo = createProviderSettingsRepository(db);
   const runtime = createRuntimeFromEnvironment({
     env: options.env ?? process.env,
     goalRepo,
@@ -39,6 +48,15 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
   });
 
   app.use("/api/goals", createGoalRouter({ goalRepo, eventRepo, runtime }));
+  app.use(
+    "/api/provider-settings",
+    createProviderSettingsRouter({
+      providerSettingsRepo,
+      codexCliDetection: options.codexCliDetection,
+      detectCodexCliCommand: options.detectCodexCliCommand,
+      testCodexLocalConnection: options.testCodexLocalConnection,
+    }),
+  );
 
   app.use(
     (

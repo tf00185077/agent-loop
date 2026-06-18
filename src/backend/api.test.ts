@@ -8,10 +8,15 @@ import assert from "node:assert/strict";
 import { openDatabase } from "../persistence/database.js";
 import { createApp } from "./app.js";
 import type { ProviderEnvironment } from "../runtime/provider-config.js";
+import type { CodexLocalConnectionTestOptions } from "../runtime/codex-local-connection-test.js";
+import type { CodexCliDetectionOptions } from "../runtime/codex-cli-detection.js";
 
-function startServer(env?: ProviderEnvironment) {
+function startServer(
+  env?: ProviderEnvironment,
+  appOptions?: Omit<Parameters<typeof createApp>[1], "env">,
+) {
   const db = openDatabase({ path: ":memory:" });
-  const app = createApp(db, env ? { env } : undefined);
+  const app = createApp(db, { ...(appOptions ?? {}), ...(env ? { env } : {}) });
   const server = createServer(app);
   return new Promise<{ url: string; close: () => Promise<void> }>((resolve) => {
     server.listen(0, "127.0.0.1", () => {
@@ -90,6 +95,79 @@ describe("Backend API", () => {
     assert.equal(res.status, 200);
     const body = await json(res);
     assert.deepEqual(body, { status: "ok" });
+  });
+
+  describe("Provider settings API", () => {
+    it("reads, saves, detects, and tests provider settings", async () => {
+      let detectionOptions: CodexCliDetectionOptions | undefined;
+      let connectionOptions: CodexLocalConnectionTestOptions | undefined;
+      const providerServer = await startServer(undefined, {
+        codexCliDetection: {
+          env: { PATH: "C:\\Tools" },
+          platform: "win32",
+          fileExists: (path: string) => path === "C:\\Tools\\codex.cmd",
+        },
+        testCodexLocalConnection: async (options: CodexLocalConnectionTestOptions) => {
+          connectionOptions = options;
+          return {
+            status: {
+              state: "connected",
+              detected: true,
+              checkedAt: "2026-06-18T04:00:00.000Z",
+              message: "Fake connection ok",
+            },
+          };
+        },
+        detectCodexCliCommand: (options: CodexCliDetectionOptions) => {
+          detectionOptions = options;
+          return {
+            detected: true,
+            commandPath: "C:\\Tools\\codex.cmd",
+            source: "path",
+            status: {
+              state: "detected",
+              detected: true,
+              checkedAt: null,
+              message: "Fake detection ok",
+            },
+          };
+        },
+      });
+
+      try {
+        const initial = await fetch(`${providerServer.url}/api/provider-settings`).then(
+          (r) => r.json() as Promise<Record<string, unknown>>,
+        );
+        assert.equal(initial.provider, "mock");
+
+        const saved = await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5-codex-subscription",
+            codexCommandPath: "C:\\Manual\\codex.cmd",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+        assert.equal(saved.provider, "codex-local");
+        assert.equal(saved.modelLabel, "gpt-5-codex-subscription");
+
+        const detected = await fetch(`${providerServer.url}/api/provider-settings/detect`, {
+          method: "POST",
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+        assert.equal(detected.commandPath, "C:\\Tools\\codex.cmd");
+        assert.equal(detectionOptions?.manualPath, "C:\\Manual\\codex.cmd");
+
+        const tested = await fetch(`${providerServer.url}/api/provider-settings/test`, {
+          method: "POST",
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+        assert.equal((tested.status as Record<string, unknown>).state, "connected");
+        assert.equal(connectionOptions?.codexCommandPath, "C:\\Manual\\codex.cmd");
+        assert.equal(connectionOptions?.modelLabel, "gpt-5-codex-subscription");
+      } finally {
+        await providerServer.close();
+      }
+    });
   });
 
   describe("POST /api/goals", () => {
