@@ -66,6 +66,13 @@ async function waitForEvent(url: string, goalId: unknown, type: string) {
   throw new Error(`Timed out waiting for ${type}`);
 }
 
+function assertDoesNotContainValues(value: unknown, forbiddenValues: string[]) {
+  const serialized = JSON.stringify(value);
+  for (const forbiddenValue of forbiddenValues) {
+    assert.equal(serialized.includes(forbiddenValue), false);
+  }
+}
+
 describe("Backend API", () => {
   let url: string;
   let close: () => Promise<void>;
@@ -288,6 +295,61 @@ describe("Backend API", () => {
         )) as Record<string, unknown>;
         assert.equal(failed.status, "failed");
         assert.ok(typeof failed.completedAt === "string");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("does not expose provider secrets or local command credential material", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-secret-check-"));
+      const capturePath = join(dir, "captured-input.json");
+      const scriptPath = createFakeAgentScript(dir);
+      const secretArg = "local-command-secret-token";
+      const providerServer = await startServer({
+        AUTO_AGENT_PROVIDER: "openai-local-agent",
+        AUTO_AGENT_OPENAI_LOCAL_COMMAND: "node",
+        AUTO_AGENT_OPENAI_LOCAL_ARGS_JSON: JSON.stringify([
+          scriptPath,
+          capturePath,
+          "--token",
+          secretArg,
+        ]),
+        AUTO_AGENT_OPENAI_LOCAL_MODEL: "fake-local-model",
+        AUTO_AGENT_OPENAI_LOCAL_TIMEOUT_MS: "10000",
+        AUTO_AGENT_API_KEY: "unused-api-secret",
+      });
+
+      try {
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Secret-safe provider start",
+            description: "dashboard responses must stay sanitized",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const started = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+        const { events } = await waitForEvent(
+          providerServer.url,
+          created.id,
+          "goal.completed",
+        );
+        const detail = await fetch(`${providerServer.url}/api/goals/${created.id}`).then(
+          (r) => r.json() as Promise<Record<string, unknown>>,
+        );
+        const list = await fetch(`${providerServer.url}/api/goals`).then(
+          (r) => r.json() as Promise<unknown[]>,
+        );
+
+        assertDoesNotContainValues([created, started, detail, list, events], [
+          scriptPath,
+          capturePath,
+          secretArg,
+          "unused-api-secret",
+        ]);
       } finally {
         await providerServer.close();
       }
