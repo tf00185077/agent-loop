@@ -137,6 +137,47 @@ test("provider runtime records happy-path lifecycle events in order", async () =
   db.close();
 });
 
+test("provider runtime persists provider and model metadata in run and message event", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      async complete() {
+        return {
+          text: "Provider metadata response",
+          metadata: { provider: "openai-local-agent", model: "gpt-5-codex-subscription" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Verify provider metadata",
+    description: "Persist provider identity",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  const runId = events.find((event) => event.type === "run.started")?.runId;
+  assert.ok(runId, "run.started event must include runId");
+  const run = runRepo.getById(runId);
+  assert.equal(run?.provider, "openai-local-agent");
+  assert.equal(run?.model, "gpt-5-codex-subscription");
+
+  const message = events.find((event) => event.type === "agent.message");
+  assert.deepEqual(message?.data, {
+    stepId: message?.stepId,
+    provider: "openai-local-agent",
+    model: "gpt-5-codex-subscription",
+  });
+
+  db.close();
+});
+
 test("provider runtime throws if goal does not exist", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const runtime = createProviderRuntime({
