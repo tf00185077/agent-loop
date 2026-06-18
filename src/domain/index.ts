@@ -18,3 +18,16 @@ export type {
   EventType,
 } from "./event.types.js";
 export type { GoalStatus, RunStatus, StepStatus } from "./status.types.js";
+export type {
+  CodexLocalProviderSettings,
+  LocalProviderKind,
+  MockProviderSettings,
+  ProviderConnectionState,
+  ProviderSettings,
+  ProviderStatus,
+} from "./provider-settings.types.js";
+export {
+  createDefaultProviderSettings,
+  defaultProviderStatus,
+  sanitizeProviderStatus,
+} from "./provider-settings.types.js";
