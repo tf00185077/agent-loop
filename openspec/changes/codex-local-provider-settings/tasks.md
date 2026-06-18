@@ -22,8 +22,8 @@
 
 - [x] 4.1 Refactor backend runtime selection so goal start uses current saved provider settings instead of only startup environment configuration.
 - [x] 4.2 Preserve environment configuration as a development fallback where appropriate without overriding explicit saved settings unexpectedly.
-- [ ] 4.3 Add API or E2E tests proving a started goal uses saved Codex Local settings through a fake wrapper command without terminal env provider setup.
-- [ ] 4.4 Add API or E2E tests proving saved mock settings keep mock runtime behavior and do not invoke Codex Local commands.
+- [x] 4.3 Add API or E2E tests proving a started goal uses saved Codex Local settings through a fake wrapper command without terminal env provider setup.
+- [x] 4.4 Add API or E2E tests proving saved mock settings keep mock runtime behavior and do not invoke Codex Local commands.
 
 ## 5. Dashboard Provider Setup
 
