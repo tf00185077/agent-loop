@@ -1,7 +1,7 @@
 ## 1. Provider Contract
 
 - [x] 1.1 Add a small backend-only model provider contract and provider input/output types.
-- [ ] 1.2 Add unit tests proving runtime code can use an injected fake provider without constructing an HTTP adapter.
+- [x] 1.2 Add unit tests proving runtime code can use an injected fake provider without constructing an HTTP adapter.
 
 ## 2. OpenAI-Compatible Adapter
 
