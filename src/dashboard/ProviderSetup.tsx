@@ -146,6 +146,7 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
     onTestConnection,
   } = props;
   const codexSelected = draftProvider === "codex-local";
+  const statusView = providerStatusView(settings.status.state);
 
   return (
     <section style={panelStyle}>
@@ -153,9 +154,9 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
         <div>
           <h2 style={headingStyle}>Provider setup</h2>
           <div style={statusLineStyle}>
-            <span style={dotStyle(settings.status.detected)} />
+            <span style={dotStyle(statusView.color)} />
             <span>{settings.provider}</span>
-            <span>{settings.status.state}</span>
+            <span>{statusView.label}</span>
           </div>
         </div>
         <button type="button" onClick={onSave} disabled={busy !== null} style={buttonStyle}>
@@ -219,6 +220,18 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
         </div>
       )}
 
+      {codexSelected && (
+        <div style={statusBoxStyle(statusView.color)}>
+          <strong>{statusView.label}</strong>
+          <div style={{ marginTop: 4 }}>{statusView.guidance}</div>
+          {settings.status.checkedAt && (
+            <div style={checkedAtStyle}>
+              Checked {new Date(settings.status.checkedAt).toLocaleString()}
+            </div>
+          )}
+        </div>
+      )}
+
       {settings.status.message && (
         <p style={messageStyle}>{settings.status.message}</p>
       )}
@@ -255,12 +268,12 @@ const statusLineStyle: React.CSSProperties = {
   marginTop: 6,
 };
 
-function dotStyle(active: boolean): React.CSSProperties {
+function dotStyle(color: string): React.CSSProperties {
   return {
     width: 8,
     height: 8,
     borderRadius: "50%",
-    background: active ? "#2e7d32" : "#999",
+    background: color,
     display: "inline-block",
   };
 }
@@ -308,6 +321,22 @@ const actionRowStyle: React.CSSProperties = {
   marginTop: 4,
 };
 
+function statusBoxStyle(color: string): React.CSSProperties {
+  return {
+    borderLeft: `3px solid ${color}`,
+    background: "#f8f8f8",
+    padding: "10px 12px",
+    marginTop: 14,
+    fontSize: 13,
+    color: "#333",
+  };
+}
+
+const checkedAtStyle: React.CSSProperties = {
+  color: "#777",
+  marginTop: 4,
+};
+
 const buttonStyle: React.CSSProperties = {
   padding: "7px 12px",
   cursor: "pointer",
@@ -324,3 +353,50 @@ const errorStyle: React.CSSProperties = {
   margin: "12px 0 0",
   fontSize: 13,
 };
+
+function providerStatusView(state: ProviderSettings["status"]["state"]) {
+  switch (state) {
+    case "detected":
+      return {
+        label: "Codex CLI detected",
+        guidance: "Save this path or run a connection test before starting provider-backed goals.",
+        color: "#1976d2",
+      };
+    case "not_found":
+      return {
+        label: "Codex CLI not found",
+        guidance: "Enter a Codex command path manually or install Codex CLI, then detect again.",
+        color: "#d97706",
+      };
+    case "connected":
+      return {
+        label: "Codex Local connected",
+        guidance: "This provider is ready for new goals.",
+        color: "#2e7d32",
+      };
+    case "login_required":
+      return {
+        label: "Codex login required",
+        guidance: "Run codex login in a terminal, then test the connection again.",
+        color: "#d97706",
+      };
+    case "network_failure":
+      return {
+        label: "Network failure",
+        guidance: "Check your network connection, then test Codex Local again.",
+        color: "#c62828",
+      };
+    case "command_failure":
+      return {
+        label: "Command failed",
+        guidance: "Review the command path and sanitized message, then test again.",
+        color: "#c62828",
+      };
+    case "not_checked":
+      return {
+        label: "Not checked",
+        guidance: "Detect Codex CLI or save mock provider settings.",
+        color: "#777",
+      };
+  }
+}

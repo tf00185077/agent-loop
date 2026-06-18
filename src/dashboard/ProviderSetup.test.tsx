@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ProviderSetupPanel } from "./ProviderSetup.js";
+import type { ProviderConnectionState, ProviderSettings } from "./api.js";
 
 test("provider setup panel renders Codex Local controls", () => {
   const html = renderToStaticMarkup(
@@ -73,3 +74,49 @@ test("provider setup panel hides Codex controls for mock provider", () => {
   assert.doesNotMatch(html, /Command path/);
   assert.doesNotMatch(html, /Test connection/);
 });
+
+test("provider setup panel renders clear status states", () => {
+  const cases: Array<[ProviderConnectionState, string]> = [
+    ["detected", "Codex CLI detected"],
+    ["not_found", "Codex CLI not found"],
+    ["connected", "Codex Local connected"],
+    ["login_required", "Codex login required"],
+    ["network_failure", "Network failure"],
+    ["command_failure", "Command failed"],
+  ];
+
+  for (const [state, label] of cases) {
+    const html = renderProviderSetupPanel({
+      provider: "codex-local",
+      modelLabel: "gpt-5-codex-subscription",
+      codexCommandPath: "C:\\Tools\\codex.cmd",
+      status: {
+        state,
+        detected: state !== "not_found",
+        checkedAt: "2026-06-18T04:00:00.000Z",
+        message: null,
+      },
+    });
+
+    assert.match(html, new RegExp(label));
+  }
+});
+
+function renderProviderSetupPanel(settings: ProviderSettings) {
+  return renderToStaticMarkup(
+    <ProviderSetupPanel
+      settings={settings}
+      busy={null}
+      error={null}
+      draftProvider={settings.provider}
+      modelLabel={settings.modelLabel}
+      codexCommandPath={settings.codexCommandPath ?? ""}
+      onProviderChange={() => undefined}
+      onModelLabelChange={() => undefined}
+      onCodexCommandPathChange={() => undefined}
+      onSave={() => undefined}
+      onDetect={() => undefined}
+      onTestConnection={() => undefined}
+    />,
+  );
+}
