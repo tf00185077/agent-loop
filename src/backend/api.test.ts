@@ -235,12 +235,52 @@ describe("Backend API", () => {
         const res = await fetch(`${providerServer.url}/api/provider-settings`);
         const body = (await json(res)) as Record<string, unknown>;
         assert.equal(res.status, 200);
+        assert.equal(body.codexCommandPath, "C:\\Tools\\codex.cmd");
         assert.deepEqual(body.status, {
           state: "detected",
           detected: true,
           checkedAt: null,
           message: "Fake detection ok",
         });
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("persists detected Codex CLI path when command path is empty", async () => {
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => ({
+          detected: true,
+          commandPath: "C:\\Tools\\codex.cmd",
+          source: "path",
+          status: {
+            state: "detected",
+            detected: true,
+            checkedAt: null,
+            message: "Codex CLI detected on PATH.",
+          },
+        }),
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5-codex-subscription",
+            codexCommandPath: null,
+          }),
+        });
+
+        await fetch(`${providerServer.url}/api/provider-settings/detect`, {
+          method: "POST",
+        });
+
+        const res = await fetch(`${providerServer.url}/api/provider-settings`);
+        const body = (await json(res)) as Record<string, unknown>;
+        assert.equal(res.status, 200);
+        assert.equal(body.codexCommandPath, "C:\\Tools\\codex.cmd");
       } finally {
         await providerServer.close();
       }

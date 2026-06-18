@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import test from "node:test";
 
 import { testCodexLocalConnection } from "./codex-local-connection-test.js";
+
+test("default Codex local wrapper script exists", () => {
+  assert.equal(existsSync(resolve("scripts", "codex-local-agent-wrapper.mjs")), true);
+});
 
 test("returns connected status when the Codex local wrapper returns text", async () => {
   const result = await testCodexLocalConnection({
