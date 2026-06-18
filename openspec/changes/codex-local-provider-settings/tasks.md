@@ -3,7 +3,7 @@
 - [x] 1.1 Add provider settings domain/config types for mock and Codex Local selections, including sanitized status fields.
 - [x] 1.2 Add SQLite schema and repository support for one local provider settings record with mock defaults.
 - [x] 1.3 Add persistence tests proving saved Codex Local settings survive database reopen and default to mock when absent.
-- [ ] 1.4 Add tests proving persisted settings exclude tokens, API keys, auth cache contents, cookies, and command secret arguments.
+- [x] 1.4 Add tests proving persisted settings exclude tokens, API keys, auth cache contents, cookies, and command secret arguments.
 
 ## 2. Codex CLI Detection And Connection Testing
 

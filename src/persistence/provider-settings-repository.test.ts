@@ -86,6 +86,41 @@ test("saved Codex Local provider settings survive database reopen", () => {
   reopenedDb.close();
 });
 
+test("persisted provider settings exclude credential material and command secret arguments", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const settings = createProviderSettingsRepository(db);
+
+  settings.save({
+    provider: "codex-local",
+    modelLabel: "gpt-5-codex-subscription",
+    codexCommandPath: "C:\\Users\\TIM\\codex.exe --api-key cmd-secret --token cmd-token",
+    status: {
+      state: "command_failure",
+      detected: true,
+      checkedAt: "2026-06-18T02:00:00.000Z",
+      message:
+        'failed with sk-api-secret Authorization: Bearer bearer-secret {"access_token":"auth-cache-secret"} cookie=session-secret; --api-key arg-secret',
+    },
+  });
+
+  const row = db.prepare("SELECT * FROM provider_settings WHERE id = 'local'").get();
+  const persisted = JSON.stringify(row);
+
+  for (const secret of [
+    "sk-api-secret",
+    "bearer-secret",
+    "auth-cache-secret",
+    "session-secret",
+    "arg-secret",
+    "cmd-secret",
+    "cmd-token",
+  ]) {
+    assert.equal(persisted.includes(secret), false, `persisted row leaked ${secret}`);
+  }
+
+  db.close();
+});
+
 function testDatabasePath(): string {
   return join(mkdtempSync(join(tmpdir(), "auto-agent-provider-settings-")), "settings.sqlite");
 }

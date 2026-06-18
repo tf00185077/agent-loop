@@ -24,10 +24,7 @@ export function createProviderSettingsRepository(db: AppDatabase): ProviderSetti
     },
 
     save(settings) {
-      const safeSettings = {
-        ...settings,
-        status: sanitizeProviderStatus(settings.status),
-      } satisfies ProviderSettings;
+      const safeSettings = sanitizeProviderSettings(settings);
 
       db.prepare(`
         INSERT INTO provider_settings (
@@ -66,6 +63,30 @@ export function createProviderSettingsRepository(db: AppDatabase): ProviderSetti
       return this.get();
     },
   };
+}
+
+function sanitizeProviderSettings(settings: ProviderSettings): ProviderSettings {
+  if (settings.provider === "codex-local") {
+    return {
+      ...settings,
+      codexCommandPath: sanitizeCodexCommandPath(settings.codexCommandPath),
+      status: sanitizeProviderStatus(settings.status),
+    };
+  }
+
+  return {
+    ...settings,
+    codexCommandPath: null,
+    status: sanitizeProviderStatus(settings.status),
+  };
+}
+
+function sanitizeCodexCommandPath(commandPath: string | null): string | null {
+  return commandPath
+    ? commandPath
+        .replace(/\s+--(?:api-key|token|access-token)\s+\S+/gi, "")
+        .trim()
+    : null;
 }
 
 function toProviderSettingsParams(settings: ProviderSettings) {
