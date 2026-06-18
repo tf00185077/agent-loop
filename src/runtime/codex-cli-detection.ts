@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { delimiter, posix, win32 } from "node:path";
+import { spawnSync } from "node:child_process";
 
 import type { ProviderStatus } from "../domain/index.js";
 
@@ -18,6 +19,7 @@ export interface CodexCliDetectionOptions {
   platform?: NodeJS.Platform;
   fileExists?: (path: string) => boolean;
   listDirectories?: (path: string) => string[];
+  commandSupportsCodexExec?: (path: string) => boolean;
 }
 
 export function detectCodexCliCommand(options: CodexCliDetectionOptions = {}): CodexCliDetectionResult {
@@ -25,18 +27,21 @@ export function detectCodexCliCommand(options: CodexCliDetectionOptions = {}): C
   const platform = options.platform ?? process.platform;
   const fileExists = options.fileExists ?? existsSync;
   const listDirectories = options.listDirectories ?? defaultListDirectories;
+  const commandSupportsCodexExec = options.commandSupportsCodexExec ?? defaultCommandSupportsCodexExec;
 
   const manualPath = normalizeCandidate(options.manualPath);
-  if (manualPath && fileExists(manualPath)) {
+  if (manualPath && fileExists(manualPath) && commandSupportsCodexExec(manualPath)) {
     return detected(manualPath, "manual", "Codex CLI detected from saved manual path.");
   }
 
-  const pathMatch = findOnPath({ env, platform, fileExists });
+  const pathMatch = findOnPath({ env, platform, fileExists, commandSupportsCodexExec });
   if (pathMatch) {
     return detected(pathMatch, "path", "Codex CLI detected on PATH.");
   }
 
-  const commonMatch = commonCandidatePaths({ env, platform, listDirectories }).find(fileExists);
+  const commonMatch = commonCandidatePaths({ env, platform, listDirectories }).find(
+    (candidate) => fileExists(candidate) && commandSupportsCodexExec(candidate),
+  );
   if (commonMatch) {
     return detected(commonMatch, "common", "Codex CLI detected in a common local install location.");
   }
@@ -76,6 +81,7 @@ function findOnPath(options: {
   env: Record<string, string | undefined>;
   platform: NodeJS.Platform;
   fileExists: (path: string) => boolean;
+  commandSupportsCodexExec: (path: string) => boolean;
 }): string | null {
   const pathValue = options.env.PATH ?? options.env.Path ?? options.env.path;
   if (!pathValue) return null;
@@ -88,11 +94,23 @@ function findOnPath(options: {
     if (!dir) continue;
     for (const commandName of commandNames) {
       const candidate = pathApi.join(dir, commandName);
-      if (options.fileExists(candidate)) return candidate;
+      if (options.fileExists(candidate) && options.commandSupportsCodexExec(candidate)) return candidate;
     }
   }
 
   return null;
+}
+
+function defaultCommandSupportsCodexExec(path: string): boolean {
+  const result = spawnSync(path, ["exec", "--help"], {
+    encoding: "utf8",
+    shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(path),
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+
+  return result.status === 0 && /codex exec|Run Codex non-interactively/i.test(output);
 }
 
 function commonCandidatePaths(options: {

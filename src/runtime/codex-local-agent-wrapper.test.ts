@@ -47,6 +47,47 @@ process.stdin.on("end", () => {
   assert.equal(captured.stdin, "Reply exactly once.");
 });
 
+test("wrapper uses Codex CLI default model for mock model label", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-wrapper-"));
+  const capturePath = join(dir, "captured-mock-model.json");
+  const fakeCodexPath = join(dir, "fake-codex.mjs");
+
+  writeFileSync(
+    fakeCodexPath,
+    `
+import { writeFileSync } from "node:fs";
+
+const capturePath = process.env.CAPTURE_PATH;
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  stdin += chunk;
+});
+process.stdin.on("end", () => {
+  const outputIndex = process.argv.indexOf("--output-last-message");
+  writeFileSync(process.argv[outputIndex + 1], "mock label response");
+  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
+});
+`.trimStart(),
+  );
+
+  const result = await runWrapper({
+    codexCommandPath: process.execPath,
+    extraArgs: [fakeCodexPath],
+    modelLabel: "mock-v1",
+    capturePath,
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { text: "mock label response" });
+
+  const captured = JSON.parse(readFileSync(capturePath, "utf8")) as {
+    args: string[];
+    stdin: string;
+  };
+  assert.equal(captured.args.includes("--model"), false);
+});
+
 test("wrapper can invoke a Windows cmd shim Codex command", { skip: process.platform !== "win32" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-wrapper-"));
   const capturePath = join(dir, "captured-cmd.json");

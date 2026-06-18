@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const codexCommandPath = process.env.AUTO_AGENT_CODEX_COMMAND_PATH?.trim();
 const modelLabel = process.env.AUTO_AGENT_OPENAI_LOCAL_MODEL?.trim();
-const legacyDefaultModelLabel = "gpt-5-codex-subscription";
+const defaultModelLabels = new Set(["gpt-5-codex-subscription", "mock-v1"]);
 
 try {
   const input = await readJsonFromStdin();
@@ -56,7 +56,7 @@ async function runCodexExec(prompt) {
     outputPath,
   ];
 
-  if (modelLabel && modelLabel !== legacyDefaultModelLabel) {
+  if (modelLabel && !defaultModelLabels.has(modelLabel)) {
     args.push("--model", modelLabel);
   }
 

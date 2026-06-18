@@ -15,6 +15,7 @@ test("manual path overrides PATH detection when it exists", () => {
       env: { PATH: "C:\\Tools", APPDATA: "C:\\Users\\TIM\\AppData\\Roaming" },
       platform: "win32",
       fileExists: (path) => existingPaths.has(path),
+      commandSupportsCodexExec: () => true,
     }),
     {
       detected: true,
@@ -36,10 +37,27 @@ test("detects Codex CLI from PATH without requiring real Codex network access", 
     env: { PATH: "C:\\Tools", APPDATA: "C:\\Users\\TIM\\AppData\\Roaming" },
     platform: "win32",
     fileExists: (path) => path === "C:\\Tools\\codex.cmd",
+    commandSupportsCodexExec: () => true,
   });
 
   assert.equal(result.source, "path");
   assert.equal(result.commandPath, "C:\\Tools\\codex.cmd");
+  assert.equal(result.status.state, "detected");
+});
+
+test("skips unsupported saved command and uses supported PATH command", () => {
+  const result = detectCodexCliCommand({
+    manualPath: "C:\\Users\\TIM\\AppData\\Roaming\\npm\\codex.cmd",
+    env: { PATH: "C:\\Tools", APPDATA: "C:\\Users\\TIM\\AppData\\Roaming" },
+    platform: "win32",
+    fileExists: (path) =>
+      path === "C:\\Users\\TIM\\AppData\\Roaming\\npm\\codex.cmd" ||
+      path === "C:\\Tools\\codex.exe",
+    commandSupportsCodexExec: (path) => path.endsWith("codex.exe"),
+  });
+
+  assert.equal(result.source, "path");
+  assert.equal(result.commandPath, "C:\\Tools\\codex.exe");
   assert.equal(result.status.state, "detected");
 });
 
@@ -48,6 +66,7 @@ test("detects Codex CLI from a common local install location after PATH misses",
     env: { PATH: "C:\\Missing", APPDATA: "C:\\Users\\TIM\\AppData\\Roaming" },
     platform: "win32",
     fileExists: (path) => path === "C:\\Users\\TIM\\AppData\\Roaming\\npm\\codex.cmd",
+    commandSupportsCodexExec: () => true,
   });
 
   assert.equal(result.source, "common");
