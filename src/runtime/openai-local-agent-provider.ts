@@ -46,6 +46,7 @@ function runLocalAgentCommand(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(config.command, config.args, {
+      env: config.env ? { ...process.env, ...config.env } : process.env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });

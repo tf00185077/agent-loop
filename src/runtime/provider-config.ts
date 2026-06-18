@@ -23,6 +23,7 @@ export interface OpenAILocalAgentProviderConfig {
   args: string[];
   model: string;
   timeoutMs: number;
+  env?: ProviderEnvironment;
 }
 
 export class ProviderConfigError extends Error {

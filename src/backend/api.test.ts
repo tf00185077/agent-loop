@@ -58,6 +58,33 @@ process.stdin.on("end", () => {
   return scriptPath;
 }
 
+function createFakeCodexWrapperScript(dir: string): string {
+  const scriptPath = join(dir, "fake-codex-wrapper.mjs");
+  writeFileSync(
+    scriptPath,
+    `
+import { writeFileSync } from "node:fs";
+
+const capturePath = process.argv[2];
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  stdin += chunk;
+});
+process.stdin.on("end", () => {
+  const input = JSON.parse(stdin);
+  writeFileSync(capturePath, JSON.stringify({
+    input,
+    codexCommandPath: process.env.AUTO_AGENT_CODEX_COMMAND_PATH ?? null,
+    modelLabel: process.env.AUTO_AGENT_OPENAI_LOCAL_MODEL ?? null,
+  }));
+  process.stdout.write(JSON.stringify({ text: "Saved Codex Local response" }));
+});
+`.trimStart(),
+  );
+  return scriptPath;
+}
+
 async function waitForEvent(url: string, goalId: unknown, type: string) {
   for (let attempt = 0; attempt < 20; attempt++) {
     const events = await fetch(`${url}/api/goals/${goalId}/events`).then(
@@ -526,6 +553,64 @@ describe("Backend API", () => {
         assert.match(
           captured.prompt as string,
           /Title: Provider-backed start/,
+        );
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("uses current saved Codex Local settings when starting a goal", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-saved-provider-"));
+      const capturePath = join(dir, "captured-saved-provider.json");
+      const scriptPath = createFakeCodexWrapperScript(dir);
+      const providerServer = await startServer(undefined, {
+        codexLocalWrapperCommand: "node",
+        codexLocalWrapperArgs: [scriptPath, capturePath],
+        codexLocalWrapperTimeoutMs: 10000,
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5-codex-subscription",
+            codexCommandPath: "C:\\Tools\\codex.cmd",
+          }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Saved provider start",
+            description: "uses persisted Codex Local settings",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+        });
+        assert.equal(res.status, 200);
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        assert.ok(
+          events.some(
+            (e) =>
+              e.type === "agent.message" &&
+              e.message === "Saved Codex Local response" &&
+              (e.data as Record<string, unknown>).provider === "openai-local-agent" &&
+              (e.data as Record<string, unknown>).model === "gpt-5-codex-subscription",
+          ),
+        );
+
+        const captured = JSON.parse(readFileSync(capturePath, "utf8")) as Record<string, unknown>;
+        assert.equal(captured.codexCommandPath, "C:\\Tools\\codex.cmd");
+        assert.equal(captured.modelLabel, "gpt-5-codex-subscription");
+        assert.match(
+          ((captured.input as Record<string, unknown>).prompt as string),
+          /Title: Saved provider start/,
         );
       } finally {
         await providerServer.close();
