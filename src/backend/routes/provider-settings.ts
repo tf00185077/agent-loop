@@ -61,7 +61,7 @@ export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): 
       if (settings.provider === "codex-local") {
         deps.providerSettingsRepo.save({
           ...settings,
-          codexCommandPath: settings.codexCommandPath ?? safeResult.commandPath,
+          codexCommandPath: safeResult.commandPath ?? settings.codexCommandPath,
           status: safeResult.status,
         });
       }

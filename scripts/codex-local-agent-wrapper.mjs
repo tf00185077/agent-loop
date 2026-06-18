@@ -96,7 +96,8 @@ function readExtraArgs() {
 
 function runCommand(command, args, stdin) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const spawnRequest = toSpawnRequest(command, args);
+    const child = spawn(spawnRequest.command, spawnRequest.args, {
       stdio: ["pipe", "ignore", "pipe"],
       windowsHide: true,
     });
@@ -112,6 +113,17 @@ function runCommand(command, args, stdin) {
     });
     child.stdin.end(stdin);
   });
+}
+
+function toSpawnRequest(command, args) {
+  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
+    return {
+      command: process.env.ComSpec || process.env.COMSPEC || "cmd.exe",
+      args: ["/d", "/c", command, ...args],
+    };
+  }
+
+  return { command, args };
 }
 
 function isRecord(value) {

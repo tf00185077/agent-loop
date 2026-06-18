@@ -47,6 +47,47 @@ process.stdin.on("end", () => {
   assert.equal(captured.stdin, "Reply exactly once.");
 });
 
+test("wrapper can invoke a Windows cmd shim Codex command", { skip: process.platform !== "win32" }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-wrapper-"));
+  const capturePath = join(dir, "captured-cmd.json");
+  const fakeCodexPath = join(dir, "fake-codex.mjs");
+  const fakeCmdPath = join(dir, "codex.cmd");
+
+  writeFileSync(
+    fakeCodexPath,
+    `
+import { writeFileSync } from "node:fs";
+
+const capturePath = process.env.CAPTURE_PATH;
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  stdin += chunk;
+});
+process.stdin.on("end", () => {
+  const outputIndex = process.argv.indexOf("--output-last-message");
+  writeFileSync(process.argv[outputIndex + 1], "cmd shim response");
+  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
+});
+`.trimStart(),
+  );
+  writeFileSync(
+    fakeCmdPath,
+    `@echo off\r\n"${process.execPath}" "${fakeCodexPath}" %*\r\n`,
+  );
+
+  const result = await runWrapper({
+    codexCommandPath: fakeCmdPath,
+    extraArgs: [],
+    modelLabel: "gpt-5-codex-subscription",
+    capturePath,
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { text: "cmd shim response" });
+  assert.equal(JSON.parse(readFileSync(capturePath, "utf8")).stdin, "Reply exactly once.");
+});
+
 function runWrapper(options: {
   codexCommandPath: string;
   extraArgs: string[];

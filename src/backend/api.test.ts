@@ -286,6 +286,47 @@ describe("Backend API", () => {
       }
     });
 
+    it("replaces stale saved Codex CLI path after successful detection", async () => {
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => ({
+          detected: true,
+          commandPath: "C:\\Users\\TIM\\.vscode\\extensions\\openai.chatgpt\\codex.exe",
+          source: "path",
+          status: {
+            state: "detected",
+            detected: true,
+            checkedAt: null,
+            message: "Codex CLI detected on PATH.",
+          },
+        }),
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "mock-v1",
+            codexCommandPath: "C:\\Users\\TIM\\AppData\\Roaming\\npm\\codex.cmd",
+          }),
+        });
+
+        await fetch(`${providerServer.url}/api/provider-settings/detect`, {
+          method: "POST",
+        });
+
+        const res = await fetch(`${providerServer.url}/api/provider-settings`);
+        const body = (await json(res)) as Record<string, unknown>;
+        assert.equal(
+          body.codexCommandPath,
+          "C:\\Users\\TIM\\.vscode\\extensions\\openai.chatgpt\\codex.exe",
+        );
+      } finally {
+        await providerServer.close();
+      }
+    });
+
     it("reads, saves, detects, and tests provider settings", async () => {
       let detectionOptions: CodexCliDetectionOptions | undefined;
       let connectionOptions: CodexLocalConnectionTestOptions | undefined;
@@ -350,7 +391,7 @@ describe("Backend API", () => {
           method: "POST",
         }).then((r) => r.json() as Promise<Record<string, unknown>>);
         assert.equal((tested.status as Record<string, unknown>).state, "connected");
-        assert.equal(connectionOptions?.codexCommandPath, "C:\\Manual\\codex.cmd");
+        assert.equal(connectionOptions?.codexCommandPath, "C:\\Tools\\codex.cmd");
         assert.equal(connectionOptions?.modelLabel, "gpt-5-codex-subscription");
       } finally {
         await providerServer.close();
