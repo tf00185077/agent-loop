@@ -13,7 +13,7 @@
 ## 3. OpenAI Local Logged-In Agent Provider
 
 - [x] 3.1 Implement openai-local-agent provider configuration loading for the first OpenAI subscription-backed local command.
-- [ ] 3.2 Implement an openai-local-agent provider that spawns the configured command, sends the goal prompt, and extracts response text.
+- [x] 3.2 Implement an openai-local-agent provider that spawns the configured command, sends the goal prompt, and extracts response text.
 - [ ] 3.3 Add openai-local-agent provider tests with a fake local command verifying prompt input, response extraction, and provider/model metadata.
 - [ ] 3.4 Add openai-local-agent failure tests for missing command, non-zero exit, timeout, and malformed output.
 
