@@ -1,6 +1,6 @@
 import { Router } from "express";
 
-import type { ProviderSettings } from "../../domain/index.js";
+import { sanitizeProviderStatus, type ProviderSettings } from "../../domain/index.js";
 import type { ProviderSettingsRepository } from "../../persistence/provider-settings-repository.js";
 import {
   detectCodexCliCommand,
@@ -56,15 +56,16 @@ export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): 
         ...(deps.codexCliDetection ?? {}),
         manualPath: settings.provider === "codex-local" ? settings.codexCommandPath : null,
       });
+      const safeResult = sanitizeDetectionResult(result);
 
       if (settings.provider === "codex-local") {
         deps.providerSettingsRepo.save({
           ...settings,
-          status: result.status,
+          status: safeResult.status,
         });
       }
 
-      res.json(result);
+      res.json(safeResult);
     } catch (err) {
       next(err);
     }
@@ -89,18 +90,37 @@ export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): 
         codexCommandPath: settings.codexCommandPath,
         modelLabel: settings.modelLabel,
       });
+      const safeResult = {
+        status: sanitizeProviderStatus(result.status),
+      };
       deps.providerSettingsRepo.save({
         ...settings,
-        status: result.status,
+        status: safeResult.status,
       });
 
-      res.json(result);
+      res.json(safeResult);
     } catch (err) {
       next(err);
     }
   });
 
   return router;
+}
+
+function sanitizeDetectionResult(result: CodexCliDetectionResult): CodexCliDetectionResult {
+  return {
+    ...result,
+    commandPath: sanitizeCommandPath(result.commandPath),
+    status: sanitizeProviderStatus(result.status),
+  };
+}
+
+function sanitizeCommandPath(commandPath: string | null): string | null {
+  return commandPath
+    ? commandPath
+        .replace(/\s+--(?:api-key|token|access-token)\s+\S+/gi, "")
+        .trim()
+    : null;
 }
 
 type ParseProviderSettingsResult =

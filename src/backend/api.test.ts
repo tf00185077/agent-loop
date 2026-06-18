@@ -289,6 +289,74 @@ describe("Backend API", () => {
         await providerServer.close();
       }
     });
+
+    it("does not expose credential material in settings, status, or connection test responses", async () => {
+      const forbiddenValues = [
+        "save-api-key",
+        "save-token",
+        "detect-api-key",
+        "detect-bearer",
+        "detect-cookie",
+        "test-api-key",
+        "test-bearer",
+        "test-cookie",
+      ];
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => ({
+          detected: true,
+          commandPath: "C:\\Tools\\codex.cmd --api-key detect-api-key",
+          source: "manual",
+          status: {
+            state: "detected",
+            detected: true,
+            checkedAt: null,
+            message:
+              "detected with sk-detect-api-key Authorization: Bearer detect-bearer cookie=detect-cookie;",
+          },
+        }),
+        testCodexLocalConnection: async () => ({
+          status: {
+            state: "command_failure",
+            detected: true,
+            checkedAt: "2026-06-18T05:00:00.000Z",
+            message:
+              "failed with sk-test-api-key Authorization: Bearer test-bearer cookie=test-cookie;",
+          },
+        }),
+      });
+
+      try {
+        const saved = await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5-codex-subscription",
+            codexCommandPath: "C:\\Tools\\codex.cmd --api-key save-api-key --token save-token",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const statusAfterSave = await fetch(`${providerServer.url}/api/provider-settings`).then(
+          (r) => r.json() as Promise<Record<string, unknown>>,
+        );
+        const detected = await fetch(`${providerServer.url}/api/provider-settings/detect`, {
+          method: "POST",
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+        const statusAfterDetect = await fetch(`${providerServer.url}/api/provider-settings`).then(
+          (r) => r.json() as Promise<Record<string, unknown>>,
+        );
+        const tested = await fetch(`${providerServer.url}/api/provider-settings/test`, {
+          method: "POST",
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        assertDoesNotContainValues(
+          [saved, statusAfterSave, detected, statusAfterDetect, tested],
+          forbiddenValues,
+        );
+      } finally {
+        await providerServer.close();
+      }
+    });
   });
 
   describe("POST /api/goals", () => {

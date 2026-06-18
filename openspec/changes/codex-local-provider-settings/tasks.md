@@ -16,7 +16,7 @@
 
 - [x] 3.1 Add backend REST endpoints to read provider settings/status, save provider settings, detect Codex CLI, and test Codex Local connection.
 - [x] 3.2 Add API tests for reading defaults, saving mock, saving Codex Local with model label and command path, and status after save.
-- [ ] 3.3 Add API tests proving provider settings/status/test responses do not expose credential material or raw secret-bearing command data.
+- [x] 3.3 Add API tests proving provider settings/status/test responses do not expose credential material or raw secret-bearing command data.
 
 ## 4. Runtime Composition From Saved Settings
 
