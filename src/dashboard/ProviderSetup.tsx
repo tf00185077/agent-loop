@@ -233,7 +233,7 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
       )}
 
       {settings.status.message && (
-        <p style={messageStyle}>{settings.status.message}</p>
+        <p style={messageStyle}>{redactCredentialMaterial(settings.status.message)}</p>
       )}
       {error && <p style={errorStyle}>{error}</p>}
     </section>
@@ -399,4 +399,15 @@ function providerStatusView(state: ProviderSettings["status"]["state"]) {
         color: "#777",
       };
   }
+}
+
+function redactCredentialMaterial(value: string): string {
+  return value
+    .replace(/\bsk-[A-Za-z0-9_-]+/g, "[redacted]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "[redacted]")
+    .replace(/\bcookie=[^\s;]+;?/gi, "cookie=[redacted]")
+    .replace(/--(?:api-key|token|access-token)\s+\S+/gi, (match) => {
+      const [flag] = match.split(/\s+/, 1);
+      return `${flag} [redacted]`;
+    });
 }

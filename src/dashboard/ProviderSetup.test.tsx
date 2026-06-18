@@ -102,6 +102,32 @@ test("provider setup panel renders clear status states", () => {
   }
 });
 
+test("provider setup panel shows connected status without credential material", () => {
+  const html = renderProviderSetupPanel({
+    provider: "codex-local",
+    modelLabel: "gpt-5-codex-subscription",
+    codexCommandPath: "C:\\Tools\\codex.cmd",
+    status: {
+      state: "connected",
+      detected: true,
+      checkedAt: "2026-06-18T04:00:00.000Z",
+      message:
+        "connected with sk-dashboard-secret Authorization: Bearer dashboard-token cookie=dashboard-cookie; --api-key dashboard-api-key",
+    },
+  });
+
+  assert.match(html, /Codex Local connected/);
+  assert.match(html, /\[redacted\]/);
+  for (const forbidden of [
+    "sk-dashboard-secret",
+    "dashboard-token",
+    "dashboard-cookie",
+    "dashboard-api-key",
+  ]) {
+    assert.equal(html.includes(forbidden), false);
+  }
+});
+
 function renderProviderSetupPanel(settings: ProviderSettings) {
   return renderToStaticMarkup(
     <ProviderSetupPanel
