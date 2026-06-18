@@ -13,6 +13,7 @@ const providerSettingsId = "local";
 
 export interface ProviderSettingsRepository {
   get(): ProviderSettings;
+  hasSaved(): boolean;
   save(settings: ProviderSettings): ProviderSettings;
 }
 
@@ -21,6 +22,13 @@ export function createProviderSettingsRepository(db: AppDatabase): ProviderSetti
     get() {
       const row = db.prepare("SELECT * FROM provider_settings WHERE id = ?").get(providerSettingsId);
       return row ? mapProviderSettingsRow(row) : createDefaultProviderSettings();
+    },
+
+    hasSaved() {
+      const row = db
+        .prepare("SELECT 1 FROM provider_settings WHERE id = ?")
+        .get(providerSettingsId);
+      return Boolean(row);
     },
 
     save(settings) {

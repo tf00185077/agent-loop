@@ -106,14 +106,26 @@ function createRuntimeFromSavedProviderSettings(
   return {
     async run(goalId: string) {
       const settings = deps.providerSettingsRepo.get();
-      const runtime =
-        settings.provider === "codex-local"
-          ? createRuntimeFromCodexLocalSettings(settings, deps)
-          : createRuntimeFromEnvironment(deps);
+      const runtime = selectRuntimeForSettings(settings, deps);
 
       return runtime.run(goalId);
     },
   };
+}
+
+function selectRuntimeForSettings(
+  settings: ProviderSettings,
+  deps: CreateRuntimeFromSavedProviderSettingsDeps,
+) {
+  if (settings.provider === "codex-local") {
+    return createRuntimeFromCodexLocalSettings(settings, deps);
+  }
+
+  if (deps.providerSettingsRepo.hasSaved()) {
+    return createMockRuntime(deps);
+  }
+
+  return createRuntimeFromEnvironment(deps);
 }
 
 function createRuntimeFromCodexLocalSettings(

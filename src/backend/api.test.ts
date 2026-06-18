@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -612,6 +612,47 @@ describe("Backend API", () => {
           ((captured.input as Record<string, unknown>).prompt as string),
           /Title: Saved provider start/,
         );
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("uses explicitly saved mock settings instead of environment provider fallback", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-explicit-mock-"));
+      const capturePath = join(dir, "captured-env-provider.json");
+      const scriptPath = createFakeAgentScript(dir);
+      const providerServer = await startServer({
+        AUTO_AGENT_PROVIDER: "openai-local-agent",
+        AUTO_AGENT_OPENAI_LOCAL_COMMAND: "node",
+        AUTO_AGENT_OPENAI_LOCAL_ARGS_JSON: JSON.stringify([scriptPath, capturePath]),
+        AUTO_AGENT_OPENAI_LOCAL_MODEL: "env-local-model",
+        AUTO_AGENT_OPENAI_LOCAL_TIMEOUT_MS: "10000",
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "mock" }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Explicit mock start",
+            description: "saved mock should override environment provider fallback",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+        });
+        assert.equal(res.status, 200);
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        assert.ok(events.some((e) => e.type === "run.started" && e.message === "Mock run started"));
+        assert.equal(existsSync(capturePath), false);
       } finally {
         await providerServer.close();
       }
