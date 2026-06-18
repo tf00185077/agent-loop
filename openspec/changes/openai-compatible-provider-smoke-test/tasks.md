@@ -5,7 +5,7 @@
 
 ## 2. OpenAI-Compatible Adapter
 
-- [ ] 2.1 Implement provider configuration loading for `AUTO_AGENT_PROVIDER`, `AUTO_AGENT_BASE_URL`, `AUTO_AGENT_API_KEY`, and `AUTO_AGENT_MODEL` with mock as the default provider.
+- [x] 2.1 Implement provider configuration loading for `AUTO_AGENT_PROVIDER`, `AUTO_AGENT_BASE_URL`, `AUTO_AGENT_API_KEY`, and `AUTO_AGENT_MODEL` with mock as the default provider.
 - [ ] 2.2 Implement the OpenAI-compatible chat completions adapter against the provider contract.
 - [ ] 2.3 Add local fake HTTP tests verifying request URL, authorization header, model payload, and assistant text extraction.
 - [ ] 2.4 Add adapter failure tests for HTTP failures and malformed response bodies.
