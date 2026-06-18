@@ -22,7 +22,7 @@
 - [x] 4.1 Add a provider-backed runtime path that creates a run, creates one step, calls the injected provider once, and writes provider response text as an `agent.message` event.
 - [x] 4.2 Add runtime happy-path tests verifying `run.started`, `step.started`, `agent.message`, `step.completed`, `run.completed`, and `goal.completed` events.
 - [x] 4.3 Add runtime tests verifying provider and model metadata are persisted in run records or event data.
-- [ ] 4.4 Add runtime failure tests verifying provider errors create an `error` event and mark the run and goal failed.
+- [x] 4.4 Add runtime failure tests verifying provider errors create an `error` event and mark the run and goal failed.
 
 ## 5. Backend Composition
 

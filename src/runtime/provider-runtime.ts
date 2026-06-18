@@ -16,7 +16,7 @@ export interface ProviderRuntimeDeps {
 }
 
 export interface ProviderRuntime {
-  run(goalId: string): Promise<ModelProviderOutput>;
+  run(goalId: string): Promise<ModelProviderOutput | undefined>;
 }
 
 export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntime {
@@ -27,10 +27,32 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
       const goal = goalRepo.getById(goalId);
       if (!goal) throw new Error(`Goal not found: ${goalId}`);
 
-      const output = await provider.complete({
+      const input = {
         goal: toProviderGoalContext(goal),
         prompt: buildProviderPrompt(goal),
-      });
+      };
+      let output: ModelProviderOutput;
+      try {
+        output = await provider.complete(input);
+      } catch (err) {
+        const message = errorMessage(err);
+        const run = runRepo.create({
+          goalId,
+          provider: "unknown",
+          model: "unknown",
+        });
+        const finishedAt = new Date().toISOString();
+        runRepo.updateStatus(run.id, "failed", { finishedAt, error: message });
+        goalRepo.updateStatus(goalId, "failed", { completedAt: finishedAt });
+        eventRepo.create({
+          goalId,
+          runId: run.id,
+          type: "error",
+          message,
+          data: { runId: run.id },
+        });
+        return undefined;
+      }
       const run = runRepo.create({
         goalId,
         provider: output.metadata.provider,
@@ -125,4 +147,8 @@ function toProviderGoalContext(goal: Goal) {
 
 function buildProviderPrompt(goal: Goal): string {
   return `Complete this goal:\n\nTitle: ${goal.title}\nDescription: ${goal.description}`;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

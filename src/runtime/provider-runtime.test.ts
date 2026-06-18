@@ -44,6 +44,7 @@ test("runtime can use an injected fake provider", async () => {
 
   const output = await runtime.run(goal.id);
 
+  assert.ok(output);
   assert.equal(output.text, "Fake provider response");
   assert.deepEqual(output.metadata, { provider: "fake", model: "fake-model" });
   assert.equal(receivedInputs.length, 1);
@@ -174,6 +175,39 @@ test("provider runtime persists provider and model metadata in run and message e
     provider: "openai-local-agent",
     model: "gpt-5-codex-subscription",
   });
+
+  db.close();
+});
+
+test("provider runtime records provider errors and marks run and goal failed", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      async complete() {
+        throw new Error("provider exploded");
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Handle provider failure",
+    description: "Persist failed runtime state",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  const error = events.find((event) => event.type === "error");
+  assert.equal(error?.message, "provider exploded");
+  assert.ok(error?.runId, "error event must include runId");
+  const run = runRepo.getById(error.runId);
+  assert.equal(run?.status, "failed");
+  assert.equal(run?.error, "provider exploded");
+  assert.equal(goalRepo.getById(goal.id)?.status, "failed");
 
   db.close();
 });
