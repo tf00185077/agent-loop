@@ -33,6 +33,6 @@
 
 ## 6. Documentation And Validation
 
-- [ ] 6.1 Run `npm run typecheck`.
-- [ ] 6.2 Run `npm test`.
-- [ ] 6.3 Run `openspec validate openai-compatible-provider-smoke-test`.
+- [x] 6.1 Run `npm run typecheck`.
+- [x] 6.2 Run `npm test`.
+- [x] 6.3 Run `openspec validate openai-compatible-provider-smoke-test`.
