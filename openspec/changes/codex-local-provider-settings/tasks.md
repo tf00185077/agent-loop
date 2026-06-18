@@ -28,7 +28,7 @@
 ## 5. Dashboard Provider Setup
 
 - [x] 5.1 Add dashboard API client functions and types for provider settings, detection, and connection test endpoints.
-- [ ] 5.2 Add provider setup UI for selecting mock or Codex Local, entering or reviewing command path, choosing model label, saving settings, and testing connection.
+- [x] 5.2 Add provider setup UI for selecting mock or Codex Local, entering or reviewing command path, choosing model label, saving settings, and testing connection.
 - [ ] 5.3 Add dashboard states for detected, not found, connected, login required, network failure, and command failure.
 - [ ] 5.4 Add dashboard tests or browser verification proving settings can be saved and the UI shows connection status without exposing credential material.
 

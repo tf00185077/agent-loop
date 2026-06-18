@@ -3,6 +3,7 @@ import GoalList from "./GoalList";
 import CreateGoalForm from "./CreateGoalForm";
 import GoalDetail from "./GoalDetail";
 import EventTimeline from "./EventTimeline";
+import ProviderSetup from "./ProviderSetup";
 
 type View = { page: "list" } | { page: "detail"; goalId: string };
 
@@ -25,6 +26,7 @@ export default function App() {
       <main>
         {view.page === "list" && (
           <>
+            <ProviderSetup />
             <CreateGoalForm onCreated={() => setRefreshKey((k) => k + 1)} />
             <GoalList
               refreshKey={refreshKey}
