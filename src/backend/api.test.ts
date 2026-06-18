@@ -98,6 +98,127 @@ describe("Backend API", () => {
   });
 
   describe("Provider settings API", () => {
+    it("reads default mock provider settings", async () => {
+      const providerServer = await startServer();
+
+      try {
+        const res = await fetch(`${providerServer.url}/api/provider-settings`);
+        assert.equal(res.status, 200);
+        assert.deepEqual(await json(res), {
+          provider: "mock",
+          modelLabel: "mock-v1",
+          codexCommandPath: null,
+          status: {
+            state: "not_checked",
+            detected: false,
+            checkedAt: null,
+            message: null,
+          },
+        });
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("saves mock provider settings", async () => {
+      const providerServer = await startServer();
+
+      try {
+        const res = await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "mock" }),
+        });
+        assert.equal(res.status, 200);
+        assert.deepEqual(await json(res), {
+          provider: "mock",
+          modelLabel: "mock-v1",
+          codexCommandPath: null,
+          status: {
+            state: "not_checked",
+            detected: false,
+            checkedAt: null,
+            message: null,
+          },
+        });
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("saves Codex Local provider settings with model label and command path", async () => {
+      const providerServer = await startServer();
+
+      try {
+        const res = await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: " gpt-5-codex-subscription ",
+            codexCommandPath: " C:\\Tools\\codex.cmd ",
+          }),
+        });
+        assert.equal(res.status, 200);
+        assert.deepEqual(await json(res), {
+          provider: "codex-local",
+          modelLabel: "gpt-5-codex-subscription",
+          codexCommandPath: "C:\\Tools\\codex.cmd",
+          status: {
+            state: "not_checked",
+            detected: false,
+            checkedAt: null,
+            message: null,
+          },
+        });
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("returns saved provider status after detection", async () => {
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => ({
+          detected: true,
+          commandPath: "C:\\Tools\\codex.cmd",
+          source: "manual",
+          status: {
+            state: "detected",
+            detected: true,
+            checkedAt: null,
+            message: "Fake detection ok",
+          },
+        }),
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5-codex-subscription",
+            codexCommandPath: "C:\\Tools\\codex.cmd",
+          }),
+        });
+        await fetch(`${providerServer.url}/api/provider-settings/detect`, {
+          method: "POST",
+        });
+
+        const res = await fetch(`${providerServer.url}/api/provider-settings`);
+        const body = (await json(res)) as Record<string, unknown>;
+        assert.equal(res.status, 200);
+        assert.deepEqual(body.status, {
+          state: "detected",
+          detected: true,
+          checkedAt: null,
+          message: "Fake detection ok",
+        });
+      } finally {
+        await providerServer.close();
+      }
+    });
+
     it("reads, saves, detects, and tests provider settings", async () => {
       let detectionOptions: CodexCliDetectionOptions | undefined;
       let connectionOptions: CodexLocalConnectionTestOptions | undefined;
