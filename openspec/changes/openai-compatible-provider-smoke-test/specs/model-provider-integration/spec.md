@@ -18,19 +18,19 @@ The system SHALL support an OpenAI-compatible chat completions provider adapter 
 - **WHEN** the configured endpoint returns a valid chat completions response with assistant content
 - **THEN** the adapter returns the assistant text to the runtime
 
-### Requirement: Local logged-in agent provider
+### Requirement: OpenAI local logged-in agent provider
 The system SHALL support a backend-spawned local agent provider that can use a local command already authenticated with the user's OpenAI subscription-backed agent access.
 
 #### Scenario: Backend spawns local logged-in agent
-- **WHEN** the backend is configured for the local-agent provider path
+- **WHEN** the backend is configured for the openai-local-agent provider path
 - **THEN** starting a goal invokes the configured local command with the goal prompt and records the command response through the provider contract
 
 #### Scenario: Local agent does not expose subscription secrets
-- **WHEN** the local agent provider is used
+- **WHEN** the openai-local-agent provider is used
 - **THEN** dashboard API responses and durable event data do not include browser cookies, session tokens, local command secrets, or subscription credential material
 
 #### Scenario: Missing local agent configuration fails visibly
-- **WHEN** the backend is configured for the local-agent provider path without the required local command configuration
+- **WHEN** the backend is configured for the openai-local-agent provider path without the required local command configuration
 - **THEN** starting a goal records an `error` event and the goal reaches failed status rather than remaining running indefinitely
 
 ### Requirement: Provider-backed runtime completes a smoke step

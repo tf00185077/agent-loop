@@ -45,19 +45,19 @@ The first end-to-end provider target is a local OpenAI subscription-backed agent
 
 3. **Use a local logged-in agent runner for the first subscription-backed path.**
 
-   The backend will be able to choose a `local-agent` provider that spawns a configured local command, sends the provider input as structured JSON or stdin text, waits for a response, and maps stdout back into `ModelProviderOutput`. This keeps the backend lifecycle and dashboard behavior intact while allowing the model access to come from a local OpenAI subscription-backed agent process.
+   The backend will be able to choose an `openai-local-agent` provider that spawns a configured local command, sends the provider input as structured JSON or stdin text, waits for a response, and maps stdout back into `ModelProviderOutput`. This keeps the backend lifecycle and dashboard behavior intact while allowing the model access to come from a local OpenAI subscription-backed agent process.
 
    Alternative considered: directly use ChatGPT browser sessions as provider credentials. That would require browser cookies, UI automation, or undocumented product-internal tokens, which are not a stable backend integration boundary.
 
 4. **Keep provider selection in backend composition.**
 
-   Backend startup will choose mock, local-agent, or OpenAI-compatible behavior from env configuration. The dashboard will not receive or store provider credentials.
+   Backend startup will choose mock, openai-local-agent, or OpenAI-compatible behavior from env configuration. The dashboard will not receive or store provider credentials.
 
    Alternative considered: adding dashboard settings for provider choice. That would add UI and credential-handling scope before the backend contract is validated.
 
 5. **Preserve the mock path as the reliable default.**
 
-   The default provider should remain mock unless env explicitly selects local-agent or OpenAI-compatible behavior. This keeps local development and CI deterministic.
+   The default provider should remain mock unless env explicitly selects openai-local-agent or OpenAI-compatible behavior. This keeps local development and CI deterministic.
 
    Alternative considered: make OpenAI-compatible the default because `.env.example` already names it. That risks failing the local app for users without API keys.
 
@@ -88,9 +88,9 @@ The first end-to-end provider target is a local OpenAI subscription-backed agent
 1. Add provider contract and fake-provider tests without changing dashboard behavior.
 2. Add OpenAI-compatible adapter scaffolding as an alternate API-key provider path.
 3. Add local OpenAI subscription-backed agent runner configuration and adapter.
-4. Add backend runtime selection from env with mock as default and local-agent as the first real provider target.
+4. Add backend runtime selection from env with mock as default and openai-local-agent as the first real provider target.
 5. Add provider-backed runtime happy-path and failure-path tests.
-6. Update docs and `.env.example` notes for local-agent and API-key provider smoke testing.
+6. Update docs and `.env.example` notes for openai-local-agent and API-key provider smoke testing.
 
 Rollback is straightforward: set `AUTO_AGENT_PROVIDER=mock` or remove the provider selection change, leaving the existing mock runtime path intact.
 

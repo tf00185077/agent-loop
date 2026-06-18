@@ -10,12 +10,12 @@
 - Deferred: Add local fake HTTP tests verifying request URL, authorization header, model payload, and assistant text extraction after the API-key provider path resumes.
 - Deferred: Add adapter failure tests for HTTP failures and malformed response bodies after the API-key provider path resumes.
 
-## 3. Local Logged-In Agent Provider
+## 3. OpenAI Local Logged-In Agent Provider
 
-- [ ] 3.1 Implement local-agent provider configuration loading for the first OpenAI subscription-backed local command.
-- [ ] 3.2 Implement a local-agent provider that spawns the configured command, sends the goal prompt, and extracts response text.
-- [ ] 3.3 Add local-agent provider tests with a fake local command verifying prompt input, response extraction, and provider/model metadata.
-- [ ] 3.4 Add local-agent failure tests for missing command, non-zero exit, timeout, and malformed output.
+- [x] 3.1 Implement openai-local-agent provider configuration loading for the first OpenAI subscription-backed local command.
+- [ ] 3.2 Implement an openai-local-agent provider that spawns the configured command, sends the goal prompt, and extracts response text.
+- [ ] 3.3 Add openai-local-agent provider tests with a fake local command verifying prompt input, response extraction, and provider/model metadata.
+- [ ] 3.4 Add openai-local-agent failure tests for missing command, non-zero exit, timeout, and malformed output.
 
 ## 4. Provider-Backed Runtime
 
@@ -26,9 +26,9 @@
 
 ## 5. Backend Composition
 
-- [ ] 5.1 Update backend app composition to choose mock, local-agent, or OpenAI-compatible behavior from backend environment configuration, with mock as default and local-agent as the first real-provider target.
-- [ ] 5.2 Add API or E2E tests proving the existing start endpoint can drive a provider-backed run with a fake local-agent provider.
-- [ ] 5.3 Add API or E2E tests proving missing local-agent configuration fails visibly through events and failed goal status.
+- [ ] 5.1 Update backend app composition to choose mock, openai-local-agent, or OpenAI-compatible behavior from backend environment configuration, with mock as default and openai-local-agent as the first real-provider target.
+- [ ] 5.2 Add API or E2E tests proving the existing start endpoint can drive a provider-backed run with a fake openai-local-agent provider.
+- [ ] 5.3 Add API or E2E tests proving missing openai-local-agent configuration fails visibly through events and failed goal status.
 - [ ] 5.4 Verify dashboard API responses never include provider secrets or local command credential material.
 
 ## 6. Documentation And Validation

@@ -31,4 +31,4 @@ The immediate smoke-test priority is now to validate backend-spawned agent execu
 - Adds provider adapter code under the backend/runtime boundary.
 - Adds tests using fake providers and local fake HTTP responses so automated verification does not require network access or API keys.
 - Adds a local logged-in agent runner path that becomes the first end-to-end provider-backed runtime target.
-- Keeps `.env.example` and documentation ready for both local-agent and API-key provider smoke paths.
+- Keeps `.env.example` and documentation ready for both openai-local-agent and API-key provider smoke paths.
