@@ -46,7 +46,6 @@ function runLocalAgentCommand(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(config.command, config.args, {
-      shell: process.platform === "win32",
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
