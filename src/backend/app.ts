@@ -8,9 +8,17 @@ import {
   createStepRepository,
 } from "../persistence/runtime-repositories.js";
 import { createMockRuntime } from "../runtime/mock-runtime.js";
+import { createOpenAICompatibleProvider } from "../runtime/openai-compatible-provider.js";
+import { createOpenAILocalAgentProvider } from "../runtime/openai-local-agent-provider.js";
+import { loadProviderConfig, type ProviderEnvironment } from "../runtime/provider-config.js";
+import { createProviderRuntime } from "../runtime/provider-runtime.js";
 import { createGoalRouter } from "./routes/goals.js";
 
-export function createApp(db: AppDatabase) {
+export interface CreateAppOptions {
+  env?: ProviderEnvironment;
+}
+
+export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
   const app = express();
   app.use(express.json());
 
@@ -18,7 +26,13 @@ export function createApp(db: AppDatabase) {
   const runRepo = createRunRepository(db);
   const stepRepo = createStepRepository(db);
   const eventRepo = createEventRepository(db);
-  const runtime = createMockRuntime({ goalRepo, runRepo, stepRepo, eventRepo });
+  const runtime = createRuntimeFromEnvironment({
+    env: options.env ?? process.env,
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+  });
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
@@ -41,4 +55,32 @@ export function createApp(db: AppDatabase) {
   );
 
   return app;
+}
+
+type RuntimeRepositories = Parameters<typeof createMockRuntime>[0];
+
+interface CreateRuntimeFromEnvironmentDeps extends RuntimeRepositories {
+  env: ProviderEnvironment;
+}
+
+function createRuntimeFromEnvironment(deps: CreateRuntimeFromEnvironmentDeps) {
+  const { env, goalRepo, runRepo, stepRepo, eventRepo } = deps;
+  const config = loadProviderConfig(env);
+
+  if (config.provider === "mock") {
+    return createMockRuntime({ goalRepo, runRepo, stepRepo, eventRepo });
+  }
+
+  const provider =
+    config.provider === "openai-local-agent"
+      ? createOpenAILocalAgentProvider({ config })
+      : createOpenAICompatibleProvider({ config });
+
+  return createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider,
+  });
 }

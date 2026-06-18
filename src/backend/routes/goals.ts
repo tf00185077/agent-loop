@@ -2,12 +2,15 @@ import { Router } from "express";
 
 import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type { EventRepository } from "../../persistence/runtime-repositories.js";
-import type { MockRuntime } from "../../runtime/mock-runtime.js";
+
+interface RuntimeRunner {
+  run(goalId: string): Promise<unknown>;
+}
 
 interface GoalRouterDeps {
   goalRepo: GoalRepository;
   eventRepo: EventRepository;
-  runtime: MockRuntime;
+  runtime: RuntimeRunner;
 }
 
 export function createGoalRouter(deps: GoalRouterDeps): Router {
@@ -107,9 +110,9 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
         startedAt: new Date().toISOString(),
       });
 
-      // Run mock lifecycle in background (non-blocking)
+      // Run lifecycle in background (non-blocking)
       runtime.run(goal.id).catch((err: unknown) => {
-        console.error(`Mock runtime error for goal ${goal.id}:`, err);
+        console.error(`Runtime error for goal ${goal.id}:`, err);
       });
 
       res.json(started);
