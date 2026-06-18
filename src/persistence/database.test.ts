@@ -21,11 +21,11 @@ test("opens SQLite at a configured path", () => {
   db.close();
 });
 
-test("initializes lifecycle tables for goals, runs, steps, and events", () => {
+test("initializes lifecycle and provider settings tables", () => {
   const dbPath = join(mkdtempSync(join(tmpdir(), "auto-agent-db-")), "schema.sqlite");
   const db = openDatabase({ path: dbPath });
 
-  assert.deepEqual(tableNames(db), ["events", "goals", "runs", "steps"]);
+  assert.deepEqual(tableNames(db), ["events", "goals", "provider_settings", "runs", "steps"]);
   assert.deepEqual(columnNames(db, "goals"), [
     "id",
     "title",
@@ -69,6 +69,17 @@ test("initializes lifecycle tables for goals, runs, steps, and events", () => {
     "message",
     "data",
     "created_at",
+  ]);
+  assert.deepEqual(columnNames(db, "provider_settings"), [
+    "id",
+    "provider",
+    "model_label",
+    "codex_command_path",
+    "status_state",
+    "status_detected",
+    "status_checked_at",
+    "status_message",
+    "updated_at",
   ]);
   assert.deepEqual(foreignKeys(db, "runs"), [{ from: "goal_id", table: "goals", to: "id" }]);
   assert.deepEqual(foreignKeys(db, "steps"), [

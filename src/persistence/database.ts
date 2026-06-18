@@ -72,5 +72,17 @@ function initializeSchema(db: AppDatabase): void {
       data TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS provider_settings (
+      id TEXT PRIMARY KEY CHECK (id = 'local'),
+      provider TEXT NOT NULL,
+      model_label TEXT NOT NULL,
+      codex_command_path TEXT,
+      status_state TEXT NOT NULL,
+      status_detected INTEGER NOT NULL,
+      status_checked_at TEXT,
+      status_message TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
 }
