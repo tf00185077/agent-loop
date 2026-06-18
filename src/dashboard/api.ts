@@ -24,6 +24,57 @@ export interface GoalEvent {
   createdAt: string;
 }
 
+export type ProviderConnectionState =
+  | "not_checked"
+  | "detected"
+  | "not_found"
+  | "connected"
+  | "login_required"
+  | "network_failure"
+  | "command_failure";
+
+export interface ProviderStatus {
+  state: ProviderConnectionState;
+  detected: boolean;
+  checkedAt: string | null;
+  message: string | null;
+}
+
+export type ProviderSettings =
+  | {
+      provider: "mock";
+      modelLabel: "mock-v1";
+      codexCommandPath: null;
+      status: ProviderStatus;
+    }
+  | {
+      provider: "codex-local";
+      modelLabel: string;
+      codexCommandPath: string | null;
+      status: ProviderStatus;
+    };
+
+export type SaveProviderSettingsInput =
+  | {
+      provider: "mock";
+    }
+  | {
+      provider: "codex-local";
+      modelLabel: string;
+      codexCommandPath: string | null;
+    };
+
+export interface CodexCliDetectionResult {
+  detected: boolean;
+  commandPath: string | null;
+  source: "manual" | "path" | "common" | "none";
+  status: ProviderStatus;
+}
+
+export interface CodexLocalConnectionTestResult {
+  status: ProviderStatus;
+}
+
 export async function listGoals(): Promise<Goal[]> {
   const res = await fetch(`${BASE}/goals`);
   if (!res.ok) throw new Error(`listGoals: ${res.status}`);
@@ -59,5 +110,39 @@ export async function startGoal(id: string): Promise<void> {
 export async function listEvents(id: string): Promise<GoalEvent[]> {
   const res = await fetch(`${BASE}/goals/${id}/events`);
   if (!res.ok) throw new Error(`listEvents: ${res.status}`);
+  return res.json();
+}
+
+export async function getProviderSettings(): Promise<ProviderSettings> {
+  const res = await fetch(`${BASE}/provider-settings`);
+  if (!res.ok) throw new Error(`getProviderSettings: ${res.status}`);
+  return res.json();
+}
+
+export async function saveProviderSettings(
+  body: SaveProviderSettingsInput,
+): Promise<ProviderSettings> {
+  const res = await fetch(`${BASE}/provider-settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`saveProviderSettings: ${res.status}`);
+  return res.json();
+}
+
+export async function detectCodexCli(): Promise<CodexCliDetectionResult> {
+  const res = await fetch(`${BASE}/provider-settings/detect`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`detectCodexCli: ${res.status}`);
+  return res.json();
+}
+
+export async function testCodexLocalConnection(): Promise<CodexLocalConnectionTestResult> {
+  const res = await fetch(`${BASE}/provider-settings/test`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`testCodexLocalConnection: ${res.status}`);
   return res.json();
 }
