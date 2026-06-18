@@ -6,27 +6,33 @@
 ## 2. OpenAI-Compatible Adapter
 
 - [x] 2.1 Implement provider configuration loading for `AUTO_AGENT_PROVIDER`, `AUTO_AGENT_BASE_URL`, `AUTO_AGENT_API_KEY`, and `AUTO_AGENT_MODEL` with mock as the default provider.
-- [ ] 2.2 Implement the OpenAI-compatible chat completions adapter against the provider contract.
-- [ ] 2.3 Add local fake HTTP tests verifying request URL, authorization header, model payload, and assistant text extraction.
-- [ ] 2.4 Add adapter failure tests for HTTP failures and malformed response bodies.
+- [x] 2.2 Implement the OpenAI-compatible chat completions adapter against the provider contract.
+- Deferred: Add local fake HTTP tests verifying request URL, authorization header, model payload, and assistant text extraction after the API-key provider path resumes.
+- Deferred: Add adapter failure tests for HTTP failures and malformed response bodies after the API-key provider path resumes.
 
-## 3. Provider-Backed Runtime
+## 3. Local Logged-In Agent Provider
 
-- [ ] 3.1 Add a provider-backed runtime path that creates a run, creates one step, calls the injected provider once, and writes provider response text as an `agent.message` event.
-- [ ] 3.2 Add runtime happy-path tests verifying `run.started`, `step.started`, `agent.message`, `step.completed`, `run.completed`, and `goal.completed` events.
-- [ ] 3.3 Add runtime tests verifying provider and model metadata are persisted in run records or event data.
-- [ ] 3.4 Add runtime failure tests verifying provider errors create an `error` event and mark the run and goal failed.
+- [ ] 3.1 Implement local-agent provider configuration loading for the first OpenAI subscription-backed local command.
+- [ ] 3.2 Implement a local-agent provider that spawns the configured command, sends the goal prompt, and extracts response text.
+- [ ] 3.3 Add local-agent provider tests with a fake local command verifying prompt input, response extraction, and provider/model metadata.
+- [ ] 3.4 Add local-agent failure tests for missing command, non-zero exit, timeout, and malformed output.
 
-## 4. Backend Composition
+## 4. Provider-Backed Runtime
 
-- [ ] 4.1 Update backend app composition to choose mock or OpenAI-compatible runtime behavior from backend environment configuration.
-- [ ] 4.2 Add API or E2E tests proving the existing start endpoint can drive a provider-backed run with a fake provider.
-- [ ] 4.3 Add API or E2E tests proving missing OpenAI-compatible configuration fails visibly through events and failed goal status.
-- [ ] 4.4 Verify dashboard API responses never include provider secrets.
+- [ ] 4.1 Add a provider-backed runtime path that creates a run, creates one step, calls the injected provider once, and writes provider response text as an `agent.message` event.
+- [ ] 4.2 Add runtime happy-path tests verifying `run.started`, `step.started`, `agent.message`, `step.completed`, `run.completed`, and `goal.completed` events.
+- [ ] 4.3 Add runtime tests verifying provider and model metadata are persisted in run records or event data.
+- [ ] 4.4 Add runtime failure tests verifying provider errors create an `error` event and mark the run and goal failed.
 
-## 5. Documentation And Validation
+## 5. Backend Composition
 
-- [ ] 5.1 Update `.env.example` and README with the manual OpenAI-compatible smoke-test path.
-- [ ] 5.2 Run `npm run typecheck`.
-- [ ] 5.3 Run `npm test`.
-- [ ] 5.4 Run `openspec validate openai-compatible-provider-smoke-test`.
+- [ ] 5.1 Update backend app composition to choose mock, local-agent, or OpenAI-compatible behavior from backend environment configuration, with mock as default and local-agent as the first real-provider target.
+- [ ] 5.2 Add API or E2E tests proving the existing start endpoint can drive a provider-backed run with a fake local-agent provider.
+- [ ] 5.3 Add API or E2E tests proving missing local-agent configuration fails visibly through events and failed goal status.
+- [ ] 5.4 Verify dashboard API responses never include provider secrets or local command credential material.
+
+## 6. Documentation And Validation
+
+- [ ] 6.1 Run `npm run typecheck`.
+- [ ] 6.2 Run `npm test`.
+- [ ] 6.3 Run `openspec validate openai-compatible-provider-smoke-test`.
