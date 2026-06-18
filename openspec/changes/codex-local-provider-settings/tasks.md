@@ -7,7 +7,7 @@
 
 ## 2. Codex CLI Detection And Connection Testing
 
-- [ ] 2.1 Implement Codex CLI command detection using saved manual path, PATH lookup, and common local install locations where practical.
+- [x] 2.1 Implement Codex CLI command detection using saved manual path, PATH lookup, and common local install locations where practical.
 - [ ] 2.2 Add detection tests for PATH success, manual path override, and not-found behavior without requiring real Codex network access.
 - [ ] 2.3 Implement a provider connection test service that invokes the Codex wrapper with a short fixed prompt and returns sanitized status.
 - [ ] 2.4 Add connection test coverage for success, command-not-found, authentication-needed or unusable-auth, network failure, and generic command failure classification.
