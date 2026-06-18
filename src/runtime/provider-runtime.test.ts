@@ -98,6 +98,45 @@ test("provider runtime creates one durable step and records provider response", 
   db.close();
 });
 
+test("provider runtime records happy-path lifecycle events in order", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      async complete() {
+        return {
+          text: "Provider lifecycle response",
+          metadata: { provider: "fake", model: "fake-model" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Verify provider lifecycle",
+    description: "Record all happy-path events",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  await runtime.run(goal.id);
+
+  assert.deepEqual(
+    eventRepo.listForGoal(goal.id).map((event) => event.type),
+    [
+      "run.started",
+      "step.started",
+      "agent.message",
+      "step.completed",
+      "run.completed",
+      "goal.completed",
+    ],
+  );
+
+  db.close();
+});
+
 test("provider runtime throws if goal does not exist", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const runtime = createProviderRuntime({
