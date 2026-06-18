@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "dev:api": "tsx watch src/backend/server.ts",
     "dev:web": "vite --config src/dashboard/vite.config.ts",
     "dev": "node scripts/dev.mjs"

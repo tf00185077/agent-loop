@@ -34,7 +34,7 @@
 
 ## 6. Documentation And Validation
 
-- [ ] 6.1 Document the Codex Local setup flow, including that authentication is managed by Codex CLI and users may need to run `codex login`.
-- [ ] 6.2 Run `npm run typecheck`.
-- [ ] 6.3 Run `npm test`.
-- [ ] 6.4 Run `openspec validate codex-local-provider-settings`.
+- [x] 6.1 Document the Codex Local setup flow, including that authentication is managed by Codex CLI and users may need to run `codex login`.
+- [x] 6.2 Run `npm run typecheck`.
+- [x] 6.3 Run `npm test`.
+- [x] 6.4 Run `openspec validate codex-local-provider-settings`.

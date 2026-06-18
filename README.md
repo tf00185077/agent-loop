@@ -83,6 +83,43 @@ For local development, run `npm run dev` and open the Vite URL it prints
 Tip: creating a goal whose title starts with `block` exercises the
 deterministic blocked path, ending in a `goal.blocked` event.
 
+## Codex Local Provider Setup
+
+The dashboard can run new goals through either the default mock provider or a
+local Codex CLI-backed provider. Open the dashboard and use **Provider setup**
+before starting a goal.
+
+1. Keep **Mock** selected for deterministic local development with no model
+   access.
+2. Select **Codex Local** to use the local Codex CLI path.
+3. Click **Detect** to look for a Codex CLI command, or enter the command path
+   manually if detection reports `Codex CLI not found`.
+4. Confirm or edit the model label. The default is
+   `gpt-5-codex-subscription`.
+5. Click **Save** to persist the selected provider, model label, command path,
+   and sanitized status metadata in the local SQLite database.
+6. Click **Test connection** to run a short backend connection check through
+   the Codex Local wrapper.
+7. Start a draft goal. The backend reads the saved provider settings at goal
+   start time, so changing the provider in the dashboard affects the next run
+   without restarting the dev server.
+
+Codex authentication is managed by the Codex CLI, not by auto-agent. If the
+dashboard shows `Codex login required`, run this in a terminal and then test the
+connection again:
+
+```bash
+codex login
+```
+
+auto-agent does not implement an OpenAI OAuth flow and does not store Codex
+access tokens, `auth.json`, browser cookies, API keys, or subscription
+credential material. Provider APIs and the dashboard surface only non-sensitive
+settings and sanitized status messages. If a Codex Local command fails, the UI
+shows one of the provider states (`Codex CLI detected`, `Codex CLI not found`,
+`Codex Local connected`, `Codex login required`, `Network failure`, or
+`Command failed`) with short guidance for the next action.
+
 ### MVP API
 
 The first slice exposes only the endpoints the demo path needs:
