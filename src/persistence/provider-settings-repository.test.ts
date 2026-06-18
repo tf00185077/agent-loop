@@ -51,6 +51,41 @@ test("saves one local provider settings record", () => {
   db.close();
 });
 
+test("saved Codex Local provider settings survive database reopen", () => {
+  const dbPath = testDatabasePath();
+  const firstDb = openDatabase({ path: dbPath });
+
+  createProviderSettingsRepository(firstDb).save({
+    provider: "codex-local",
+    modelLabel: "gpt-5-codex-subscription",
+    codexCommandPath: "C:\\Users\\TIM\\AppData\\Roaming\\npm\\codex.cmd",
+    status: {
+      state: "connected",
+      detected: true,
+      checkedAt: "2026-06-18T01:00:00.000Z",
+      message: "Codex Local ready",
+    },
+  });
+  firstDb.close();
+
+  const reopenedDb = openDatabase({ path: dbPath });
+  const settings = createProviderSettingsRepository(reopenedDb);
+
+  assert.deepEqual(settings.get(), {
+    provider: "codex-local",
+    modelLabel: "gpt-5-codex-subscription",
+    codexCommandPath: "C:\\Users\\TIM\\AppData\\Roaming\\npm\\codex.cmd",
+    status: {
+      state: "connected",
+      detected: true,
+      checkedAt: "2026-06-18T01:00:00.000Z",
+      message: "Codex Local ready",
+    },
+  });
+
+  reopenedDb.close();
+});
+
 function testDatabasePath(): string {
   return join(mkdtempSync(join(tmpdir(), "auto-agent-provider-settings-")), "settings.sqlite");
 }
