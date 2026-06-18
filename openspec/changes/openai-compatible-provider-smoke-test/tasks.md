@@ -27,7 +27,7 @@
 ## 5. Backend Composition
 
 - [x] 5.1 Update backend app composition to choose mock, openai-local-agent, or OpenAI-compatible behavior from backend environment configuration, with mock as default and openai-local-agent as the first real-provider target.
-- [ ] 5.2 Add API or E2E tests proving the existing start endpoint can drive a provider-backed run with a fake openai-local-agent provider.
+- [x] 5.2 Add API or E2E tests proving the existing start endpoint can drive a provider-backed run with a fake openai-local-agent provider.
 - [ ] 5.3 Add API or E2E tests proving missing openai-local-agent configuration fails visibly through events and failed goal status.
 - [ ] 5.4 Verify dashboard API responses never include provider secrets or local command credential material.
 
