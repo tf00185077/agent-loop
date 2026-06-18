@@ -257,6 +257,41 @@ describe("Backend API", () => {
         await providerServer.close();
       }
     });
+
+    it("fails visibly when openai-local-agent command configuration is missing", async () => {
+      const providerServer = await startServer({
+        AUTO_AGENT_PROVIDER: "openai-local-agent",
+      });
+
+      try {
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Missing local command",
+            description: "should fail through durable runtime state",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+        });
+        assert.equal(res.status, 200);
+        const started = (await json(res)) as Record<string, unknown>;
+        assert.equal(started.status, "running");
+
+        const { event } = await waitForEvent(providerServer.url, created.id, "error");
+        assert.equal(event.message, "AUTO_AGENT_OPENAI_LOCAL_COMMAND is required");
+
+        const failed = (await fetch(`${providerServer.url}/api/goals/${created.id}`).then(
+          (r) => r.json(),
+        )) as Record<string, unknown>;
+        assert.equal(failed.status, "failed");
+        assert.ok(typeof failed.completedAt === "string");
+      } finally {
+        await providerServer.close();
+      }
+    });
   });
 
   describe("GET /api/goals/:id/events", () => {
