@@ -1,6 +1,10 @@
 import { Router } from "express";
 
-import { sanitizeProviderStatus, type ProviderSettings } from "../../domain/index.js";
+import {
+  sanitizeProviderStatus,
+  type CodexModelCatalogResult,
+  type ProviderSettings,
+} from "../../domain/index.js";
 import type { ProviderSettingsRepository } from "../../persistence/provider-settings-repository.js";
 import {
   detectCodexCliCommand,
@@ -12,6 +16,10 @@ import {
   type CodexLocalConnectionTestOptions,
   type CodexLocalConnectionTestResult,
 } from "../../runtime/codex-local-connection-test.js";
+import {
+  loadCodexModelCatalog,
+  type CodexModelCatalogOptions,
+} from "../../runtime/codex-local-model-catalog.js";
 
 export interface ProviderSettingsRouterDeps {
   providerSettingsRepo: ProviderSettingsRepository;
@@ -20,12 +28,16 @@ export interface ProviderSettingsRouterDeps {
   testCodexLocalConnection?: (
     options: CodexLocalConnectionTestOptions,
   ) => Promise<CodexLocalConnectionTestResult>;
+  loadCodexModelCatalog?: (
+    options: CodexModelCatalogOptions,
+  ) => Promise<CodexModelCatalogResult>;
 }
 
 export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): Router {
   const router = Router();
   const detect = deps.detectCodexCliCommand ?? detectCodexCliCommand;
   const testConnection = deps.testCodexLocalConnection ?? testCodexLocalConnection;
+  const loadCatalog = deps.loadCodexModelCatalog ?? loadCodexModelCatalog;
 
   router.get("/", (_req, res, next) => {
     try {
@@ -72,6 +84,33 @@ export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): 
     }
   });
 
+  router.get("/models", async (_req, res, next) => {
+    try {
+      const settings = deps.providerSettingsRepo.get();
+      const savedPath =
+        settings.provider === "codex-local" ? settings.codexCommandPath : null;
+
+      const detection = detect({
+        ...(deps.codexCliDetection ?? {}),
+        manualPath: savedPath,
+      });
+
+      if (!detection.commandPath) {
+        res.json(catalogUnavailable("Codex CLI was not found. Enter a manual model or command path."));
+        return;
+      }
+
+      const result = await loadCatalog({
+        codexCommandPath: detection.commandPath,
+        source: detection.source === "none" ? "manual" : detection.source,
+      });
+
+      res.json(sanitizeCatalogResult(result));
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.post("/test", async (_req, res, next) => {
     try {
       const settings = deps.providerSettingsRepo.get();
@@ -106,6 +145,44 @@ export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): 
   });
 
   return router;
+}
+
+function catalogUnavailable(message: string): CodexModelCatalogResult {
+  return {
+    models: [],
+    defaultModelSlug: null,
+    source: "none",
+    status: { state: "unavailable", checkedAt: new Date().toISOString(), message },
+  };
+}
+
+/**
+ * Defense-in-depth re-mapping at the API boundary: re-build each model from
+ * allowlisted display fields only and redact any credential material that may
+ * appear in the status message before it leaves the backend.
+ */
+function sanitizeCatalogResult(result: CodexModelCatalogResult): CodexModelCatalogResult {
+  return {
+    models: result.models.map((model) => ({
+      slug: model.slug,
+      displayName: model.displayName,
+      description: model.description,
+      priority: model.priority,
+    })),
+    defaultModelSlug: result.defaultModelSlug,
+    source: result.source,
+    status: {
+      ...result.status,
+      message: result.status.message
+        ? sanitizeProviderStatus({
+            state: "command_failure",
+            detected: false,
+            checkedAt: null,
+            message: result.status.message,
+          }).message
+        : null,
+    },
+  };
 }
 
 function sanitizeDetectionResult(result: CodexCliDetectionResult): CodexCliDetectionResult {

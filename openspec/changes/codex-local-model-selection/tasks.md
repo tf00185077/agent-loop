@@ -6,7 +6,7 @@
 
 ## 2. Backend API
 
-- [ ] 2.1 Add `GET /api/provider-settings/models` to return sanitized model catalog results using the saved or detected Codex CLI command path.
+- [x] 2.1 Add `GET /api/provider-settings/models` to return sanitized model catalog results using the saved or detected Codex CLI command path.
 - [ ] 2.2 Add API tests proving catalog results include selectable model slugs and omit base instructions, prompt metadata, hidden models, tokens, cookies, and secret-bearing command data.
 - [ ] 2.3 Add API tests proving catalog lookup failures return a sanitized fallback response that still permits manual/default model setup.
 
