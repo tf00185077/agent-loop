@@ -5,7 +5,18 @@ import { join } from "node:path";
 
 const codexCommandPath = process.env.AUTO_AGENT_CODEX_COMMAND_PATH?.trim();
 const modelLabel = process.env.AUTO_AGENT_OPENAI_LOCAL_MODEL?.trim();
+
+// Labels that must never be forced as a Codex CLI `--model` argument. A blank
+// label, the legacy `gpt-5-codex-subscription` default, and the `mock-v1`
+// placeholder all mean "let Codex CLI choose its own default model". Mirrors
+// resolveCodexModelArgument() in src/domain/provider-settings.types.ts.
 const defaultModelLabels = new Set(["gpt-5-codex-subscription", "mock-v1"]);
+
+function resolveModelArgument(label) {
+  const trimmed = label?.trim();
+  if (!trimmed || defaultModelLabels.has(trimmed)) return null;
+  return trimmed;
+}
 
 try {
   const input = await readJsonFromStdin();
@@ -56,8 +67,9 @@ async function runCodexExec(prompt) {
     outputPath,
   ];
 
-  if (modelLabel && !defaultModelLabels.has(modelLabel)) {
-    args.push("--model", modelLabel);
+  const modelArgument = resolveModelArgument(modelLabel);
+  if (modelArgument) {
+    args.push("--model", modelArgument);
   }
 
   args.push("-");

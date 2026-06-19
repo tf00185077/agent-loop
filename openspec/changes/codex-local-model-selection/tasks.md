@@ -12,7 +12,7 @@
 
 ## 3. Wrapper And Runtime Defaults
 
-- [ ] 3.1 Update Codex Local connection testing and goal execution so blank model selection means Codex CLI default and does not pass `--model`.
+- [x] 3.1 Update Codex Local connection testing and goal execution so blank model selection means Codex CLI default and does not pass `--model`.
 - [ ] 3.2 Preserve compatibility for existing saved `gpt-5-codex-subscription` settings by not forcing that legacy label as a Codex CLI model.
 - [ ] 3.3 Add tests proving selected catalog model slugs are passed to Codex CLI and blank or legacy labels are omitted from wrapper model arguments.
 - [ ] 3.4 Ensure provider-backed runtime metadata remains understandable when Codex CLI default model behavior is used.
