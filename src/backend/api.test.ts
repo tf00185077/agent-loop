@@ -10,6 +10,7 @@ import { createApp } from "./app.js";
 import type { ProviderEnvironment } from "../runtime/provider-config.js";
 import type { CodexLocalConnectionTestOptions } from "../runtime/codex-local-connection-test.js";
 import type { CodexCliDetectionOptions } from "../runtime/codex-cli-detection.js";
+import type { CodexModelCatalogOptions } from "../runtime/codex-local-model-catalog.js";
 
 function startServer(
   env?: ProviderEnvironment,
@@ -393,6 +394,178 @@ describe("Backend API", () => {
         assert.equal((tested.status as Record<string, unknown>).state, "connected");
         assert.equal(connectionOptions?.codexCommandPath, "C:\\Tools\\codex.cmd");
         assert.equal(connectionOptions?.modelLabel, "gpt-5-codex-subscription");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("returns sanitized selectable models from GET /api/provider-settings/models", async () => {
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => ({
+          detected: true,
+          commandPath: "C:\\Tools\\codex.cmd",
+          source: "path",
+          status: {
+            state: "detected",
+            detected: true,
+            checkedAt: null,
+            message: "Codex CLI detected on PATH.",
+          },
+        }),
+        loadCodexModelCatalog: async (options: CodexModelCatalogOptions) => {
+          assert.equal(options.codexCommandPath, "C:\\Tools\\codex.cmd");
+          assert.equal(options.source, "path");
+          return {
+            models: [
+              { slug: "gpt-5-codex-mini", displayName: "GPT-5 Codex Mini", description: null, priority: 10 },
+              { slug: "gpt-5-codex", displayName: "GPT-5 Codex", description: "Latest", priority: 20 },
+            ],
+            defaultModelSlug: "gpt-5-codex-mini",
+            source: "path",
+            status: { state: "available", checkedAt: "2026-06-18T06:00:00.000Z", message: null },
+          };
+        },
+      });
+
+      try {
+        const res = await fetch(`${providerServer.url}/api/provider-settings/models`);
+        assert.equal(res.status, 200);
+        const body = (await json(res)) as Record<string, unknown>;
+        assert.equal((body.status as Record<string, unknown>).state, "available");
+        assert.equal(body.defaultModelSlug, "gpt-5-codex-mini");
+        const models = body.models as Array<Record<string, unknown>>;
+        assert.deepEqual(
+          models.map((m) => m.slug),
+          ["gpt-5-codex-mini", "gpt-5-codex"],
+        );
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("omits base instructions, prompts, hidden models, and credential material from model catalog responses", async () => {
+      const forbiddenValues = [
+        "BASE-INSTRUCTIONS-SECRET",
+        "PROMPT-METADATA-SECRET",
+        "hidden-internal-model",
+        "catalog-access-token",
+        "catalog-cookie",
+        "sk-catalog-secret",
+      ];
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => ({
+          detected: true,
+          commandPath: "C:\\Tools\\codex.cmd --api-key sk-catalog-secret",
+          source: "path",
+          status: {
+            state: "detected",
+            detected: true,
+            checkedAt: null,
+            message: "Codex CLI detected on PATH.",
+          },
+        }),
+        // The route maps only allowlisted fields, so even if a runner leaked raw
+        // metadata into a model entry it would be dropped before the response.
+        loadCodexModelCatalog: async () => ({
+          models: [
+            {
+              slug: "gpt-5-codex",
+              displayName: "GPT-5 Codex",
+              description: "Safe description",
+              priority: 1,
+              // deliberately leaked extra fields that must not survive sanitization
+              base_instructions: "BASE-INSTRUCTIONS-SECRET",
+              prompt: "PROMPT-METADATA-SECRET",
+              access_token: "catalog-access-token",
+              cookie: "catalog-cookie",
+            } as never,
+          ],
+          defaultModelSlug: "gpt-5-codex",
+          source: "path",
+          status: {
+            state: "available",
+            checkedAt: "2026-06-18T06:00:00.000Z",
+            message: "loaded with sk-catalog-secret Authorization: Bearer catalog-bearer",
+          },
+        }),
+      });
+
+      try {
+        const res = await fetch(`${providerServer.url}/api/provider-settings/models`);
+        const body = (await json(res)) as Record<string, unknown>;
+        assertDoesNotContainValues(body, forbiddenValues);
+        const models = body.models as Array<Record<string, unknown>>;
+        assert.deepEqual(Object.keys(models[0]).sort(), [
+          "description",
+          "displayName",
+          "priority",
+          "slug",
+        ]);
+        assert.equal((body.status as Record<string, unknown>).message?.toString().includes("sk-catalog-secret"), false);
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("returns a sanitized fallback that permits manual/default setup when catalog lookup is unavailable", async () => {
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => ({
+          detected: false,
+          commandPath: null,
+          source: "none",
+          status: {
+            state: "not_found",
+            detected: false,
+            checkedAt: null,
+            message: "Codex CLI was not found.",
+          },
+        }),
+      });
+
+      try {
+        const res = await fetch(`${providerServer.url}/api/provider-settings/models`);
+        assert.equal(res.status, 200);
+        const body = (await json(res)) as Record<string, unknown>;
+        assert.equal((body.status as Record<string, unknown>).state, "unavailable");
+        assert.deepEqual(body.models, []);
+        assert.equal(body.defaultModelSlug, null);
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("returns a sanitized fallback when catalog discovery itself fails", async () => {
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => ({
+          detected: true,
+          commandPath: "C:\\Tools\\codex.cmd",
+          source: "path",
+          status: {
+            state: "detected",
+            detected: true,
+            checkedAt: null,
+            message: "Codex CLI detected on PATH.",
+          },
+        }),
+        loadCodexModelCatalog: async () => ({
+          models: [],
+          defaultModelSlug: null,
+          source: "path",
+          status: {
+            state: "unavailable",
+            checkedAt: "2026-06-18T06:00:00.000Z",
+            message: "Codex CLI returned malformed model catalog output.",
+          },
+        }),
+      });
+
+      try {
+        const res = await fetch(`${providerServer.url}/api/provider-settings/models`);
+        assert.equal(res.status, 200);
+        const body = (await json(res)) as Record<string, unknown>;
+        assert.equal((body.status as Record<string, unknown>).state, "unavailable");
+        assert.deepEqual(body.models, []);
+        assert.equal(body.defaultModelSlug, null);
       } finally {
         await providerServer.close();
       }

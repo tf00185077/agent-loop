@@ -29,6 +29,7 @@ export interface CreateAppOptions {
   codexCliDetection?: ProviderSettingsRouterDeps["codexCliDetection"];
   detectCodexCliCommand?: ProviderSettingsRouterDeps["detectCodexCliCommand"];
   testCodexLocalConnection?: ProviderSettingsRouterDeps["testCodexLocalConnection"];
+  loadCodexModelCatalog?: ProviderSettingsRouterDeps["loadCodexModelCatalog"];
   codexLocalWrapperCommand?: string;
   codexLocalWrapperArgs?: string[];
   codexLocalWrapperTimeoutMs?: number;
@@ -67,6 +68,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
       codexCliDetection: options.codexCliDetection,
       detectCodexCliCommand: options.detectCodexCliCommand,
       testCodexLocalConnection: options.testCodexLocalConnection,
+      loadCodexModelCatalog: options.loadCodexModelCatalog,
     }),
   );
 
