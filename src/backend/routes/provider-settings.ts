@@ -228,10 +228,12 @@ function parseProviderSettings(body: unknown): ParseProviderSettingsResult {
   }
 
   if (body.provider === "codex-local") {
+    // A blank model label persists as "" and means "use Codex CLI default".
+    // We no longer inject the stale gpt-5-codex-subscription fallback, but an
+    // explicitly saved legacy label is preserved (it is read back unchanged and
+    // simply not forced as a Codex CLI --model argument at execution time).
     const modelLabel =
-      typeof body.modelLabel === "string" && body.modelLabel.trim()
-        ? body.modelLabel.trim()
-        : "gpt-5-codex-subscription";
+      typeof body.modelLabel === "string" ? body.modelLabel.trim() : "";
     const codexCommandPath =
       typeof body.codexCommandPath === "string" && body.codexCommandPath.trim()
         ? body.codexCommandPath.trim()
