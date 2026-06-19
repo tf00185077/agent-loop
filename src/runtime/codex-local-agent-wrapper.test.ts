@@ -88,6 +88,90 @@ process.stdin.on("end", () => {
   assert.equal(captured.args.includes("--model"), false);
 });
 
+test("wrapper passes a selected catalog model slug as --model", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-wrapper-"));
+  const capturePath = join(dir, "captured-selected-model.json");
+  const fakeCodexPath = join(dir, "fake-codex.mjs");
+
+  writeFileSync(
+    fakeCodexPath,
+    `
+import { writeFileSync } from "node:fs";
+
+const capturePath = process.env.CAPTURE_PATH;
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  stdin += chunk;
+});
+process.stdin.on("end", () => {
+  const outputIndex = process.argv.indexOf("--output-last-message");
+  writeFileSync(process.argv[outputIndex + 1], "selected model response");
+  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
+});
+`.trimStart(),
+  );
+
+  const result = await runWrapper({
+    codexCommandPath: process.execPath,
+    extraArgs: [fakeCodexPath],
+    modelLabel: "gpt-5-codex",
+    capturePath,
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { text: "selected model response" });
+
+  const captured = JSON.parse(readFileSync(capturePath, "utf8")) as {
+    args: string[];
+    stdin: string;
+  };
+  const modelIndex = captured.args.indexOf("--model");
+  assert.notEqual(modelIndex, -1);
+  assert.equal(captured.args[modelIndex + 1], "gpt-5-codex");
+});
+
+test("wrapper uses Codex CLI default model when the model label is blank", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-wrapper-"));
+  const capturePath = join(dir, "captured-blank-model.json");
+  const fakeCodexPath = join(dir, "fake-codex.mjs");
+
+  writeFileSync(
+    fakeCodexPath,
+    `
+import { writeFileSync } from "node:fs";
+
+const capturePath = process.env.CAPTURE_PATH;
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  stdin += chunk;
+});
+process.stdin.on("end", () => {
+  const outputIndex = process.argv.indexOf("--output-last-message");
+  writeFileSync(process.argv[outputIndex + 1], "blank label response");
+  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
+});
+`.trimStart(),
+  );
+
+  const result = await runWrapper({
+    codexCommandPath: process.execPath,
+    extraArgs: [fakeCodexPath],
+    modelLabel: "",
+    capturePath,
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { text: "blank label response" });
+
+  const captured = JSON.parse(readFileSync(capturePath, "utf8")) as {
+    args: string[];
+    stdin: string;
+  };
+  assert.equal(captured.args.includes("--model"), false);
+});
+
 test("wrapper can invoke a Windows cmd shim Codex command", { skip: process.platform !== "win32" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-wrapper-"));
   const capturePath = join(dir, "captured-cmd.json");
