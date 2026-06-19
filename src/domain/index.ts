@@ -32,8 +32,10 @@ export type {
   ProviderStatus,
 } from "./provider-settings.types.js";
 export {
+  CODEX_DEFAULT_MODEL_LABEL,
   createDefaultProviderSettings,
   defaultProviderStatus,
+  describeCodexModelLabel,
   LEGACY_CODEX_MODEL_LABEL,
   resolveCodexModelArgument,
   sanitizeProviderStatus,

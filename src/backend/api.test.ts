@@ -871,6 +871,57 @@ describe("Backend API", () => {
       }
     });
 
+    it("records an understandable default model marker when no model label is saved", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-default-model-"));
+      const capturePath = join(dir, "captured-default-model.json");
+      const scriptPath = createFakeCodexWrapperScript(dir);
+      const providerServer = await startServer(undefined, {
+        codexLocalWrapperCommand: "node",
+        codexLocalWrapperArgs: [scriptPath, capturePath],
+        codexLocalWrapperTimeoutMs: 10000,
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "",
+            codexCommandPath: "C:\\Tools\\codex.cmd",
+          }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Default model start",
+            description: "no model label saved",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+        });
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        assert.ok(
+          events.some(
+            (e) =>
+              e.type === "agent.message" &&
+              (e.data as Record<string, unknown>).model === "codex-default",
+          ),
+        );
+
+        // The wrapper still receives the raw blank label so it omits --model.
+        const captured = JSON.parse(readFileSync(capturePath, "utf8")) as Record<string, unknown>;
+        assert.equal(captured.modelLabel, "");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
     it("uses explicitly saved mock settings instead of environment provider fallback", async () => {
       const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-explicit-mock-"));
       const capturePath = join(dir, "captured-env-provider.json");

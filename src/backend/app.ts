@@ -1,7 +1,7 @@
 import express from "express";
 import { resolve } from "node:path";
 
-import type { ProviderSettings } from "../domain/index.js";
+import { describeCodexModelLabel, type ProviderSettings } from "../domain/index.js";
 import type { AppDatabase } from "../persistence/database.js";
 import { createGoalRepository } from "../persistence/goal-repository.js";
 import {
@@ -146,7 +146,9 @@ function createRuntimeFromCodexLocalSettings(
         args: deps.codexLocalWrapperArgs ?? [
           resolve("scripts", "codex-local-agent-wrapper.mjs"),
         ],
-        model: settings.modelLabel,
+        // Display-only metadata label; the raw label below drives the
+        // wrapper's --model decision (blank/legacy => Codex CLI default).
+        model: describeCodexModelLabel(settings.modelLabel),
         timeoutMs: deps.codexLocalWrapperTimeoutMs ?? 120_000,
         env: {
           AUTO_AGENT_CODEX_COMMAND_PATH: settings.codexCommandPath ?? "",

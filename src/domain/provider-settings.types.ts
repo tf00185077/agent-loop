@@ -86,6 +86,23 @@ export function resolveCodexModelArgument(modelLabel: string | null | undefined)
   return trimmed;
 }
 
+/**
+ * Marker recorded in run metadata when no model label is saved and Codex CLI
+ * picks its own default model. Keeps run metadata understandable instead of
+ * showing an empty model value.
+ */
+export const CODEX_DEFAULT_MODEL_LABEL = "codex-default";
+
+/**
+ * Returns a human-understandable model label for run metadata: the saved label
+ * when present, otherwise the Codex CLI default marker. This is display-only
+ * and never used to build a `--model` argument.
+ */
+export function describeCodexModelLabel(modelLabel: string | null | undefined): string {
+  const trimmed = modelLabel?.trim();
+  return trimmed ? trimmed : CODEX_DEFAULT_MODEL_LABEL;
+}
+
 export const defaultProviderStatus: ProviderStatus = {
   state: "not_checked",
   detected: false,
