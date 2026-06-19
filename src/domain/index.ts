@@ -20,6 +20,11 @@ export type {
 export type { GoalStatus, RunStatus, StepStatus } from "./status.types.js";
 export type {
   CodexLocalProviderSettings,
+  CodexModelCatalogEntry,
+  CodexModelCatalogResult,
+  CodexModelCatalogSource,
+  CodexModelCatalogStatus,
+  CodexModelCatalogStatusState,
   LocalProviderKind,
   MockProviderSettings,
   ProviderConnectionState,
@@ -29,5 +34,7 @@ export type {
 export {
   createDefaultProviderSettings,
   defaultProviderStatus,
+  LEGACY_CODEX_MODEL_LABEL,
+  resolveCodexModelArgument,
   sanitizeProviderStatus,
 } from "./provider-settings.types.js";

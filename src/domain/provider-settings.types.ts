@@ -32,6 +32,60 @@ export interface CodexLocalProviderSettings {
 
 export type ProviderSettings = MockProviderSettings | CodexLocalProviderSettings;
 
+/**
+ * Sanitized Codex Local catalog model entry. Only safe display fields are
+ * exposed to the dashboard; raw catalog metadata (base instructions, prompts,
+ * upgrade payloads, credentials) is never included.
+ */
+export interface CodexModelCatalogEntry {
+  slug: string;
+  displayName: string;
+  description: string | null;
+  priority: number;
+}
+
+export type CodexModelCatalogStatusState = "available" | "empty" | "unavailable";
+
+export interface CodexModelCatalogStatus {
+  state: CodexModelCatalogStatusState;
+  checkedAt: string | null;
+  message: string | null;
+}
+
+/**
+ * Sanitized result of a Codex Local model catalog lookup. `defaultModelSlug`
+ * is the highest-priority visible model when available, or null to indicate
+ * "use Codex CLI default". `source` records how the Codex command path was
+ * resolved for the lookup.
+ */
+export interface CodexModelCatalogResult {
+  models: CodexModelCatalogEntry[];
+  defaultModelSlug: string | null;
+  source: CodexModelCatalogSource;
+  status: CodexModelCatalogStatus;
+}
+
+export type CodexModelCatalogSource = "manual" | "path" | "common" | "none";
+
+/**
+ * Legacy model label that must not be forced as a Codex CLI `--model` argument.
+ * Existing saved settings may still contain it; treat it as "use Codex CLI
+ * default" at execution time.
+ */
+export const LEGACY_CODEX_MODEL_LABEL = "gpt-5-codex-subscription";
+
+/**
+ * Returns the model slug to pass as `--model`, or null when Codex CLI should
+ * use its own default model. A blank label or the legacy unsupported default
+ * yields null.
+ */
+export function resolveCodexModelArgument(modelLabel: string | null | undefined): string | null {
+  const trimmed = modelLabel?.trim();
+  if (!trimmed) return null;
+  if (trimmed === LEGACY_CODEX_MODEL_LABEL) return null;
+  return trimmed;
+}
+
 export const defaultProviderStatus: ProviderStatus = {
   state: "not_checked",
   detected: false,
