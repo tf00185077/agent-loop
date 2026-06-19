@@ -2,7 +2,7 @@
 
 - [x] 1.1 Add domain/API types for sanitized Codex Local model catalog entries, catalog status, and default-model semantics.
 - [x] 1.2 Implement a runtime service that invokes Codex CLI `debug models`, parses JSON output, filters selectable visible models, orders by priority, and maps only safe fields.
-- [ ] 1.3 Add runtime tests for successful catalog parsing, hidden model filtering, priority ordering, malformed JSON, command failure, and credential/raw metadata sanitization.
+- [x] 1.3 Add runtime tests for successful catalog parsing, hidden model filtering, priority ordering, malformed JSON, command failure, and credential/raw metadata sanitization.
 
 ## 2. Backend API
 
