@@ -101,9 +101,10 @@ before starting a goal.
    - Leave the model on **Codex CLI default** (blank) to let Codex CLI choose
      its own default model. This is the recommended setting if a specific model
      fails to connect.
-   - Check **Enter model manually** to type an unlisted or experimental model
-     slug. If the catalog is unavailable or empty, the field falls back to a
-     manual text input automatically, and the status note explains the state.
+   - Selectable models come from the catalog only; there is no free-form manual
+     model entry. If the catalog lookup fails, provider setup shows the error
+     (including the raw Codex CLI output) and you can fix the command path, run
+     Detect, and Refresh models.
    - Existing setups saved with the legacy `gpt-5-codex-subscription` label keep
      working: that label is read back unchanged and is never forced as a Codex
      CLI `--model` argument. Replace it with a catalog model or the Codex CLI

@@ -88,6 +88,8 @@ export interface CodexModelCatalogStatus {
   state: CodexModelCatalogStatusState;
   checkedAt: string | null;
   message: string | null;
+  /** Raw Codex CLI output/error for failed lookups, shown for debugging. */
+  detail?: string | null;
 }
 
 export interface CodexModelCatalogResult {

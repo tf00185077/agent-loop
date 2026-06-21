@@ -50,15 +50,25 @@ export async function loadCodexModelCatalog(
   let stdout: string;
   try {
     stdout = await runCommand(request);
-  } catch {
-    return unavailable(source, checkedAt, "Codex CLI model catalog lookup failed.");
+  } catch (err) {
+    return unavailable(
+      source,
+      checkedAt,
+      "Codex CLI model catalog lookup failed.",
+      err instanceof Error ? err.message : String(err),
+    );
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
   } catch {
-    return unavailable(source, checkedAt, "Codex CLI returned malformed model catalog output.");
+    return unavailable(
+      source,
+      checkedAt,
+      "Codex CLI returned malformed model catalog output.",
+      stdout,
+    );
   }
 
   const models = extractModels(parsed);
@@ -87,12 +97,13 @@ function unavailable(
   source: CodexModelCatalogSource,
   checkedAt: string,
   message: string,
+  detail: string | null = null,
 ): CodexModelCatalogResult {
   return {
     models: [],
     defaultModelSlug: null,
     source,
-    status: { state: "unavailable", checkedAt, message },
+    status: { state: "unavailable", checkedAt, message, detail: detail || null },
   };
 }
 

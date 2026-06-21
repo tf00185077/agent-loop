@@ -152,14 +152,15 @@ function catalogUnavailable(message: string): CodexModelCatalogResult {
     models: [],
     defaultModelSlug: null,
     source: "none",
-    status: { state: "unavailable", checkedAt: new Date().toISOString(), message },
+    status: { state: "unavailable", checkedAt: new Date().toISOString(), message, detail: null },
   };
 }
 
 /**
  * Defense-in-depth re-mapping at the API boundary: re-build each model from
- * allowlisted display fields only and redact any credential material that may
- * appear in the status message before it leaves the backend.
+ * allowlisted display fields only and redact credential material from the
+ * status message. The `detail` field intentionally carries raw Codex CLI output
+ * on failures so the dashboard can show the actual error for debugging.
  */
 function sanitizeCatalogResult(result: CodexModelCatalogResult): CodexModelCatalogResult {
   return {
@@ -181,6 +182,7 @@ function sanitizeCatalogResult(result: CodexModelCatalogResult): CodexModelCatal
             message: result.status.message,
           }).message
         : null,
+      detail: result.status.detail ?? null,
     },
   };
 }

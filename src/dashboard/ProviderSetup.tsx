@@ -21,11 +21,9 @@ interface ProviderSetupPanelProps {
   error: string | null;
   modelCatalog: CodexModelCatalogResult | null;
   catalogBusy: boolean;
-  manualEntry: boolean;
   onProviderChange: (provider: LocalProvider) => void;
   onModelLabelChange: (value: string) => void;
   onCodexCommandPathChange: (value: string) => void;
-  onManualEntryChange: (value: boolean) => void;
   onSave: () => void;
   onDetect: () => void;
   onTestConnection: () => void;
@@ -41,7 +39,6 @@ export default function ProviderSetup() {
   const [error, setError] = useState<string | null>(null);
   const [modelCatalog, setModelCatalog] = useState<CodexModelCatalogResult | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
-  const [manualEntry, setManualEntry] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,8 +63,19 @@ export default function ProviderSetup() {
     setCatalogBusy(true);
     try {
       setModelCatalog(await loadCodexModelCatalog());
-    } catch {
-      setModelCatalog(null);
+    } catch (err) {
+      // Surface the failure instead of silently falling back to manual entry.
+      setModelCatalog({
+        models: [],
+        defaultModelSlug: null,
+        source: "none",
+        status: {
+          state: "unavailable",
+          checkedAt: new Date().toISOString(),
+          message: "Could not reach the model catalog endpoint.",
+          detail: String(err),
+        },
+      });
     } finally {
       setCatalogBusy(false);
     }
@@ -156,11 +164,9 @@ export default function ProviderSetup() {
       error={error}
       modelCatalog={modelCatalog}
       catalogBusy={catalogBusy}
-      manualEntry={manualEntry}
       onProviderChange={handleProviderChange}
       onModelLabelChange={setModelLabel}
       onCodexCommandPathChange={setCodexCommandPath}
-      onManualEntryChange={setManualEntry}
       onSave={handleSave}
       onDetect={handleDetect}
       onTestConnection={handleTestConnection}
@@ -179,11 +185,9 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
     error,
     modelCatalog,
     catalogBusy,
-    manualEntry,
     onProviderChange,
     onModelLabelChange,
     onCodexCommandPathChange,
-    onManualEntryChange,
     onSave,
     onDetect,
     onTestConnection,
@@ -192,16 +196,15 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
   const codexSelected = draftProvider === "codex-local";
   const statusView = providerStatusView(settings.status.state);
   const catalogModels = modelCatalog?.models ?? [];
-  const hasCatalogModels = catalogModels.length > 0;
   const catalogSlugs = new Set(catalogModels.map((model) => model.slug));
   const trimmedModel = modelLabel.trim();
   const savedUnlistedModel =
     trimmedModel !== "" && !catalogSlugs.has(trimmedModel) ? trimmedModel : null;
-  // Manual entry is forced when there is no catalog to pick from; otherwise it
-  // is an explicit user choice for unlisted or experimental slugs. A blank
-  // value always means "use Codex CLI default".
-  const showManualInput = manualEntry || !hasCatalogModels;
-  const catalogNote = catalogStatusNote(catalogBusy, modelCatalog);
+  // Catalog lookup state. On failure we surface the error (including raw CLI
+  // output) instead of silently falling back to manual entry; only a
+  // successful catalog with models renders the picker.
+  const catalogFailed = !catalogBusy && (!modelCatalog || modelCatalog.status.state === "unavailable");
+  const catalogEmpty = !catalogBusy && modelCatalog?.status.state === "empty";
 
   return (
     <section style={panelStyle}>
@@ -239,16 +242,43 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
       {codexSelected && (
         <div style={{ marginTop: 14 }}>
           <div style={labelRowStyle}>
-            <label style={{ ...labelStyle, marginBottom: 0, flex: 1 }}>
-              Model
-              {showManualInput ? (
-                <input
-                  value={modelLabel}
-                  onChange={(event) => onModelLabelChange(event.target.value)}
-                  placeholder="Codex CLI default"
-                  style={inputStyle}
-                />
-              ) : (
+            <span style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>Model</span>
+            <button
+              type="button"
+              onClick={onReloadCatalog}
+              disabled={busy !== null || catalogBusy}
+              style={buttonStyle}
+            >
+              {catalogBusy ? "Loading..." : "Refresh models"}
+            </button>
+          </div>
+
+          {catalogBusy && <div style={catalogNoteStyle}>Loading models from Codex CLI...</div>}
+
+          {catalogFailed && (
+            <div style={catalogErrorStyle}>
+              <strong>Model catalog lookup failed</strong>
+              <div style={{ marginTop: 4 }}>
+                {modelCatalog?.status.message ?? "Could not load the Codex CLI model catalog."}
+              </div>
+              {modelCatalog?.status.detail && (
+                <pre style={catalogDetailStyle}>{modelCatalog.status.detail}</pre>
+              )}
+              <div style={{ marginTop: 6 }}>
+                Fix the Codex command path or run Detect, then Refresh models.
+              </div>
+            </div>
+          )}
+
+          {catalogEmpty && (
+            <div style={catalogNoteStyle}>
+              No selectable models were returned by Codex CLI. Run Detect or Refresh models.
+            </div>
+          )}
+
+          {!catalogBusy && !catalogFailed && !catalogEmpty && (
+            <>
+              <label style={labelStyle}>
                 <select
                   value={modelLabel}
                   onChange={(event) => onModelLabelChange(event.target.value)}
@@ -264,28 +294,14 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
                     </option>
                   ))}
                 </select>
-              )}
-            </label>
-            <button
-              type="button"
-              onClick={onReloadCatalog}
-              disabled={busy !== null || catalogBusy}
-              style={buttonStyle}
-            >
-              {catalogBusy ? "Loading..." : "Refresh models"}
-            </button>
-          </div>
-          {hasCatalogModels && (
-            <label style={checkboxLabelStyle}>
-              <input
-                type="checkbox"
-                checked={manualEntry}
-                onChange={(event) => onManualEntryChange(event.target.checked)}
-              />
-              Enter model manually
-            </label>
+              </label>
+              <div style={catalogNoteStyle}>
+                {catalogModels.length} model{catalogModels.length === 1 ? "" : "s"} available from Codex
+                CLI.
+              </div>
+            </>
           )}
-          <div style={catalogNoteStyle}>{catalogNote}</div>
+
           <label style={labelStyle}>
             Command path
             <input
@@ -408,19 +424,32 @@ const labelRowStyle: React.CSSProperties = {
   marginBottom: 12,
 };
 
-const checkboxLabelStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  marginBottom: 12,
-  fontSize: 13,
-  color: "#555",
-};
-
 const catalogNoteStyle: React.CSSProperties = {
   fontSize: 12,
   color: "#777",
   marginBottom: 12,
+};
+
+const catalogErrorStyle: React.CSSProperties = {
+  borderLeft: "3px solid #c62828",
+  background: "#fdf2f2",
+  padding: "10px 12px",
+  marginBottom: 12,
+  fontSize: 13,
+  color: "#7a1f1f",
+};
+
+const catalogDetailStyle: React.CSSProperties = {
+  marginTop: 6,
+  marginBottom: 0,
+  padding: "8px 10px",
+  background: "#1e1e1e",
+  color: "#f5f5f5",
+  fontSize: 12,
+  borderRadius: 4,
+  overflowX: "auto",
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
 };
 
 const inputStyle: React.CSSProperties = {
@@ -516,24 +545,6 @@ function providerStatusView(state: ProviderSettings["status"]["state"]) {
         color: "#777",
       };
   }
-}
-
-function catalogStatusNote(
-  catalogBusy: boolean,
-  modelCatalog: CodexModelCatalogResult | null,
-): string {
-  if (catalogBusy) {
-    return "Loading models from Codex CLI...";
-  }
-  // Only friendly copy is shown here — raw Codex CLI output is never surfaced.
-  if (!modelCatalog || modelCatalog.status.state === "unavailable") {
-    return "Model catalog unavailable. Enter a model manually or leave blank for the Codex CLI default.";
-  }
-  if (modelCatalog.status.state === "empty") {
-    return "No selectable models were found. Enter a model manually or leave blank for the Codex CLI default.";
-  }
-  const count = modelCatalog.models.length;
-  return `${count} model${count === 1 ? "" : "s"} available from Codex CLI.`;
 }
 
 function redactCredentialMaterial(value: string): string {

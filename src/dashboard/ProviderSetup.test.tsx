@@ -28,14 +28,12 @@ test("provider setup panel renders Codex Local controls", () => {
       error={null}
       modelCatalog={null}
       catalogBusy={false}
-      manualEntry={false}
       draftProvider="codex-local"
       modelLabel="gpt-5-codex-subscription"
       codexCommandPath="C:\\Tools\\codex.cmd"
       onProviderChange={() => undefined}
       onModelLabelChange={() => undefined}
       onCodexCommandPathChange={() => undefined}
-      onManualEntryChange={() => undefined}
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
@@ -69,14 +67,12 @@ test("provider setup panel hides Codex controls for mock provider", () => {
       error={null}
       modelCatalog={null}
       catalogBusy={false}
-      manualEntry={false}
       draftProvider="mock"
       modelLabel="mock-v1"
       codexCommandPath=""
       onProviderChange={() => undefined}
       onModelLabelChange={() => undefined}
       onCodexCommandPathChange={() => undefined}
-      onManualEntryChange={() => undefined}
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
@@ -165,15 +161,36 @@ test("provider setup panel renders catalog models as picker options", () => {
   assert.match(html, /<option value="gpt-5-codex" selected="">/);
 });
 
-test("provider setup panel keeps manual and Codex default fallback when catalog is unavailable", () => {
-  const html = renderCatalogPanel(null, { modelLabel: "" });
+test("provider setup panel shows the failure error and raw CLI detail without a manual fallback", () => {
+  const html = renderCatalogPanel({
+    models: [],
+    defaultModelSlug: null,
+    source: "path",
+    status: {
+      state: "unavailable",
+      checkedAt: null,
+      message: "Codex CLI returned malformed model catalog output.",
+      detail: "RAW-CODEX-DEBUG-OUTPUT exit code 1",
+    },
+  });
 
-  assert.match(html, /Model catalog unavailable/);
-  // A manual text input (with the Codex default placeholder) remains available.
-  assert.match(html, /placeholder="Codex CLI default"/);
+  assert.match(html, /Model catalog lookup failed/);
+  assert.match(html, /Codex CLI returned malformed model catalog output/);
+  // The raw CLI output is shown for debugging.
+  assert.match(html, /RAW-CODEX-DEBUG-OUTPUT exit code 1/);
+  // No manual entry / Codex default fallback is offered on failure.
+  assert.doesNotMatch(html, /placeholder="Codex CLI default"/);
+  assert.doesNotMatch(html, /Enter model manually/);
 });
 
-test("provider setup panel shows empty-state fallback when no models are returned", () => {
+test("provider setup panel surfaces a fetch failure as an error with no fallback", () => {
+  const html = renderCatalogPanel(null, { modelLabel: "" });
+
+  assert.match(html, /Model catalog lookup failed/);
+  assert.doesNotMatch(html, /placeholder="Codex CLI default"/);
+});
+
+test("provider setup panel shows an empty-state message without a manual fallback", () => {
   const html = renderCatalogPanel({
     models: [],
     defaultModelSlug: null,
@@ -181,8 +198,8 @@ test("provider setup panel shows empty-state fallback when no models are returne
     status: { state: "empty", checkedAt: null, message: null },
   });
 
-  assert.match(html, /No selectable models were found/);
-  assert.match(html, /placeholder="Codex CLI default"/);
+  assert.match(html, /No selectable models were returned/);
+  assert.doesNotMatch(html, /placeholder="Codex CLI default"/);
 });
 
 test("provider setup panel does not display raw catalog metadata or status messages", () => {
@@ -214,7 +231,7 @@ test("provider setup panel does not display raw catalog metadata or status messa
 
 function renderCatalogPanel(
   modelCatalog: CodexModelCatalogResult | null,
-  overrides?: { modelLabel?: string; manualEntry?: boolean },
+  overrides?: { modelLabel?: string },
 ) {
   return renderToStaticMarkup(
     <ProviderSetupPanel
@@ -228,14 +245,12 @@ function renderCatalogPanel(
       error={null}
       modelCatalog={modelCatalog}
       catalogBusy={false}
-      manualEntry={overrides?.manualEntry ?? false}
       draftProvider="codex-local"
       modelLabel={overrides?.modelLabel ?? ""}
       codexCommandPath="C:\\Tools\\codex.cmd"
       onProviderChange={() => undefined}
       onModelLabelChange={() => undefined}
       onCodexCommandPathChange={() => undefined}
-      onManualEntryChange={() => undefined}
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
@@ -252,14 +267,12 @@ function renderProviderSetupPanel(settings: ProviderSettings) {
       error={null}
       modelCatalog={null}
       catalogBusy={false}
-      manualEntry={false}
       draftProvider={settings.provider}
       modelLabel={settings.modelLabel}
       codexCommandPath={settings.codexCommandPath ?? ""}
       onProviderChange={() => undefined}
       onModelLabelChange={() => undefined}
       onCodexCommandPathChange={() => undefined}
-      onManualEntryChange={() => undefined}
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}

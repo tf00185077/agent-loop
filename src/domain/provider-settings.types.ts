@@ -50,6 +50,12 @@ export interface CodexModelCatalogStatus {
   state: CodexModelCatalogStatusState;
   checkedAt: string | null;
   message: string | null;
+  /**
+   * Raw Codex CLI output or error captured on a failed lookup. Surfaced to the
+   * dashboard for debugging; intentionally not sanitized of non-credential
+   * catalog metadata. Null on success.
+   */
+  detail?: string | null;
 }
 
 /**

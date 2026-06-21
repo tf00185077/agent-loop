@@ -41,7 +41,12 @@ test("creates, lists, and gets persisted goals", () => {
 
 test("updates goal lifecycle status and timestamps", () => {
   const db = openDatabase({ path: testDatabasePath() });
-  const goals = createGoalRepository(db);
+  // Deterministic, strictly increasing clock so updatedAt is guaranteed to
+  // differ from the created timestamp (avoids same-millisecond flakiness).
+  let tick = 0;
+  const goals = createGoalRepository(db, {
+    now: () => new Date(Date.UTC(2026, 5, 15, 8, 0, tick++)).toISOString(),
+  });
   const goal = goals.create({
     title: "Run lifecycle",
     description: "Move through runtime status changes.",

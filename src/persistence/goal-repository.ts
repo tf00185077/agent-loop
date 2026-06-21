@@ -15,10 +15,20 @@ export interface GoalStatusTimestamps {
   completedAt?: string | null;
 }
 
-export function createGoalRepository(db: AppDatabase): GoalRepository {
+export interface GoalRepositoryOptions {
+  /** Clock for created/updated timestamps. Injectable for deterministic tests. */
+  now?: () => string;
+}
+
+export function createGoalRepository(
+  db: AppDatabase,
+  options: GoalRepositoryOptions = {},
+): GoalRepository {
+  const clock = options.now ?? (() => new Date().toISOString());
+
   return {
     create(input) {
-      const now = new Date().toISOString();
+      const now = clock();
       const goal: Goal = {
         id: randomUUID(),
         title: input.title,
@@ -80,7 +90,7 @@ export function createGoalRepository(db: AppDatabase): GoalRepository {
         throw new Error(`Goal not found: ${id}`);
       }
 
-      const updatedAt = new Date().toISOString();
+      const updatedAt = clock();
       const startedAt = timestamps.startedAt === undefined ? existing.startedAt : timestamps.startedAt;
       const completedAt = timestamps.completedAt === undefined ? existing.completedAt : timestamps.completedAt;
 

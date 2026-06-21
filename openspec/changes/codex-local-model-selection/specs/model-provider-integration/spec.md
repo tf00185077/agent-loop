@@ -10,11 +10,12 @@ The system SHALL provide a backend-mediated way to discover selectable Codex Loc
 
 #### Scenario: Catalog omits unsafe raw metadata
 - **WHEN** Codex CLI returns raw model catalog data
-- **THEN** dashboard API responses do not include base instructions, prompt metadata, hidden model entries, upgrade payloads, authentication material, cookies, or access tokens
+- **THEN** returned model catalog entries do not include base instructions, prompt metadata, hidden model entries, upgrade payloads, authentication material, cookies, or access tokens
 
-#### Scenario: Catalog lookup fails safely
+#### Scenario: Catalog lookup surfaces failures
 - **WHEN** Codex CLI model catalog discovery fails or returns malformed output
-- **THEN** the backend returns a sanitized failure status that lets provider setup continue with manual model entry or Codex CLI default behavior
+- **THEN** the backend returns an unavailable status whose detail includes the raw Codex CLI output or error
+- **AND** provider setup surfaces the failure, including the raw output, and does not silently fall back to manual model entry or Codex CLI default behavior
 
 ### Requirement: Codex Local model selection uses safe defaults
 The system SHALL avoid forcing stale or unsupported Codex Local model labels when a user has not selected a known working model.
@@ -47,9 +48,14 @@ The system SHALL provide a dashboard provider setup experience for selecting, te
 - **THEN** the dashboard allows the user to choose a model from the catalog
 - **AND** saving settings persists the chosen model slug as the Codex Local model label
 
-#### Scenario: User uses manual model fallback
-- **WHEN** model catalog discovery is unavailable or the desired model is not listed
-- **THEN** the dashboard allows the user to enter a manual model slug or choose Codex CLI default behavior
+#### Scenario: User chooses Codex CLI default
+- **WHEN** the model catalog loaded and the user does not select a specific model
+- **THEN** the dashboard saves a blank model label so Codex CLI uses its own default model
+
+#### Scenario: Model catalog lookup fails
+- **WHEN** model catalog discovery fails or returns malformed output
+- **THEN** the dashboard shows the failure and the raw Codex CLI output
+- **AND** the dashboard does not offer a model selection or default fallback until the catalog loads
 
 #### Scenario: User selects mock provider
 - **WHEN** the dashboard user selects mock provider in provider setup
