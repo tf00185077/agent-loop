@@ -13,9 +13,9 @@
 
 ## 3. Self-heal the saved Codex command path
 
-- [ ] 3.1 Add a `resolveCodexCommandPath` helper that validates the saved path (existence + `codex exec --help` capability) and, on failure, re-runs `detectCodexCliCommand`
-- [ ] 3.2 When re-detection finds a new path, persist it into provider settings; when nothing resolves, surface a command-not-found status / durable error instead of spawning
-- [ ] 3.3 Add tests: valid saved path is used unchanged; stale path triggers re-detect + persist; no path resolves fails visibly
+- [x] 3.1 Add a `resolveCodexCommandPath` helper that validates the saved path (existence + `codex exec --help` capability) and, on failure, re-runs `detectCodexCliCommand`
+- [x] 3.2 When re-detection finds a new path, persist it into provider settings; when nothing resolves, surface a command-not-found status / durable error instead of spawning
+- [x] 3.3 Add tests: valid saved path is used unchanged; stale path triggers re-detect + persist; no path resolves fails visibly
 
 ## 4. Rewire the backend to the new provider
 
