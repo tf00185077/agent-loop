@@ -34,6 +34,6 @@
 
 ## 7. Verify
 
-- [ ] 7.1 Run the full test suite and typecheck; confirm Codex and mock paths are unchanged
-- [ ] 7.2 Live smoke: detect the installed `claude` and confirm self-heal of a stale path (no model call required)
-- [ ] 7.3 Run `openspec validate claude-local-cli-provider --strict` and confirm the change is clean
+- [x] 7.1 Run the full test suite and typecheck; confirm Codex and mock paths are unchanged (typecheck clean; 121 pass / 0 fail)
+- [x] 7.2 Live smoke: detect the installed `claude` and confirm self-heal of a stale path (detected at ~/.local/bin/claude; stale path self-healed and persisted; no model call)
+- [x] 7.3 Run `openspec validate claude-local-cli-provider --strict` and confirm the change is clean
