@@ -149,7 +149,7 @@ test("provider runtime persists provider and model metadata in run and message e
       async complete() {
         return {
           text: "Provider metadata response",
-          metadata: { provider: "openai-local-agent", model: "gpt-5-codex-subscription" },
+          metadata: { provider: "codex-cli", model: "gpt-5-codex-subscription" },
         };
       },
     },
@@ -166,13 +166,13 @@ test("provider runtime persists provider and model metadata in run and message e
   const runId = events.find((event) => event.type === "run.started")?.runId;
   assert.ok(runId, "run.started event must include runId");
   const run = runRepo.getById(runId);
-  assert.equal(run?.provider, "openai-local-agent");
+  assert.equal(run?.provider, "codex-cli");
   assert.equal(run?.model, "gpt-5-codex-subscription");
 
   const message = events.find((event) => event.type === "agent.message");
   assert.deepEqual(message?.data, {
     stepId: message?.stepId,
-    provider: "openai-local-agent",
+    provider: "codex-cli",
     model: "gpt-5-codex-subscription",
   });
 

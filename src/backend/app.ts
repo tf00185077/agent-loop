@@ -16,7 +16,6 @@ import { createCodexCliProvider } from "../runtime/codex-cli-provider.js";
 import { resolveCodexCommandPath } from "../runtime/codex-command-path.js";
 import { createMockRuntime } from "../runtime/mock-runtime.js";
 import { createOpenAICompatibleProvider } from "../runtime/openai-compatible-provider.js";
-import { createOpenAILocalAgentProvider } from "../runtime/openai-local-agent-provider.js";
 import { loadProviderConfig, type ProviderEnvironment } from "../runtime/provider-config.js";
 import { createProviderRuntime } from "../runtime/provider-runtime.js";
 import { createGoalRouter } from "./routes/goals.js";
@@ -168,10 +167,7 @@ function createRuntimeFromEnvironment(deps: CreateRuntimeFromEnvironmentDeps) {
     return createMockRuntime({ goalRepo, runRepo, stepRepo, eventRepo });
   }
 
-  const provider =
-    config.provider === "openai-local-agent"
-      ? createOpenAILocalAgentProvider({ config })
-      : createOpenAICompatibleProvider({ config });
+  const provider = createOpenAICompatibleProvider({ config });
 
   return createProviderRuntime({
     goalRepo,

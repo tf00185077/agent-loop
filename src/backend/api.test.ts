@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -34,29 +34,6 @@ function startServer(
 
 async function json(res: Response) {
   return res.json() as Promise<unknown>;
-}
-
-function createFakeAgentScript(dir: string): string {
-  const scriptPath = join(dir, "fake-openai-local-agent.mjs");
-  writeFileSync(
-    scriptPath,
-    `
-import { writeFileSync } from "node:fs";
-
-const capturePath = process.argv[2];
-let stdin = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  stdin += chunk;
-});
-process.stdin.on("end", () => {
-  const input = JSON.parse(stdin);
-  writeFileSync(capturePath, JSON.stringify(input));
-  process.stdout.write(JSON.stringify({ text: "Provider-backed API response" }));
-});
-`.trimStart(),
-  );
-  return scriptPath;
 }
 
 /**
@@ -755,73 +732,6 @@ describe("Backend API", () => {
       assert.equal(res.status, 404);
     });
 
-    it("drives a provider-backed run with a fake openai-local-agent provider", async () => {
-      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-local-provider-"));
-      const capturePath = join(dir, "captured-input.json");
-      const scriptPath = createFakeAgentScript(dir);
-      const providerServer = await startServer({
-        AUTO_AGENT_PROVIDER: "openai-local-agent",
-        AUTO_AGENT_OPENAI_LOCAL_COMMAND: "node",
-        AUTO_AGENT_OPENAI_LOCAL_ARGS_JSON: JSON.stringify([scriptPath, capturePath]),
-        AUTO_AGENT_OPENAI_LOCAL_MODEL: "fake-local-model",
-        AUTO_AGENT_OPENAI_LOCAL_TIMEOUT_MS: "10000",
-      });
-
-      try {
-        const created = await fetch(`${providerServer.url}/api/goals`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: "Provider-backed start",
-            description: "exercise openai-local-agent through the API",
-          }),
-        }).then((r) => r.json() as Promise<Record<string, unknown>>);
-
-        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
-          method: "POST",
-        });
-        assert.equal(res.status, 200);
-        const started = (await json(res)) as Record<string, unknown>;
-        assert.equal(started.status, "running");
-
-        const { event, events } = await waitForEvent(
-          providerServer.url,
-          created.id,
-          "goal.completed",
-        );
-        assert.equal(event.type, "goal.completed");
-        assert.ok(events.some((e) => e.type === "run.started"));
-        assert.ok(events.some((e) => e.type === "step.started"));
-        assert.ok(
-          events.some(
-            (e) =>
-              e.type === "agent.message" &&
-              e.message === "Provider-backed API response" &&
-              (e.data as Record<string, unknown>).provider === "openai-local-agent" &&
-              (e.data as Record<string, unknown>).model === "fake-local-model",
-          ),
-        );
-
-        const completed = (await fetch(`${providerServer.url}/api/goals/${created.id}`).then(
-          (r) => r.json(),
-        )) as Record<string, unknown>;
-        assert.equal(completed.status, "completed");
-
-        const captured = JSON.parse(readFileSync(capturePath, "utf8")) as Record<string, unknown>;
-        assert.deepEqual(captured.goal, {
-          id: created.id,
-          title: "Provider-backed start",
-          description: "exercise openai-local-agent through the API",
-        });
-        assert.match(
-          captured.prompt as string,
-          /Title: Provider-backed start/,
-        );
-      } finally {
-        await providerServer.close();
-      }
-    });
-
     it("uses current saved Codex Local settings when starting a goal", { skip: process.platform === "win32" }, async () => {
       const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-saved-provider-"));
       const capturePath = join(dir, "captured-saved-provider.json");
@@ -930,15 +840,11 @@ describe("Backend API", () => {
     });
 
     it("uses explicitly saved mock settings instead of environment provider fallback", async () => {
-      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-explicit-mock-"));
-      const capturePath = join(dir, "captured-env-provider.json");
-      const scriptPath = createFakeAgentScript(dir);
       const providerServer = await startServer({
-        AUTO_AGENT_PROVIDER: "openai-local-agent",
-        AUTO_AGENT_OPENAI_LOCAL_COMMAND: "node",
-        AUTO_AGENT_OPENAI_LOCAL_ARGS_JSON: JSON.stringify([scriptPath, capturePath]),
-        AUTO_AGENT_OPENAI_LOCAL_MODEL: "env-local-model",
-        AUTO_AGENT_OPENAI_LOCAL_TIMEOUT_MS: "10000",
+        AUTO_AGENT_PROVIDER: "openai-compatible",
+        AUTO_AGENT_BASE_URL: "http://127.0.0.1:9/should-not-be-called",
+        AUTO_AGENT_API_KEY: "env-api-secret",
+        AUTO_AGENT_MODEL: "env-model",
       });
 
       try {
@@ -964,97 +870,6 @@ describe("Backend API", () => {
 
         const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
         assert.ok(events.some((e) => e.type === "run.started" && e.message === "Mock run started"));
-        assert.equal(existsSync(capturePath), false);
-      } finally {
-        await providerServer.close();
-      }
-    });
-
-    it("fails visibly when openai-local-agent command configuration is missing", async () => {
-      const providerServer = await startServer({
-        AUTO_AGENT_PROVIDER: "openai-local-agent",
-      });
-
-      try {
-        const created = await fetch(`${providerServer.url}/api/goals`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: "Missing local command",
-            description: "should fail through durable runtime state",
-          }),
-        }).then((r) => r.json() as Promise<Record<string, unknown>>);
-
-        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
-          method: "POST",
-        });
-        assert.equal(res.status, 200);
-        const started = (await json(res)) as Record<string, unknown>;
-        assert.equal(started.status, "running");
-
-        const { event } = await waitForEvent(providerServer.url, created.id, "error");
-        assert.equal(event.message, "AUTO_AGENT_OPENAI_LOCAL_COMMAND is required");
-
-        const failed = (await fetch(`${providerServer.url}/api/goals/${created.id}`).then(
-          (r) => r.json(),
-        )) as Record<string, unknown>;
-        assert.equal(failed.status, "failed");
-        assert.ok(typeof failed.completedAt === "string");
-      } finally {
-        await providerServer.close();
-      }
-    });
-
-    it("does not expose provider secrets or local command credential material", async () => {
-      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-secret-check-"));
-      const capturePath = join(dir, "captured-input.json");
-      const scriptPath = createFakeAgentScript(dir);
-      const secretArg = "local-command-secret-token";
-      const providerServer = await startServer({
-        AUTO_AGENT_PROVIDER: "openai-local-agent",
-        AUTO_AGENT_OPENAI_LOCAL_COMMAND: "node",
-        AUTO_AGENT_OPENAI_LOCAL_ARGS_JSON: JSON.stringify([
-          scriptPath,
-          capturePath,
-          "--token",
-          secretArg,
-        ]),
-        AUTO_AGENT_OPENAI_LOCAL_MODEL: "fake-local-model",
-        AUTO_AGENT_OPENAI_LOCAL_TIMEOUT_MS: "10000",
-        AUTO_AGENT_API_KEY: "unused-api-secret",
-      });
-
-      try {
-        const created = await fetch(`${providerServer.url}/api/goals`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: "Secret-safe provider start",
-            description: "dashboard responses must stay sanitized",
-          }),
-        }).then((r) => r.json() as Promise<Record<string, unknown>>);
-
-        const started = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
-          method: "POST",
-        }).then((r) => r.json() as Promise<Record<string, unknown>>);
-        const { events } = await waitForEvent(
-          providerServer.url,
-          created.id,
-          "goal.completed",
-        );
-        const detail = await fetch(`${providerServer.url}/api/goals/${created.id}`).then(
-          (r) => r.json() as Promise<Record<string, unknown>>,
-        );
-        const list = await fetch(`${providerServer.url}/api/goals`).then(
-          (r) => r.json() as Promise<unknown[]>,
-        );
-
-        assertDoesNotContainValues([created, started, detail, list, events], [
-          scriptPath,
-          capturePath,
-          secretArg,
-          "unused-api-secret",
-        ]);
       } finally {
         await providerServer.close();
       }

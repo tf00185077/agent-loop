@@ -24,9 +24,9 @@
 
 ## 5. Remove the wrapper indirection
 
-- [ ] 5.1 Delete `scripts/codex-local-agent-wrapper.mjs` and `src/runtime/codex-local-agent-wrapper.test.ts`
-- [ ] 5.2 Delete `src/runtime/openai-local-agent-provider.ts` and its test, and remove the `openai-local-agent` branch + config type from `src/runtime/provider-config.ts`
-- [ ] 5.3 Remove now-dead `AUTO_AGENT_OPENAI_LOCAL_*` references and update any remaining wiring/types
+- [x] 5.1 Delete `scripts/codex-local-agent-wrapper.mjs` and `src/runtime/codex-local-agent-wrapper.test.ts`
+- [x] 5.2 Delete `src/runtime/openai-local-agent-provider.ts` and its test, and remove the `openai-local-agent` branch + config type from `src/runtime/provider-config.ts`
+- [x] 5.3 Remove now-dead `AUTO_AGENT_OPENAI_LOCAL_*` references and update any remaining wiring/types (also repointed the Codex Local connection test to the direct-spawn provider)
 
 ## 6. Verify
 

@@ -1,23 +1,18 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import test from "node:test";
 
 import { testCodexLocalConnection } from "./codex-local-connection-test.js";
 
-test("default Codex local wrapper script exists", () => {
-  assert.equal(existsSync(resolve("scripts", "codex-local-agent-wrapper.mjs")), true);
-});
-
-test("returns connected status when the Codex local wrapper returns text", async () => {
+test("returns connected status when the Codex provider returns text", async () => {
   const result = await testCodexLocalConnection({
     codexCommandPath: "C:\\Tools\\codex.cmd",
     modelLabel: "gpt-5-codex-subscription",
     checkedAt: () => "2026-06-18T03:00:00.000Z",
-    runCommand: async (request) => {
-      assert.equal(request.env.AUTO_AGENT_CODEX_COMMAND_PATH, "C:\\Tools\\codex.cmd");
+    runConnection: async (request) => {
+      assert.equal(request.codexCommandPath, "C:\\Tools\\codex.cmd");
+      assert.equal(request.modelLabel, "gpt-5-codex-subscription");
       assert.equal(request.input.prompt, "Reply with exactly: codex-local-connection-ok");
-      return JSON.stringify({ text: "codex-local-connection-ok" });
+      return "codex-local-connection-ok";
     },
   });
 
@@ -34,7 +29,7 @@ test("classifies command-not-found connection failures", async () => {
     codexCommandPath: "C:\\missing\\codex.cmd",
     modelLabel: "gpt-5-codex-subscription",
     checkedAt: () => "2026-06-18T03:00:00.000Z",
-    runCommand: async () => {
+    runConnection: async () => {
       const error = new Error("spawn C:\\missing\\codex.cmd ENOENT") as NodeJS.ErrnoException;
       error.code = "ENOENT";
       throw error;
@@ -50,7 +45,7 @@ test("classifies authentication-needed or unusable-auth connection failures", as
     codexCommandPath: "codex",
     modelLabel: "gpt-5-codex-subscription",
     checkedAt: () => "2026-06-18T03:00:00.000Z",
-    runCommand: async () => {
+    runConnection: async () => {
       throw new Error("Codex authentication required. Run codex login.");
     },
   });
@@ -64,7 +59,7 @@ test("classifies network failures", async () => {
     codexCommandPath: "codex",
     modelLabel: "gpt-5-codex-subscription",
     checkedAt: () => "2026-06-18T03:00:00.000Z",
-    runCommand: async () => {
+    runConnection: async () => {
       throw new Error("request failed: ECONNRESET network unavailable");
     },
   });
@@ -77,7 +72,7 @@ test("classifies generic command failures and sanitizes secret-bearing output", 
     codexCommandPath: "codex",
     modelLabel: "gpt-5-codex-subscription",
     checkedAt: () => "2026-06-18T03:00:00.000Z",
-    runCommand: async () => {
+    runConnection: async () => {
       throw new Error("wrapper failed with sk-test-secret Authorization: Bearer token");
     },
   });

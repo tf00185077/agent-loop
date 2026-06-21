@@ -1,8 +1,7 @@
-import { spawn } from "node:child_process";
-import { resolve } from "node:path";
-
 import type { ProviderStatus } from "../domain/index.js";
 import { sanitizeProviderStatus } from "../domain/index.js";
+import { createCodexCliProvider } from "./codex-cli-provider.js";
+import type { ModelProviderInput } from "./model-provider.js";
 
 const connectionTestPrompt = "Reply with exactly: codex-local-connection-ok";
 
@@ -13,11 +12,9 @@ export interface CodexLocalConnectionTestResult {
 export interface CodexLocalConnectionTestOptions {
   codexCommandPath: string;
   modelLabel: string;
-  wrapperCommand?: string;
-  wrapperArgs?: string[];
   timeoutMs?: number;
   checkedAt?: () => string;
-  runCommand?: CodexLocalConnectionRunner;
+  runConnection?: CodexLocalConnectionRunner;
 }
 
 export type CodexLocalConnectionRunner = (
@@ -25,18 +22,10 @@ export type CodexLocalConnectionRunner = (
 ) => Promise<string>;
 
 export interface CodexLocalConnectionCommandRequest {
-  command: string;
-  args: string[];
-  env: Record<string, string | undefined>;
+  codexCommandPath: string;
+  modelLabel: string;
   timeoutMs: number;
-  input: {
-    goal: {
-      id: string;
-      title: string;
-      description: string;
-    };
-    prompt: string;
-  };
+  input: ModelProviderInput;
 }
 
 export async function testCodexLocalConnection(
@@ -44,11 +33,13 @@ export async function testCodexLocalConnection(
 ): Promise<CodexLocalConnectionTestResult> {
   const checkedAt = (options.checkedAt ?? (() => new Date().toISOString()))();
   const request = toConnectionTestRequest(options);
-  const runCommand = options.runCommand ?? runLocalAgentWrapper;
+  const runConnection = options.runConnection ?? runCodexConnection;
 
   try {
-    const stdout = await runCommand(request);
-    assertWrapperReturnedText(stdout);
+    const text = await runConnection(request);
+    if (!text.trim()) {
+      throw new Error("Codex Local connection test returned an empty response");
+    }
     return {
       status: {
         state: "connected",
@@ -68,36 +59,29 @@ function toConnectionTestRequest(
   options: CodexLocalConnectionTestOptions,
 ): CodexLocalConnectionCommandRequest {
   return {
-    command: options.wrapperCommand ?? process.execPath,
-    args: options.wrapperArgs ?? [resolve("scripts", "codex-local-agent-wrapper.mjs")],
-    env: {
-      ...process.env,
-      AUTO_AGENT_CODEX_COMMAND_PATH: options.codexCommandPath,
-      AUTO_AGENT_OPENAI_LOCAL_MODEL: options.modelLabel,
-    },
+    codexCommandPath: options.codexCommandPath,
+    modelLabel: options.modelLabel,
     timeoutMs: options.timeoutMs ?? 30_000,
     input: {
       goal: {
         id: "codex-local-connection-test",
         title: "Codex Local connection test",
-        description: "Verify the configured Codex Local wrapper can return a response.",
+        description: "Verify the configured Codex Local provider can return a response.",
       },
       prompt: connectionTestPrompt,
     },
   };
 }
 
-function assertWrapperReturnedText(stdout: string): void {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error("Codex Local wrapper output was not JSON");
-  }
-
-  if (!isRecord(parsed) || typeof parsed.text !== "string" || !parsed.text.trim()) {
-    throw new Error("Codex Local wrapper output did not include response text");
-  }
+function runCodexConnection(request: CodexLocalConnectionCommandRequest): Promise<string> {
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: request.codexCommandPath,
+      modelLabel: request.modelLabel,
+      timeoutMs: request.timeoutMs,
+    },
+  });
+  return provider.complete(request.input).then((output) => output.text);
 }
 
 function classifyConnectionFailure(err: unknown, checkedAt: string): ProviderStatus {
@@ -153,63 +137,10 @@ function classifyConnectionFailure(err: unknown, checkedAt: string): ProviderSta
   });
 }
 
-function runLocalAgentWrapper(request: CodexLocalConnectionCommandRequest): Promise<string> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(request.command, request.args, {
-      env: request.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill();
-      reject(new Error("Codex Local wrapper command timed out"));
-    }, request.timeoutMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      reject(err);
-    });
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-
-      if (code !== 0) {
-        reject(new Error(`Codex Local wrapper exited with code ${code}: ${stderr.trim() || "no stderr"}`));
-        return;
-      }
-
-      resolvePromise(stdout);
-    });
-
-    child.stdin.end(`${JSON.stringify(request.input)}\n`);
-  });
-}
-
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
 function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
