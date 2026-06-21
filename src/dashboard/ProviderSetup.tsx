@@ -17,6 +17,7 @@ interface ProviderSetupPanelProps {
   draftProvider: LocalProvider;
   modelLabel: string;
   codexCommandPath: string;
+  claudeCommandPath: string;
   busy: BusyAction;
   error: string | null;
   modelCatalog: CodexModelCatalogResult | null;
@@ -24,6 +25,7 @@ interface ProviderSetupPanelProps {
   onProviderChange: (provider: LocalProvider) => void;
   onModelLabelChange: (value: string) => void;
   onCodexCommandPathChange: (value: string) => void;
+  onClaudeCommandPathChange: (value: string) => void;
   onSave: () => void;
   onDetect: () => void;
   onTestConnection: () => void;
@@ -35,6 +37,7 @@ export default function ProviderSetup() {
   const [draftProvider, setDraftProvider] = useState<LocalProvider>("mock");
   const [modelLabel, setModelLabel] = useState("gpt-5-codex-subscription");
   const [codexCommandPath, setCodexCommandPath] = useState("");
+  const [claudeCommandPath, setClaudeCommandPath] = useState("");
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
   const [modelCatalog, setModelCatalog] = useState<CodexModelCatalogResult | null>(null);
@@ -92,7 +95,12 @@ export default function ProviderSetup() {
     setSettings(nextSettings);
     setDraftProvider(nextSettings.provider);
     setModelLabel(nextSettings.modelLabel);
-    setCodexCommandPath(nextSettings.codexCommandPath ?? "");
+    setCodexCommandPath(
+      nextSettings.provider === "codex-local" ? nextSettings.codexCommandPath ?? "" : "",
+    );
+    setClaudeCommandPath(
+      nextSettings.provider === "claude-local" ? nextSettings.claudeCommandPath ?? "" : "",
+    );
   }
 
   async function handleSave() {
@@ -102,13 +110,20 @@ export default function ProviderSetup() {
       const saved = await saveProviderSettings(
         draftProvider === "mock"
           ? { provider: "mock" }
-          : {
-              // A blank model label is saved as "" and means "Codex CLI default";
-              // we no longer fall back to the stale gpt-5-codex-subscription label.
-              provider: "codex-local",
-              modelLabel: modelLabel.trim(),
-              codexCommandPath: codexCommandPath.trim() || null,
-            },
+          : draftProvider === "claude-local"
+            ? {
+                // A blank model label means "Claude CLI default".
+                provider: "claude-local",
+                modelLabel: modelLabel.trim(),
+                claudeCommandPath: claudeCommandPath.trim() || null,
+              }
+            : {
+                // A blank model label is saved as "" and means "Codex CLI default";
+                // we no longer fall back to the stale gpt-5-codex-subscription label.
+                provider: "codex-local",
+                modelLabel: modelLabel.trim(),
+                codexCommandPath: codexCommandPath.trim() || null,
+              },
       );
       applySettings(saved);
     } catch (err) {
@@ -160,6 +175,7 @@ export default function ProviderSetup() {
       draftProvider={draftProvider}
       modelLabel={modelLabel}
       codexCommandPath={codexCommandPath}
+      claudeCommandPath={claudeCommandPath}
       busy={busy}
       error={error}
       modelCatalog={modelCatalog}
@@ -167,6 +183,7 @@ export default function ProviderSetup() {
       onProviderChange={handleProviderChange}
       onModelLabelChange={setModelLabel}
       onCodexCommandPathChange={setCodexCommandPath}
+      onClaudeCommandPathChange={setClaudeCommandPath}
       onSave={handleSave}
       onDetect={handleDetect}
       onTestConnection={handleTestConnection}
@@ -181,6 +198,7 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
     draftProvider,
     modelLabel,
     codexCommandPath,
+    claudeCommandPath,
     busy,
     error,
     modelCatalog,
@@ -188,13 +206,15 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
     onProviderChange,
     onModelLabelChange,
     onCodexCommandPathChange,
+    onClaudeCommandPathChange,
     onSave,
     onDetect,
     onTestConnection,
     onReloadCatalog,
   } = props;
   const codexSelected = draftProvider === "codex-local";
-  const statusView = providerStatusView(settings.status.state);
+  const claudeSelected = draftProvider === "claude-local";
+  const statusView = providerStatusView(settings.status.state, draftProvider);
   const catalogModels = modelCatalog?.models ?? [];
   const catalogSlugs = new Set(catalogModels.map((model) => model.slug));
   const trimmedModel = modelLabel.trim();
@@ -237,7 +257,41 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
         >
           Codex Local
         </button>
+        <button
+          type="button"
+          onClick={() => onProviderChange("claude-local")}
+          style={segmentStyle(claudeSelected)}
+        >
+          Claude Local
+        </button>
       </div>
+
+      {claudeSelected && (
+        <div style={{ marginTop: 14 }}>
+          <label style={labelStyle}>
+            Model
+            <input
+              value={modelLabel}
+              onChange={(event) => onModelLabelChange(event.target.value)}
+              placeholder="Claude CLI default"
+              style={inputStyle}
+            />
+          </label>
+          <label style={labelStyle}>
+            Command path
+            <input
+              value={claudeCommandPath}
+              onChange={(event) => onClaudeCommandPathChange(event.target.value)}
+              style={inputStyle}
+            />
+          </label>
+          <div style={actionRowStyle}>
+            <button type="button" onClick={onDetect} disabled={busy !== null} style={buttonStyle}>
+              {busy === "detect" ? "Detecting..." : "Detect"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {codexSelected && (
         <div style={{ marginTop: 14 }}>
@@ -331,7 +385,7 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
         </div>
       )}
 
-      {codexSelected && (
+      {(codexSelected || claudeSelected) && (
         <div style={statusBoxStyle(statusView.color)}>
           <strong>{statusView.label}</strong>
           <div style={{ marginTop: 4 }}>{statusView.guidance}</div>
@@ -500,36 +554,42 @@ const errorStyle: React.CSSProperties = {
   fontSize: 13,
 };
 
-function providerStatusView(state: ProviderSettings["status"]["state"]) {
+function providerStatusView(
+  state: ProviderSettings["status"]["state"],
+  provider: LocalProvider,
+) {
+  const cli = provider === "claude-local" ? "Claude" : "Codex";
+  const localLabel = provider === "claude-local" ? "Claude Local" : "Codex Local";
+  const loginCmd = provider === "claude-local" ? "claude login" : "codex login";
   switch (state) {
     case "detected":
       return {
-        label: "Codex CLI detected",
-        guidance: "Save this path or run a connection test before starting provider-backed goals.",
+        label: `${cli} CLI detected`,
+        guidance: "Save this path before starting provider-backed goals.",
         color: "#1976d2",
       };
     case "not_found":
       return {
-        label: "Codex CLI not found",
-        guidance: "Enter a Codex command path manually or install Codex CLI, then detect again.",
+        label: `${cli} CLI not found`,
+        guidance: `Enter a ${cli} command path manually or install ${cli} CLI, then detect again.`,
         color: "#d97706",
       };
     case "connected":
       return {
-        label: "Codex Local connected",
+        label: `${localLabel} connected`,
         guidance: "This provider is ready for new goals.",
         color: "#2e7d32",
       };
     case "login_required":
       return {
-        label: "Codex login required",
-        guidance: "Run codex login in a terminal, then test the connection again.",
+        label: `${cli} login required`,
+        guidance: `Run ${loginCmd} in a terminal, then test the connection again.`,
         color: "#d97706",
       };
     case "network_failure":
       return {
         label: "Network failure",
-        guidance: "Check your network connection, then test Codex Local again.",
+        guidance: `Check your network connection, then test ${localLabel} again.`,
         color: "#c62828",
       };
     case "command_failure":
@@ -541,7 +601,7 @@ function providerStatusView(state: ProviderSettings["status"]["state"]) {
     case "not_checked":
       return {
         label: "Not checked",
-        guidance: "Detect Codex CLI or save mock provider settings.",
+        guidance: `Detect ${cli} CLI or save mock provider settings.`,
         color: "#777",
       };
   }

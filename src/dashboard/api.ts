@@ -52,6 +52,12 @@ export type ProviderSettings =
       modelLabel: string;
       codexCommandPath: string | null;
       status: ProviderStatus;
+    }
+  | {
+      provider: "claude-local";
+      modelLabel: string;
+      claudeCommandPath: string | null;
+      status: ProviderStatus;
     };
 
 export type SaveProviderSettingsInput =
@@ -62,6 +68,11 @@ export type SaveProviderSettingsInput =
       provider: "codex-local";
       modelLabel: string;
       codexCommandPath: string | null;
+    }
+  | {
+      provider: "claude-local";
+      modelLabel: string;
+      claudeCommandPath: string | null;
     };
 
 export interface CodexCliDetectionResult {

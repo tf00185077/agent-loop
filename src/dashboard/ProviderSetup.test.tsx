@@ -269,10 +269,14 @@ function renderProviderSetupPanel(settings: ProviderSettings) {
       catalogBusy={false}
       draftProvider={settings.provider}
       modelLabel={settings.modelLabel}
-      codexCommandPath={settings.codexCommandPath ?? ""}
+      codexCommandPath={settings.provider === "codex-local" ? settings.codexCommandPath ?? "" : ""}
+      claudeCommandPath={
+        settings.provider === "claude-local" ? settings.claudeCommandPath ?? "" : ""
+      }
       onProviderChange={() => undefined}
       onModelLabelChange={() => undefined}
       onCodexCommandPathChange={() => undefined}
+      onClaudeCommandPathChange={() => undefined}
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
@@ -280,3 +284,20 @@ function renderProviderSetupPanel(settings: ProviderSettings) {
     />,
   );
 }
+
+test("provider setup panel renders Claude Local controls without a model catalog or test button", () => {
+  const html = renderProviderSetupPanel({
+    provider: "claude-local",
+    modelLabel: "claude-sonnet-4-6",
+    claudeCommandPath: "/home/u/.local/bin/claude",
+    status: { state: "detected", detected: true, checkedAt: null, message: "Detected" },
+  });
+
+  assert.match(html, /Claude Local/);
+  assert.match(html, /Command path/);
+  assert.match(html, /Detect/);
+  assert.match(html, /Claude CLI detected/);
+  // Deferred for claude-local: no connection test and no model catalog picker.
+  assert.doesNotMatch(html, /Test connection/);
+  assert.doesNotMatch(html, /Refresh models/);
+});
