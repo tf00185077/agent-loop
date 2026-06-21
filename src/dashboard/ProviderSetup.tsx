@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 import {
   detectCodexCli,
   getProviderSettings,
+  loadCodexModelCatalog,
   saveProviderSettings,
   testCodexLocalConnection,
+  type CodexModelCatalogResult,
   type ProviderSettings,
 } from "./api";
 
@@ -17,12 +19,15 @@ interface ProviderSetupPanelProps {
   codexCommandPath: string;
   busy: BusyAction;
   error: string | null;
+  modelCatalog: CodexModelCatalogResult | null;
+  catalogBusy: boolean;
   onProviderChange: (provider: LocalProvider) => void;
   onModelLabelChange: (value: string) => void;
   onCodexCommandPathChange: (value: string) => void;
   onSave: () => void;
   onDetect: () => void;
   onTestConnection: () => void;
+  onReloadCatalog: () => void;
 }
 
 export default function ProviderSetup() {
@@ -32,6 +37,8 @@ export default function ProviderSetup() {
   const [codexCommandPath, setCodexCommandPath] = useState("");
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const [modelCatalog, setModelCatalog] = useState<CodexModelCatalogResult | null>(null);
+  const [catalogBusy, setCatalogBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +46,9 @@ export default function ProviderSetup() {
       .then((nextSettings) => {
         if (cancelled) return;
         applySettings(nextSettings);
+        if (nextSettings.provider === "codex-local") {
+          void refreshCatalog();
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(String(err));
@@ -48,6 +58,24 @@ export default function ProviderSetup() {
       cancelled = true;
     };
   }, []);
+
+  async function refreshCatalog() {
+    setCatalogBusy(true);
+    try {
+      setModelCatalog(await loadCodexModelCatalog());
+    } catch {
+      setModelCatalog(null);
+    } finally {
+      setCatalogBusy(false);
+    }
+  }
+
+  function handleProviderChange(provider: LocalProvider) {
+    setDraftProvider(provider);
+    if (provider === "codex-local" && !modelCatalog && !catalogBusy) {
+      void refreshCatalog();
+    }
+  }
 
   function applySettings(nextSettings: ProviderSettings) {
     setSettings(nextSettings);
@@ -83,6 +111,7 @@ export default function ProviderSetup() {
     try {
       await detectCodexCli();
       applySettings(await getProviderSettings());
+      await refreshCatalog();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -120,12 +149,15 @@ export default function ProviderSetup() {
       codexCommandPath={codexCommandPath}
       busy={busy}
       error={error}
-      onProviderChange={setDraftProvider}
+      modelCatalog={modelCatalog}
+      catalogBusy={catalogBusy}
+      onProviderChange={handleProviderChange}
       onModelLabelChange={setModelLabel}
       onCodexCommandPathChange={setCodexCommandPath}
       onSave={handleSave}
       onDetect={handleDetect}
       onTestConnection={handleTestConnection}
+      onReloadCatalog={() => void refreshCatalog()}
     />
   );
 }
@@ -138,15 +170,20 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
     codexCommandPath,
     busy,
     error,
+    modelCatalog,
+    catalogBusy,
     onProviderChange,
     onModelLabelChange,
     onCodexCommandPathChange,
     onSave,
     onDetect,
     onTestConnection,
+    onReloadCatalog,
   } = props;
   const codexSelected = draftProvider === "codex-local";
   const statusView = providerStatusView(settings.status.state);
+  const catalogModels = modelCatalog?.models ?? [];
+  const hasCatalogModels = catalogModels.length > 0;
 
   return (
     <section style={panelStyle}>
@@ -183,14 +220,32 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
 
       {codexSelected && (
         <div style={{ marginTop: 14 }}>
-          <label style={labelStyle}>
-            Model label
-            <input
-              value={modelLabel}
-              onChange={(event) => onModelLabelChange(event.target.value)}
-              style={inputStyle}
-            />
-          </label>
+          <div style={labelRowStyle}>
+            <label style={{ ...labelStyle, marginBottom: 0, flex: 1 }}>
+              Model
+              <select
+                value={hasCatalogModels ? modelLabel : ""}
+                onChange={(event) => onModelLabelChange(event.target.value)}
+                disabled={!hasCatalogModels}
+                style={inputStyle}
+              >
+                <option value="">Codex CLI default</option>
+                {catalogModels.map((model) => (
+                  <option key={model.slug} value={model.slug}>
+                    {model.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={onReloadCatalog}
+              disabled={busy !== null || catalogBusy}
+              style={buttonStyle}
+            >
+              {catalogBusy ? "Loading..." : "Refresh models"}
+            </button>
+          </div>
           <label style={labelStyle}>
             Command path
             <input
@@ -304,6 +359,13 @@ const labelStyle: React.CSSProperties = {
   marginBottom: 12,
   fontSize: 14,
   fontWeight: 500,
+};
+
+const labelRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "flex-end",
+  gap: 8,
+  marginBottom: 12,
 };
 
 const inputStyle: React.CSSProperties = {

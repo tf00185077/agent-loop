@@ -22,6 +22,8 @@ test("provider setup panel renders Codex Local controls", () => {
       }}
       busy={null}
       error={null}
+      modelCatalog={null}
+      catalogBusy={false}
       draftProvider="codex-local"
       modelLabel="gpt-5-codex-subscription"
       codexCommandPath="C:\\Tools\\codex.cmd"
@@ -31,12 +33,13 @@ test("provider setup panel renders Codex Local controls", () => {
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
+      onReloadCatalog={() => undefined}
     />,
   );
 
   assert.match(html, /Provider setup/);
   assert.match(html, /Codex Local/);
-  assert.match(html, /Model label/);
+  assert.match(html, /Model/);
   assert.match(html, /Command path/);
   assert.match(html, /Detect/);
   assert.match(html, /Test connection/);
@@ -58,6 +61,8 @@ test("provider setup panel hides Codex controls for mock provider", () => {
       }}
       busy={null}
       error={null}
+      modelCatalog={null}
+      catalogBusy={false}
       draftProvider="mock"
       modelLabel="mock-v1"
       codexCommandPath=""
@@ -67,6 +72,7 @@ test("provider setup panel hides Codex controls for mock provider", () => {
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
+      onReloadCatalog={() => undefined}
     />,
   );
 
@@ -134,6 +140,8 @@ function renderProviderSetupPanel(settings: ProviderSettings) {
       settings={settings}
       busy={null}
       error={null}
+      modelCatalog={null}
+      catalogBusy={false}
       draftProvider={settings.provider}
       modelLabel={settings.modelLabel}
       codexCommandPath={settings.codexCommandPath ?? ""}
@@ -143,6 +151,7 @@ function renderProviderSetupPanel(settings: ProviderSettings) {
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
+      onReloadCatalog={() => undefined}
     />,
   );
 }
