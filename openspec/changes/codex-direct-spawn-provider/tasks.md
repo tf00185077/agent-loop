@@ -30,6 +30,6 @@
 
 ## 6. Verify
 
-- [ ] 6.1 Run the full test suite and typecheck; fix regressions
-- [ ] 6.2 Manually exercise a Codex Local goal end-to-end (detect, test, start) confirming whole-response behavior is unchanged
-- [ ] 6.3 Run `openspec validate codex-direct-spawn-provider` and confirm the change is clean
+- [x] 6.1 Run the full test suite and typecheck; fix regressions (typecheck clean; 100 pass / 0 fail)
+- [x] 6.2 Manually exercise a Codex Local goal end-to-end (detect, test, start) confirming whole-response behavior is unchanged (HTTP-stack integration test drives create→start→events against the real provider with a fake codex; live detect + stale-path self-heal smoke confirmed against the installed codex. A true live model run was not executed to avoid consuming the subscription.)
+- [x] 6.3 Run `openspec validate codex-direct-spawn-provider` and confirm the change is clean (passes `--strict`)
