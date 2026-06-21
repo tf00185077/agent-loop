@@ -21,9 +21,11 @@ interface ProviderSetupPanelProps {
   error: string | null;
   modelCatalog: CodexModelCatalogResult | null;
   catalogBusy: boolean;
+  manualEntry: boolean;
   onProviderChange: (provider: LocalProvider) => void;
   onModelLabelChange: (value: string) => void;
   onCodexCommandPathChange: (value: string) => void;
+  onManualEntryChange: (value: boolean) => void;
   onSave: () => void;
   onDetect: () => void;
   onTestConnection: () => void;
@@ -39,6 +41,7 @@ export default function ProviderSetup() {
   const [error, setError] = useState<string | null>(null);
   const [modelCatalog, setModelCatalog] = useState<CodexModelCatalogResult | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
+  const [manualEntry, setManualEntry] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -92,8 +95,10 @@ export default function ProviderSetup() {
         draftProvider === "mock"
           ? { provider: "mock" }
           : {
+              // A blank model label is saved as "" and means "Codex CLI default";
+              // we no longer fall back to the stale gpt-5-codex-subscription label.
               provider: "codex-local",
-              modelLabel: modelLabel.trim() || "gpt-5-codex-subscription",
+              modelLabel: modelLabel.trim(),
               codexCommandPath: codexCommandPath.trim() || null,
             },
       );
@@ -151,9 +156,11 @@ export default function ProviderSetup() {
       error={error}
       modelCatalog={modelCatalog}
       catalogBusy={catalogBusy}
+      manualEntry={manualEntry}
       onProviderChange={handleProviderChange}
       onModelLabelChange={setModelLabel}
       onCodexCommandPathChange={setCodexCommandPath}
+      onManualEntryChange={setManualEntry}
       onSave={handleSave}
       onDetect={handleDetect}
       onTestConnection={handleTestConnection}
@@ -172,9 +179,11 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
     error,
     modelCatalog,
     catalogBusy,
+    manualEntry,
     onProviderChange,
     onModelLabelChange,
     onCodexCommandPathChange,
+    onManualEntryChange,
     onSave,
     onDetect,
     onTestConnection,
@@ -184,6 +193,14 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
   const statusView = providerStatusView(settings.status.state);
   const catalogModels = modelCatalog?.models ?? [];
   const hasCatalogModels = catalogModels.length > 0;
+  const catalogSlugs = new Set(catalogModels.map((model) => model.slug));
+  const trimmedModel = modelLabel.trim();
+  const savedUnlistedModel =
+    trimmedModel !== "" && !catalogSlugs.has(trimmedModel) ? trimmedModel : null;
+  // Manual entry is forced when there is no catalog to pick from; otherwise it
+  // is an explicit user choice for unlisted or experimental slugs. A blank
+  // value always means "use Codex CLI default".
+  const showManualInput = manualEntry || !hasCatalogModels;
 
   return (
     <section style={panelStyle}>
@@ -223,19 +240,30 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
           <div style={labelRowStyle}>
             <label style={{ ...labelStyle, marginBottom: 0, flex: 1 }}>
               Model
-              <select
-                value={hasCatalogModels ? modelLabel : ""}
-                onChange={(event) => onModelLabelChange(event.target.value)}
-                disabled={!hasCatalogModels}
-                style={inputStyle}
-              >
-                <option value="">Codex CLI default</option>
-                {catalogModels.map((model) => (
-                  <option key={model.slug} value={model.slug}>
-                    {model.displayName}
-                  </option>
-                ))}
-              </select>
+              {showManualInput ? (
+                <input
+                  value={modelLabel}
+                  onChange={(event) => onModelLabelChange(event.target.value)}
+                  placeholder="Codex CLI default"
+                  style={inputStyle}
+                />
+              ) : (
+                <select
+                  value={modelLabel}
+                  onChange={(event) => onModelLabelChange(event.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="">Codex CLI default</option>
+                  {savedUnlistedModel && (
+                    <option value={savedUnlistedModel}>{savedUnlistedModel} (saved)</option>
+                  )}
+                  {catalogModels.map((model) => (
+                    <option key={model.slug} value={model.slug}>
+                      {model.displayName}
+                    </option>
+                  ))}
+                </select>
+              )}
             </label>
             <button
               type="button"
@@ -246,6 +274,16 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
               {catalogBusy ? "Loading..." : "Refresh models"}
             </button>
           </div>
+          {hasCatalogModels && (
+            <label style={checkboxLabelStyle}>
+              <input
+                type="checkbox"
+                checked={manualEntry}
+                onChange={(event) => onManualEntryChange(event.target.checked)}
+              />
+              Enter model manually
+            </label>
+          )}
           <label style={labelStyle}>
             Command path
             <input
@@ -366,6 +404,15 @@ const labelRowStyle: React.CSSProperties = {
   alignItems: "flex-end",
   gap: 8,
   marginBottom: 12,
+};
+
+const checkboxLabelStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  marginBottom: 12,
+  fontSize: 13,
+  color: "#555",
 };
 
 const inputStyle: React.CSSProperties = {

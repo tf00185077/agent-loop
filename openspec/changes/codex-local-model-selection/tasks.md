@@ -21,7 +21,7 @@
 
 - [x] 4.1 Add dashboard API client types/functions for loading Codex Local model catalog results.
 - [x] 4.2 Replace the Codex Local model text input with a model picker populated from catalog results, ordered by priority.
-- [ ] 4.3 Preserve manual model entry and Codex CLI default behavior when catalog lookup fails or the user chooses an unlisted model.
+- [x] 4.3 Preserve manual model entry and Codex CLI default behavior when catalog lookup fails or the user chooses an unlisted model.
 - [ ] 4.4 Add loading, empty, and failure states for model catalog lookup without exposing raw CLI output.
 - [ ] 4.5 Add dashboard tests proving catalog models render, selection saves the model slug, manual/default fallback remains available, and raw metadata is not displayed.
 

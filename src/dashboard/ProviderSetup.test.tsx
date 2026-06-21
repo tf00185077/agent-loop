@@ -24,12 +24,14 @@ test("provider setup panel renders Codex Local controls", () => {
       error={null}
       modelCatalog={null}
       catalogBusy={false}
+      manualEntry={false}
       draftProvider="codex-local"
       modelLabel="gpt-5-codex-subscription"
       codexCommandPath="C:\\Tools\\codex.cmd"
       onProviderChange={() => undefined}
       onModelLabelChange={() => undefined}
       onCodexCommandPathChange={() => undefined}
+      onManualEntryChange={() => undefined}
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
@@ -63,12 +65,14 @@ test("provider setup panel hides Codex controls for mock provider", () => {
       error={null}
       modelCatalog={null}
       catalogBusy={false}
+      manualEntry={false}
       draftProvider="mock"
       modelLabel="mock-v1"
       codexCommandPath=""
       onProviderChange={() => undefined}
       onModelLabelChange={() => undefined}
       onCodexCommandPathChange={() => undefined}
+      onManualEntryChange={() => undefined}
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
@@ -142,12 +146,14 @@ function renderProviderSetupPanel(settings: ProviderSettings) {
       error={null}
       modelCatalog={null}
       catalogBusy={false}
+      manualEntry={false}
       draftProvider={settings.provider}
       modelLabel={settings.modelLabel}
       codexCommandPath={settings.codexCommandPath ?? ""}
       onProviderChange={() => undefined}
       onModelLabelChange={() => undefined}
       onCodexCommandPathChange={() => undefined}
+      onManualEntryChange={() => undefined}
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
