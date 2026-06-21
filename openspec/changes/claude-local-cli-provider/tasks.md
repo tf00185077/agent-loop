@@ -11,9 +11,9 @@
 
 ## 3. Add the Claude direct-spawn provider
 
-- [ ] 3.1 Create `src/runtime/claude-cli-provider.ts` implementing `ModelProvider`, spawning `claude --print [--model <label>] --output-format text` with the prompt on stdin and reading the trimmed stdout response
-- [ ] 3.2 Select the model argument from the saved label (blank => omit `--model`; concrete => `--model <label>`); map non-zero exit / empty output to a provider error; return `{ text, metadata: { provider: "claude-cli", model }, conversationState: undefined }`
-- [ ] 3.3 Add provider tests using an executable fake `claude` binary covering model-arg selection, stdout read, and error mapping
+- [x] 3.1 Create `src/runtime/claude-cli-provider.ts` implementing `ModelProvider`, spawning `claude --print [--model <label>] --output-format text` with the prompt on stdin and reading the trimmed stdout response
+- [x] 3.2 Select the model argument from the saved label (blank => omit `--model`; concrete => `--model <label>`); map non-zero exit / empty output to a provider error; return `{ text, metadata: { provider: "claude-cli", model }, conversationState: undefined }`
+- [x] 3.3 Add provider tests using an executable fake `claude` binary covering model-arg selection, stdout read, and error mapping
 
 ## 4. Add Claude detection config
 
