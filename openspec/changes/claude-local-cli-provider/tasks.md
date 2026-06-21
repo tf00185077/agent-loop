@@ -17,8 +17,8 @@
 
 ## 4. Add Claude detection config
 
-- [ ] 4.1 Add a Claude detection config (`commandNames: ["claude"]` + win variants, capability probe `claude --help`, common paths including `~/.local/bin`) and a `detectClaudeCliCommand` wrapper over the core
-- [ ] 4.2 Add Claude detection tests (PATH hit, `~/.local/bin` fallback, not-found)
+- [x] 4.1 Add a Claude detection config (`commandNames: ["claude"]` + win variants, capability probe `claude --help`, common paths including `~/.local/bin`) and a `detectClaudeCliCommand` wrapper over the core
+- [x] 4.2 Add Claude detection tests (PATH hit, `~/.local/bin` fallback, not-found); live probe confirmed against the installed claude
 
 ## 5. Extend domain settings and persistence
 
