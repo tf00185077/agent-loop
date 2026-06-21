@@ -72,6 +72,31 @@ function detectedCodexResult(commandPath: string) {
   };
 }
 
+/**
+ * Writes an executable fake `claude` that captures argv + stdin to capturePath
+ * and prints `response` to stdout, mirroring `claude --print --output-format
+ * text`. Returned path is fed to the provider via injected detection.
+ */
+function createFakeClaudeScript(dir: string, capturePath: string, response: string): string {
+  const scriptPath = join(dir, "fake-claude.mjs");
+  writeFileSync(
+    scriptPath,
+    `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+const capturePath = ${JSON.stringify(capturePath)};
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { stdin += chunk; });
+process.stdin.on("end", () => {
+  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
+  process.stdout.write(${JSON.stringify(response)});
+});
+`,
+  );
+  chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
 async function waitForEvent(url: string, goalId: unknown, type: string) {
   for (let attempt = 0; attempt < 80; attempt++) {
     const events = await fetch(`${url}/api/goals/${goalId}/events`).then(
@@ -834,6 +859,64 @@ describe("Backend API", () => {
         // A blank label omits --model so Codex picks its own default.
         const captured = JSON.parse(readFileSync(capturePath, "utf8")) as { args: string[] };
         assert.equal(captured.args.includes("--model"), false);
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("starts a goal end-to-end with saved Claude Local settings", { skip: process.platform === "win32" }, async () => {
+      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-claude-"));
+      const capturePath = join(dir, "captured-claude.json");
+      const claudePath = createFakeClaudeScript(dir, capturePath, "Claude Local response\n");
+      const providerServer = await startServer(undefined, {
+        detectClaudeCliCommand: () => detectedCodexResult(claudePath),
+        claudeCliProviderTimeoutMs: 10000,
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "claude-local",
+            modelLabel: "claude-sonnet-4-6",
+            claudeCommandPath: claudePath,
+          }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Claude provider start",
+            description: "uses persisted Claude Local settings",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+        });
+        assert.equal(res.status, 200);
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        assert.ok(
+          events.some(
+            (e) =>
+              e.type === "agent.message" &&
+              e.message === "Claude Local response" &&
+              (e.data as Record<string, unknown>).provider === "claude-cli" &&
+              (e.data as Record<string, unknown>).model === "claude-sonnet-4-6",
+          ),
+        );
+
+        const captured = JSON.parse(readFileSync(capturePath, "utf8")) as {
+          args: string[];
+          stdin: string;
+        };
+        assert.ok(captured.args.includes("--print"));
+        assert.match(captured.stdin, /Title: Claude provider start/);
+        const modelIndex = captured.args.indexOf("--model");
+        assert.equal(captured.args[modelIndex + 1], "claude-sonnet-4-6");
       } finally {
         await providerServer.close();
       }

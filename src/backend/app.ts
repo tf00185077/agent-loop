@@ -12,6 +12,9 @@ import {
   createRunRepository,
   createStepRepository,
 } from "../persistence/runtime-repositories.js";
+import { createClaudeCliProvider } from "../runtime/claude-cli-provider.js";
+import { detectClaudeCliCommand } from "../runtime/claude-cli-detection.js";
+import { resolveCliCommandPath } from "../runtime/cli-command-path.js";
 import { createCodexCliProvider } from "../runtime/codex-cli-provider.js";
 import { resolveCodexCommandPath } from "../runtime/codex-command-path.js";
 import { createMockRuntime } from "../runtime/mock-runtime.js";
@@ -31,6 +34,9 @@ export interface CreateAppOptions {
   testCodexLocalConnection?: ProviderSettingsRouterDeps["testCodexLocalConnection"];
   loadCodexModelCatalog?: ProviderSettingsRouterDeps["loadCodexModelCatalog"];
   codexCliProviderTimeoutMs?: number;
+  claudeCliDetection?: ProviderSettingsRouterDeps["claudeCliDetection"];
+  detectClaudeCliCommand?: ProviderSettingsRouterDeps["detectClaudeCliCommand"];
+  claudeCliProviderTimeoutMs?: number;
 }
 
 export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
@@ -52,6 +58,9 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     codexCliDetection: options.codexCliDetection,
     detectCodexCliCommand: options.detectCodexCliCommand,
     codexCliProviderTimeoutMs: options.codexCliProviderTimeoutMs,
+    claudeCliDetection: options.claudeCliDetection,
+    detectClaudeCliCommand: options.detectClaudeCliCommand,
+    claudeCliProviderTimeoutMs: options.claudeCliProviderTimeoutMs,
   });
 
   app.get("/health", (_req, res) => {
@@ -65,6 +74,8 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
       providerSettingsRepo,
       codexCliDetection: options.codexCliDetection,
       detectCodexCliCommand: options.detectCodexCliCommand,
+      claudeCliDetection: options.claudeCliDetection,
+      detectClaudeCliCommand: options.detectClaudeCliCommand,
       testCodexLocalConnection: options.testCodexLocalConnection,
       loadCodexModelCatalog: options.loadCodexModelCatalog,
     }),
@@ -98,6 +109,9 @@ interface CreateRuntimeFromSavedProviderSettingsDeps extends CreateRuntimeFromEn
   codexCliDetection?: CreateAppOptions["codexCliDetection"];
   detectCodexCliCommand?: CreateAppOptions["detectCodexCliCommand"];
   codexCliProviderTimeoutMs?: number;
+  claudeCliDetection?: CreateAppOptions["claudeCliDetection"];
+  detectClaudeCliCommand?: CreateAppOptions["detectClaudeCliCommand"];
+  claudeCliProviderTimeoutMs?: number;
 }
 
 function createRuntimeFromSavedProviderSettings(
@@ -119,6 +133,10 @@ function selectRuntimeForSettings(
 ) {
   if (settings.provider === "codex-local") {
     return createRuntimeFromCodexLocalSettings(settings, deps);
+  }
+
+  if (settings.provider === "claude-local") {
+    return createRuntimeFromClaudeLocalSettings(settings, deps);
   }
 
   if (deps.providerSettingsRepo.hasSaved()) {
@@ -154,6 +172,36 @@ function createRuntimeFromCodexLocalSettings(
         commandPath: resolved.commandPath ?? "",
         modelLabel: settings.modelLabel,
         timeoutMs: deps.codexCliProviderTimeoutMs,
+      },
+    }),
+  });
+}
+
+function createRuntimeFromClaudeLocalSettings(
+  settings: Extract<ProviderSettings, { provider: "claude-local" }>,
+  deps: CreateRuntimeFromSavedProviderSettingsDeps,
+) {
+  // Validate the saved command path and self-heal a stale one before spawning;
+  // an empty resolved path fails the run with a durable error event.
+  const detect = deps.detectClaudeCliCommand ?? detectClaudeCliCommand;
+  const resolved = resolveCliCommandPath({
+    savedPath: settings.claudeCommandPath,
+    detect: (manualPath) => detect({ ...deps.claudeCliDetection, manualPath }),
+    persist: (claudeCommandPath) => {
+      deps.providerSettingsRepo.save({ ...settings, claudeCommandPath });
+    },
+  });
+
+  return createProviderRuntime({
+    goalRepo: deps.goalRepo,
+    runRepo: deps.runRepo,
+    stepRepo: deps.stepRepo,
+    eventRepo: deps.eventRepo,
+    provider: createClaudeCliProvider({
+      config: {
+        commandPath: resolved.commandPath ?? "",
+        modelLabel: settings.modelLabel,
+        timeoutMs: deps.claudeCliProviderTimeoutMs,
       },
     }),
   });

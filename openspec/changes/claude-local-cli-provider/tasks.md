@@ -28,9 +28,9 @@
 
 ## 6. Wire routes and backend execution
 
-- [ ] 6.1 Extend provider-settings routes to parse/save `claude-local` settings and to detect the Claude CLI on `/detect`
-- [ ] 6.2 Wire `app.ts` to select the Claude provider for `claude-local`, resolving (and self-healing) `claudeCommandPath` via `resolveCliCommandPath` before construction; an unresolvable path yields a durable error
-- [ ] 6.3 Add API tests: save Claude Local settings, then start a goal end-to-end against a fake `claude` binary (provider `claude-cli`, model-arg behavior, no secret leakage)
+- [x] 6.1 Extend provider-settings routes to parse/save `claude-local` settings and to detect the Claude CLI on `/detect`
+- [x] 6.2 Wire `app.ts` to select the Claude provider for `claude-local`, resolving (and self-healing) `claudeCommandPath` via `resolveCliCommandPath` before construction; an unresolvable path yields a durable error
+- [x] 6.3 Add API tests: save Claude Local settings, then start a goal end-to-end against a fake `claude` binary (provider `claude-cli`, model-arg behavior)
 
 ## 7. Verify
 

@@ -12,6 +12,11 @@ import {
   type CodexCliDetectionResult,
 } from "../../runtime/codex-cli-detection.js";
 import {
+  detectClaudeCliCommand,
+  type ClaudeCliDetectionOptions,
+  type ClaudeCliDetectionResult,
+} from "../../runtime/claude-cli-detection.js";
+import {
   testCodexLocalConnection,
   type CodexLocalConnectionTestOptions,
   type CodexLocalConnectionTestResult,
@@ -25,6 +30,8 @@ export interface ProviderSettingsRouterDeps {
   providerSettingsRepo: ProviderSettingsRepository;
   codexCliDetection?: Omit<CodexCliDetectionOptions, "manualPath">;
   detectCodexCliCommand?: (options: CodexCliDetectionOptions) => CodexCliDetectionResult;
+  claudeCliDetection?: Omit<ClaudeCliDetectionOptions, "manualPath">;
+  detectClaudeCliCommand?: (options: ClaudeCliDetectionOptions) => ClaudeCliDetectionResult;
   testCodexLocalConnection?: (
     options: CodexLocalConnectionTestOptions,
   ) => Promise<CodexLocalConnectionTestResult>;
@@ -36,6 +43,7 @@ export interface ProviderSettingsRouterDeps {
 export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): Router {
   const router = Router();
   const detect = deps.detectCodexCliCommand ?? detectCodexCliCommand;
+  const detectClaude = deps.detectClaudeCliCommand ?? detectClaudeCliCommand;
   const testConnection = deps.testCodexLocalConnection ?? testCodexLocalConnection;
   const loadCatalog = deps.loadCodexModelCatalog ?? loadCodexModelCatalog;
 
@@ -64,6 +72,22 @@ export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): 
   router.post("/detect", (_req, res, next) => {
     try {
       const settings = deps.providerSettingsRepo.get();
+
+      if (settings.provider === "claude-local") {
+        const result = detectClaude({
+          ...(deps.claudeCliDetection ?? {}),
+          manualPath: settings.claudeCommandPath,
+        });
+        const safeResult = sanitizeDetectionResult(result);
+        deps.providerSettingsRepo.save({
+          ...settings,
+          claudeCommandPath: safeResult.commandPath ?? settings.claudeCommandPath,
+          status: safeResult.status,
+        });
+        res.json(safeResult);
+        return;
+      }
+
       const result = detect({
         ...(deps.codexCliDetection ?? {}),
         manualPath: settings.provider === "codex-local" ? settings.codexCommandPath : null,
@@ -257,7 +281,32 @@ function parseProviderSettings(body: unknown): ParseProviderSettingsResult {
     };
   }
 
-  return { ok: false, error: "provider must be mock or codex-local" };
+  if (body.provider === "claude-local") {
+    // A blank model label persists as "" and means "use Claude CLI default".
+    const modelLabel =
+      typeof body.modelLabel === "string" ? body.modelLabel.trim() : "";
+    const claudeCommandPath =
+      typeof body.claudeCommandPath === "string" && body.claudeCommandPath.trim()
+        ? body.claudeCommandPath.trim()
+        : null;
+
+    return {
+      ok: true,
+      settings: {
+        provider: "claude-local",
+        modelLabel,
+        claudeCommandPath,
+        status: {
+          state: "not_checked",
+          detected: false,
+          checkedAt: null,
+          message: null,
+        },
+      },
+    };
+  }
+
+  return { ok: false, error: "provider must be mock, codex-local, or claude-local" };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
