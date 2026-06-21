@@ -28,6 +28,6 @@
 ## 5. Documentation And Verification
 
 - [x] 5.1 Document Codex Local model selection, catalog refresh, manual fallback, and Codex CLI default behavior in README.
-- [ ] 5.2 Run `npm run typecheck`.
-- [ ] 5.3 Run `npm test`.
-- [ ] 5.4 Run `openspec validate codex-local-model-selection`.
+- [x] 5.2 Run `npm run typecheck`.
+- [x] 5.3 Run `npm test`.
+- [x] 5.4 Run `openspec validate codex-local-model-selection`.
