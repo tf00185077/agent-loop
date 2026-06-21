@@ -94,15 +94,35 @@ before starting a goal.
 2. Select **Codex Local** to use the local Codex CLI path.
 3. Click **Detect** to look for a Codex CLI command, or enter the command path
    manually if detection reports `Codex CLI not found`.
-4. Confirm or edit the model label. The default is
-   `gpt-5-codex-subscription`.
-5. Click **Save** to persist the selected provider, model label, command path,
-   and sanitized status metadata in the local SQLite database.
+4. Pick a model from the **Model** dropdown. The picker is populated from the
+   local Codex CLI model catalog (discovered via `codex debug models`) and is
+   ordered by priority. Use **Refresh models** to reload the catalog after
+   detection or after logging in.
+   - Leave the model on **Codex CLI default** (blank) to let Codex CLI choose
+     its own default model. This is the recommended setting if a specific model
+     fails to connect.
+   - Check **Enter model manually** to type an unlisted or experimental model
+     slug. If the catalog is unavailable or empty, the field falls back to a
+     manual text input automatically, and the status note explains the state.
+   - Existing setups saved with the legacy `gpt-5-codex-subscription` label keep
+     working: that label is read back unchanged and is never forced as a Codex
+     CLI `--model` argument. Replace it with a catalog model or the Codex CLI
+     default when convenient.
+5. Click **Save** to persist the selected provider, model slug (or blank for the
+   Codex CLI default), command path, and sanitized status metadata in the local
+   SQLite database.
 6. Click **Test connection** to run a short backend connection check through
    the Codex Local wrapper.
 7. Start a draft goal. The backend reads the saved provider settings at goal
    start time, so changing the provider in the dashboard affects the next run
-   without restarting the dev server.
+   without restarting the dev server. When no model is selected, run metadata
+   records the model as `codex-default`.
+
+The model catalog is fetched on demand from `GET /api/provider-settings/models`
+and is sanitized by the backend: only selectable, visible models are returned
+with safe display fields (slug, display name, description, priority). Base
+instructions, prompt metadata, hidden entries, and any credential material are
+never exposed to the dashboard.
 
 Codex authentication is managed by the Codex CLI, not by auto-agent. If the
 dashboard shows `Codex login required`, run this in a terminal and then test the
