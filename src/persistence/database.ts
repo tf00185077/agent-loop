@@ -78,6 +78,7 @@ function initializeSchema(db: AppDatabase): void {
       provider TEXT NOT NULL,
       model_label TEXT NOT NULL,
       codex_command_path TEXT,
+      claude_command_path TEXT,
       status_state TEXT NOT NULL,
       status_detected INTEGER NOT NULL,
       status_checked_at TEXT,
@@ -85,4 +86,15 @@ function initializeSchema(db: AppDatabase): void {
       updated_at TEXT NOT NULL
     );
   `);
+
+  // Additive migration for databases created before claude-local support: the
+  // CREATE TABLE IF NOT EXISTS above does not alter an existing table.
+  ensureColumn(db, "provider_settings", "claude_command_path", "TEXT");
+}
+
+function ensureColumn(db: AppDatabase, table: string, column: string, type: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
 }

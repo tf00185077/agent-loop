@@ -19,6 +19,7 @@ export type {
 } from "./event.types.js";
 export type { GoalStatus, RunStatus, StepStatus } from "./status.types.js";
 export type {
+  ClaudeLocalProviderSettings,
   CodexLocalProviderSettings,
   CodexModelCatalogEntry,
   CodexModelCatalogResult,

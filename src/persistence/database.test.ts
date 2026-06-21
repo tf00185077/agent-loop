@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import Database from "better-sqlite3";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -75,6 +76,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "provider",
     "model_label",
     "codex_command_path",
+    "claude_command_path",
     "status_state",
     "status_detected",
     "status_checked_at",
@@ -101,6 +103,31 @@ function tableNames(db: ReturnType<typeof openDatabase>): string[] {
     .all()
     .map((row) => (row as { name: string }).name);
 }
+
+test("adds claude_command_path to a provider_settings table that predates it", () => {
+  const dbPath = join(mkdtempSync(join(tmpdir(), "auto-agent-db-")), "legacy.sqlite");
+
+  // Simulate a database created before claude-local support.
+  const legacy = new Database(dbPath);
+  legacy.exec(`
+    CREATE TABLE provider_settings (
+      id TEXT PRIMARY KEY CHECK (id = 'local'),
+      provider TEXT NOT NULL,
+      model_label TEXT NOT NULL,
+      codex_command_path TEXT,
+      status_state TEXT NOT NULL,
+      status_detected INTEGER NOT NULL,
+      status_checked_at TEXT,
+      status_message TEXT,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  legacy.close();
+
+  const db = openDatabase({ path: dbPath });
+  assert.ok(columnNames(db, "provider_settings").includes("claude_command_path"));
+  db.close();
+});
 
 function columnNames(db: ReturnType<typeof openDatabase>, table: string): string[] {
   return db

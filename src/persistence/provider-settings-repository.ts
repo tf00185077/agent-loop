@@ -40,6 +40,7 @@ export function createProviderSettingsRepository(db: AppDatabase): ProviderSetti
           provider,
           model_label,
           codex_command_path,
+          claude_command_path,
           status_state,
           status_detected,
           status_checked_at,
@@ -51,6 +52,7 @@ export function createProviderSettingsRepository(db: AppDatabase): ProviderSetti
           @provider,
           @modelLabel,
           @codexCommandPath,
+          @claudeCommandPath,
           @statusState,
           @statusDetected,
           @statusCheckedAt,
@@ -61,6 +63,7 @@ export function createProviderSettingsRepository(db: AppDatabase): ProviderSetti
           provider = excluded.provider,
           model_label = excluded.model_label,
           codex_command_path = excluded.codex_command_path,
+          claude_command_path = excluded.claude_command_path,
           status_state = excluded.status_state,
           status_detected = excluded.status_detected,
           status_checked_at = excluded.status_checked_at,
@@ -77,7 +80,15 @@ function sanitizeProviderSettings(settings: ProviderSettings): ProviderSettings 
   if (settings.provider === "codex-local") {
     return {
       ...settings,
-      codexCommandPath: sanitizeCodexCommandPath(settings.codexCommandPath),
+      codexCommandPath: sanitizeCommandPath(settings.codexCommandPath),
+      status: sanitizeProviderStatus(settings.status),
+    };
+  }
+
+  if (settings.provider === "claude-local") {
+    return {
+      ...settings,
+      claudeCommandPath: sanitizeCommandPath(settings.claudeCommandPath),
       status: sanitizeProviderStatus(settings.status),
     };
   }
@@ -89,7 +100,7 @@ function sanitizeProviderSettings(settings: ProviderSettings): ProviderSettings 
   };
 }
 
-function sanitizeCodexCommandPath(commandPath: string | null): string | null {
+function sanitizeCommandPath(commandPath: string | null): string | null {
   return commandPath
     ? commandPath
         .replace(/\s+--(?:api-key|token|access-token)\s+\S+/gi, "")
@@ -102,7 +113,8 @@ function toProviderSettingsParams(settings: ProviderSettings) {
     id: providerSettingsId,
     provider: settings.provider,
     modelLabel: settings.modelLabel,
-    codexCommandPath: settings.codexCommandPath,
+    codexCommandPath: settings.provider === "codex-local" ? settings.codexCommandPath : null,
+    claudeCommandPath: settings.provider === "claude-local" ? settings.claudeCommandPath : null,
     statusState: settings.status.state,
     statusDetected: settings.status.detected ? 1 : 0,
     statusCheckedAt: settings.status.checkedAt,
@@ -125,6 +137,15 @@ function mapProviderSettingsRow(row: unknown): ProviderSettings {
       provider: "codex-local",
       modelLabel: value.model_label as string,
       codexCommandPath: value.codex_command_path as string | null,
+      status,
+    };
+  }
+
+  if (value.provider === "claude-local") {
+    return {
+      provider: "claude-local",
+      modelLabel: value.model_label as string,
+      claudeCommandPath: value.claude_command_path as string | null,
       status,
     };
   }

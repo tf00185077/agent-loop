@@ -1,4 +1,4 @@
-export type LocalProviderKind = "mock" | "codex-local";
+export type LocalProviderKind = "mock" | "codex-local" | "claude-local";
 
 export type ProviderConnectionState =
   | "not_checked"
@@ -30,7 +30,17 @@ export interface CodexLocalProviderSettings {
   status: ProviderStatus;
 }
 
-export type ProviderSettings = MockProviderSettings | CodexLocalProviderSettings;
+export interface ClaudeLocalProviderSettings {
+  provider: "claude-local";
+  modelLabel: string;
+  claudeCommandPath: string | null;
+  status: ProviderStatus;
+}
+
+export type ProviderSettings =
+  | MockProviderSettings
+  | CodexLocalProviderSettings
+  | ClaudeLocalProviderSettings;
 
 /**
  * Sanitized Codex Local catalog model entry. Only safe display fields are

@@ -22,9 +22,9 @@
 
 ## 5. Extend domain settings and persistence
 
-- [ ] 5.1 Add `claude-local` to `LocalProviderKind`, a `ClaudeLocalProviderSettings` type with `claudeCommandPath: string | null`, and extend the `ProviderSettings` union
-- [ ] 5.2 Update provider-settings persistence/schema and repository to store and round-trip Claude Local settings (including `claudeCommandPath`)
-- [ ] 5.3 Add domain + persistence tests for Claude Local defaults, save, and restart survival
+- [x] 5.1 Add `claude-local` to `LocalProviderKind`, a `ClaudeLocalProviderSettings` type with `claudeCommandPath: string | null`, and extend the `ProviderSettings` union
+- [x] 5.2 Update provider-settings persistence/schema and repository to store and round-trip Claude Local settings (including `claudeCommandPath`); add a guarded `claude_command_path` column migration
+- [x] 5.3 Add domain + persistence tests for Claude Local defaults, save, and restart survival (plus a legacy-DB migration test)
 
 ## 6. Wire routes and backend execution
 

@@ -86,6 +86,67 @@ test("saved Codex Local provider settings survive database reopen", () => {
   reopenedDb.close();
 });
 
+test("saves and round-trips Claude Local provider settings", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const settings = createProviderSettingsRepository(db);
+
+  const saved = settings.save({
+    provider: "claude-local",
+    modelLabel: "claude-sonnet-4-6",
+    claudeCommandPath: "/home/u/.local/bin/claude",
+    status: {
+      state: "detected",
+      detected: true,
+      checkedAt: "2026-06-21T00:00:00.000Z",
+      message: "Claude CLI detected",
+    },
+  });
+
+  assert.deepEqual(saved, settings.get());
+  assert.equal(saved.provider, "claude-local");
+  assert.equal(
+    (saved as { claudeCommandPath: string | null }).claudeCommandPath,
+    "/home/u/.local/bin/claude",
+  );
+
+  db.close();
+});
+
+test("saved Claude Local provider settings survive database reopen", () => {
+  const dbPath = testDatabasePath();
+  const firstDb = openDatabase({ path: dbPath });
+
+  createProviderSettingsRepository(firstDb).save({
+    provider: "claude-local",
+    modelLabel: "",
+    claudeCommandPath: "/home/u/.local/bin/claude",
+    status: {
+      state: "detected",
+      detected: true,
+      checkedAt: "2026-06-21T01:00:00.000Z",
+      message: "Claude CLI detected",
+    },
+  });
+  firstDb.close();
+
+  const reopenedDb = openDatabase({ path: dbPath });
+  const settings = createProviderSettingsRepository(reopenedDb);
+
+  assert.deepEqual(settings.get(), {
+    provider: "claude-local",
+    modelLabel: "",
+    claudeCommandPath: "/home/u/.local/bin/claude",
+    status: {
+      state: "detected",
+      detected: true,
+      checkedAt: "2026-06-21T01:00:00.000Z",
+      message: "Claude CLI detected",
+    },
+  });
+
+  reopenedDb.close();
+});
+
 test("persisted provider settings exclude credential material and command secret arguments", () => {
   const db = openDatabase({ path: testDatabasePath() });
   const settings = createProviderSettingsRepository(db);
