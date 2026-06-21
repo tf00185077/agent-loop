@@ -1,8 +1,8 @@
 ## 1. Extract the reusable detection core
 
-- [ ] 1.1 Create `src/runtime/cli-command-detection.ts` with `detectCliCommand(config, options)` where `config = { commandNames, capabilityCheck, commonPaths }`, porting the PATH → common-location scan, manual-path-first, and capability-gate logic from `codex-cli-detection.ts`
-- [ ] 1.2 Re-express `detectCodexCliCommand` as a Codex config over the core (command names incl. win variants, `codex exec --help` probe, existing common paths), keeping its public signature and behavior
-- [ ] 1.3 Add core detection tests, and a regression test asserting Codex resolves the same path/source as before generalization
+- [x] 1.1 Create `src/runtime/cli-command-detection.ts` with `detectCliCommand(config, options)` where `config = { commandNames, capabilityCheck, commonPaths }`, porting the PATH → common-location scan, manual-path-first, and capability-gate logic from `codex-cli-detection.ts`
+- [x] 1.2 Re-express `detectCodexCliCommand` as a Codex config over the core (command names incl. win variants, `codex exec --help` probe, existing common paths), keeping its public signature and behavior
+- [x] 1.3 Add core detection tests, and a regression test asserting Codex resolves the same path/source as before generalization (existing codex-cli-detection tests pass unchanged)
 
 ## 2. Generalize self-healing path resolution
 
