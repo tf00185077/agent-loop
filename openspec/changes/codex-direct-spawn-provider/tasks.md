@@ -19,8 +19,8 @@
 
 ## 4. Rewire the backend to the new provider
 
-- [ ] 4.1 Update `src/backend/app.ts` Codex Local wiring to construct `codex-cli-provider` from the resolved (self-healed) command path and model label, dropping `codexLocalWrapperCommand`/`Args`/`Timeout` and the `AUTO_AGENT_CODEX_COMMAND_PATH` / `AUTO_AGENT_OPENAI_LOCAL_*` env handoff
-- [ ] 4.2 Confirm detect / test / models endpoints use the same resolution path and still return unchanged shapes
+- [x] 4.1 Update `src/backend/app.ts` Codex Local wiring to construct `codex-cli-provider` from the resolved (self-healed) command path and model label, dropping `codexLocalWrapperCommand`/`Args`/`Timeout` and the `AUTO_AGENT_CODEX_COMMAND_PATH` / `AUTO_AGENT_OPENAI_LOCAL_*` env handoff
+- [x] 4.2 Confirm detect / test / models endpoints use the same resolution path and still return unchanged shapes (routes resolve via `detect({ manualPath })`, the same detection `resolveCodexCommandPath` wraps; shapes unchanged, route tests green)
 
 ## 5. Remove the wrapper indirection
 

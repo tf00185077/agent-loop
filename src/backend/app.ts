@@ -1,7 +1,6 @@
 import express from "express";
-import { resolve } from "node:path";
 
-import { describeCodexModelLabel, type ProviderSettings } from "../domain/index.js";
+import { type ProviderSettings } from "../domain/index.js";
 import type { AppDatabase } from "../persistence/database.js";
 import { createGoalRepository } from "../persistence/goal-repository.js";
 import {
@@ -13,6 +12,8 @@ import {
   createRunRepository,
   createStepRepository,
 } from "../persistence/runtime-repositories.js";
+import { createCodexCliProvider } from "../runtime/codex-cli-provider.js";
+import { resolveCodexCommandPath } from "../runtime/codex-command-path.js";
 import { createMockRuntime } from "../runtime/mock-runtime.js";
 import { createOpenAICompatibleProvider } from "../runtime/openai-compatible-provider.js";
 import { createOpenAILocalAgentProvider } from "../runtime/openai-local-agent-provider.js";
@@ -30,9 +31,7 @@ export interface CreateAppOptions {
   detectCodexCliCommand?: ProviderSettingsRouterDeps["detectCodexCliCommand"];
   testCodexLocalConnection?: ProviderSettingsRouterDeps["testCodexLocalConnection"];
   loadCodexModelCatalog?: ProviderSettingsRouterDeps["loadCodexModelCatalog"];
-  codexLocalWrapperCommand?: string;
-  codexLocalWrapperArgs?: string[];
-  codexLocalWrapperTimeoutMs?: number;
+  codexCliProviderTimeoutMs?: number;
 }
 
 export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
@@ -51,9 +50,9 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     runRepo,
     stepRepo,
     eventRepo,
-    codexLocalWrapperCommand: options.codexLocalWrapperCommand,
-    codexLocalWrapperArgs: options.codexLocalWrapperArgs,
-    codexLocalWrapperTimeoutMs: options.codexLocalWrapperTimeoutMs,
+    codexCliDetection: options.codexCliDetection,
+    detectCodexCliCommand: options.detectCodexCliCommand,
+    codexCliProviderTimeoutMs: options.codexCliProviderTimeoutMs,
   });
 
   app.get("/health", (_req, res) => {
@@ -97,9 +96,9 @@ interface CreateRuntimeFromEnvironmentDeps extends RuntimeRepositories {
 
 interface CreateRuntimeFromSavedProviderSettingsDeps extends CreateRuntimeFromEnvironmentDeps {
   providerSettingsRepo: ProviderSettingsRepository;
-  codexLocalWrapperCommand?: string;
-  codexLocalWrapperArgs?: string[];
-  codexLocalWrapperTimeoutMs?: number;
+  codexCliDetection?: CreateAppOptions["codexCliDetection"];
+  detectCodexCliCommand?: CreateAppOptions["detectCodexCliCommand"];
+  codexCliProviderTimeoutMs?: number;
 }
 
 function createRuntimeFromSavedProviderSettings(
@@ -134,26 +133,28 @@ function createRuntimeFromCodexLocalSettings(
   settings: Extract<ProviderSettings, { provider: "codex-local" }>,
   deps: CreateRuntimeFromSavedProviderSettingsDeps,
 ) {
+  // Validate the saved command path and self-heal a stale one before spawning.
+  // An empty resolved path flows into the provider, which fails the run with a
+  // durable error event rather than spawning a dead path.
+  const resolved = resolveCodexCommandPath({
+    savedPath: settings.codexCommandPath,
+    detection: deps.codexCliDetection,
+    detect: deps.detectCodexCliCommand,
+    persist: (codexCommandPath) => {
+      deps.providerSettingsRepo.save({ ...settings, codexCommandPath });
+    },
+  });
+
   return createProviderRuntime({
     goalRepo: deps.goalRepo,
     runRepo: deps.runRepo,
     stepRepo: deps.stepRepo,
     eventRepo: deps.eventRepo,
-    provider: createOpenAILocalAgentProvider({
+    provider: createCodexCliProvider({
       config: {
-        provider: "openai-local-agent",
-        command: deps.codexLocalWrapperCommand ?? process.execPath,
-        args: deps.codexLocalWrapperArgs ?? [
-          resolve("scripts", "codex-local-agent-wrapper.mjs"),
-        ],
-        // Display-only metadata label; the raw label below drives the
-        // wrapper's --model decision (blank/legacy => Codex CLI default).
-        model: describeCodexModelLabel(settings.modelLabel),
-        timeoutMs: deps.codexLocalWrapperTimeoutMs ?? 120_000,
-        env: {
-          AUTO_AGENT_CODEX_COMMAND_PATH: settings.codexCommandPath ?? "",
-          AUTO_AGENT_OPENAI_LOCAL_MODEL: settings.modelLabel,
-        },
+        commandPath: resolved.commandPath ?? "",
+        modelLabel: settings.modelLabel,
+        timeoutMs: deps.codexCliProviderTimeoutMs,
       },
     }),
   });

@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -59,35 +59,44 @@ process.stdin.on("end", () => {
   return scriptPath;
 }
 
-function createFakeCodexWrapperScript(dir: string): string {
-  const scriptPath = join(dir, "fake-codex-wrapper.mjs");
+/**
+ * Writes an executable fake `codex` binary that captures argv + stdin to
+ * capturePath and writes `response` to the `--output-last-message` file. The
+ * returned path is fed to the provider via injected detection, so the Codex
+ * direct-spawn provider's own arg building is exercised end to end.
+ */
+function createFakeCodexScript(dir: string, capturePath: string, response: string): string {
+  const scriptPath = join(dir, "fake-codex.mjs");
   writeFileSync(
     scriptPath,
-    `
+    `#!/usr/bin/env node
 import { writeFileSync } from "node:fs";
-
-const capturePath = process.argv[2];
+const capturePath = ${JSON.stringify(capturePath)};
 let stdin = "";
 process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  stdin += chunk;
-});
+process.stdin.on("data", (chunk) => { stdin += chunk; });
 process.stdin.on("end", () => {
-  const input = JSON.parse(stdin);
-  writeFileSync(capturePath, JSON.stringify({
-    input,
-    codexCommandPath: process.env.AUTO_AGENT_CODEX_COMMAND_PATH ?? null,
-    modelLabel: process.env.AUTO_AGENT_OPENAI_LOCAL_MODEL ?? null,
-  }));
-  process.stdout.write(JSON.stringify({ text: "Saved Codex Local response" }));
+  const outputIndex = process.argv.indexOf("--output-last-message");
+  writeFileSync(process.argv[outputIndex + 1], ${JSON.stringify(response)});
+  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
 });
-`.trimStart(),
+`,
   );
+  chmodSync(scriptPath, 0o755);
   return scriptPath;
 }
 
+function detectedCodexResult(commandPath: string) {
+  return {
+    detected: true,
+    commandPath,
+    source: "manual" as const,
+    status: { state: "detected" as const, detected: true, checkedAt: null, message: "ok" },
+  };
+}
+
 async function waitForEvent(url: string, goalId: unknown, type: string) {
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let attempt = 0; attempt < 80; attempt++) {
     const events = await fetch(`${url}/api/goals/${goalId}/events`).then(
       (r) => r.json() as Promise<Array<Record<string, unknown>>>,
     );
@@ -813,14 +822,13 @@ describe("Backend API", () => {
       }
     });
 
-    it("uses current saved Codex Local settings when starting a goal", async () => {
+    it("uses current saved Codex Local settings when starting a goal", { skip: process.platform === "win32" }, async () => {
       const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-saved-provider-"));
       const capturePath = join(dir, "captured-saved-provider.json");
-      const scriptPath = createFakeCodexWrapperScript(dir);
+      const codexPath = createFakeCodexScript(dir, capturePath, "Saved Codex Local response");
       const providerServer = await startServer(undefined, {
-        codexLocalWrapperCommand: "node",
-        codexLocalWrapperArgs: [scriptPath, capturePath],
-        codexLocalWrapperTimeoutMs: 10000,
+        detectCodexCliCommand: () => detectedCodexResult(codexPath),
+        codexCliProviderTimeoutMs: 10000,
       });
 
       try {
@@ -830,7 +838,7 @@ describe("Backend API", () => {
           body: JSON.stringify({
             provider: "codex-local",
             modelLabel: "gpt-5-codex-subscription",
-            codexCommandPath: "C:\\Tools\\codex.cmd",
+            codexCommandPath: codexPath,
           }),
         });
 
@@ -854,31 +862,30 @@ describe("Backend API", () => {
             (e) =>
               e.type === "agent.message" &&
               e.message === "Saved Codex Local response" &&
-              (e.data as Record<string, unknown>).provider === "openai-local-agent" &&
+              (e.data as Record<string, unknown>).provider === "codex-cli" &&
               (e.data as Record<string, unknown>).model === "gpt-5-codex-subscription",
           ),
         );
 
-        const captured = JSON.parse(readFileSync(capturePath, "utf8")) as Record<string, unknown>;
-        assert.equal(captured.codexCommandPath, "C:\\Tools\\codex.cmd");
-        assert.equal(captured.modelLabel, "gpt-5-codex-subscription");
-        assert.match(
-          ((captured.input as Record<string, unknown>).prompt as string),
-          /Title: Saved provider start/,
-        );
+        const captured = JSON.parse(readFileSync(capturePath, "utf8")) as {
+          args: string[];
+          stdin: string;
+        };
+        // Legacy subscription label means "use Codex default" -> no --model.
+        assert.equal(captured.args.includes("--model"), false);
+        assert.match(captured.stdin, /Title: Saved provider start/);
       } finally {
         await providerServer.close();
       }
     });
 
-    it("records an understandable default model marker when no model label is saved", async () => {
+    it("records an understandable default model marker when no model label is saved", { skip: process.platform === "win32" }, async () => {
       const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-default-model-"));
       const capturePath = join(dir, "captured-default-model.json");
-      const scriptPath = createFakeCodexWrapperScript(dir);
+      const codexPath = createFakeCodexScript(dir, capturePath, "Default model response");
       const providerServer = await startServer(undefined, {
-        codexLocalWrapperCommand: "node",
-        codexLocalWrapperArgs: [scriptPath, capturePath],
-        codexLocalWrapperTimeoutMs: 10000,
+        detectCodexCliCommand: () => detectedCodexResult(codexPath),
+        codexCliProviderTimeoutMs: 10000,
       });
 
       try {
@@ -888,7 +895,7 @@ describe("Backend API", () => {
           body: JSON.stringify({
             provider: "codex-local",
             modelLabel: "",
-            codexCommandPath: "C:\\Tools\\codex.cmd",
+            codexCommandPath: codexPath,
           }),
         });
 
@@ -914,9 +921,9 @@ describe("Backend API", () => {
           ),
         );
 
-        // The wrapper still receives the raw blank label so it omits --model.
-        const captured = JSON.parse(readFileSync(capturePath, "utf8")) as Record<string, unknown>;
-        assert.equal(captured.modelLabel, "");
+        // A blank label omits --model so Codex picks its own default.
+        const captured = JSON.parse(readFileSync(capturePath, "utf8")) as { args: string[] };
+        assert.equal(captured.args.includes("--model"), false);
       } finally {
         await providerServer.close();
       }
