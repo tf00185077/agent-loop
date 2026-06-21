@@ -86,6 +86,14 @@ export default function ProviderSetup() {
 
   function handleProviderChange(provider: LocalProvider) {
     setDraftProvider(provider);
+    // Reset the model label so a previous provider's label (e.g. mock-v1) does
+    // not carry across. Restore the saved label when switching back to the
+    // currently-saved provider; otherwise fall back to that provider's default.
+    if (settings && settings.provider === provider) {
+      setModelLabel(settings.modelLabel);
+    } else {
+      setModelLabel(provider === "mock" ? "mock-v1" : "");
+    }
     if (provider === "codex-local" && !modelCatalog && !catalogBusy) {
       void refreshCatalog();
     }
