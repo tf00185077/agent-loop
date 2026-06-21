@@ -15,21 +15,30 @@ export interface ProviderRuntimeDeps {
   provider: ModelProvider;
 }
 
+export interface ProviderRunOptions {
+  /**
+   * Opaque continuation token previously returned by the same provider. The
+   * runtime forwards it to the provider unchanged and never interprets it.
+   */
+  conversationState?: unknown;
+}
+
 export interface ProviderRuntime {
-  run(goalId: string): Promise<ModelProviderOutput | undefined>;
+  run(goalId: string, options?: ProviderRunOptions): Promise<ModelProviderOutput | undefined>;
 }
 
 export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntime {
   const { goalRepo, runRepo, stepRepo, eventRepo, provider } = deps;
 
   return {
-    async run(goalId) {
+    async run(goalId, options) {
       const goal = goalRepo.getById(goalId);
       if (!goal) throw new Error(`Goal not found: ${goalId}`);
 
       const input = {
         goal: toProviderGoalContext(goal),
         prompt: buildProviderPrompt(goal),
+        conversationState: options?.conversationState,
       };
       let output: ModelProviderOutput;
       try {

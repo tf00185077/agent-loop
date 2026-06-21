@@ -1,8 +1,8 @@
 ## 1. Extend the provider contract with opaque conversation state
 
-- [ ] 1.1 Add optional `conversationState?: unknown` to `ModelProviderInput` and `ModelProviderOutput` in `src/runtime/model-provider.ts`
-- [ ] 1.2 Update the runtime provider call site (`src/runtime/provider-runtime.ts`) to forward an incoming `conversationState` into the input and carry the returned `conversationState` through without inspecting it
-- [ ] 1.3 Add a runtime test proving the runtime forwards `conversationState` verbatim and tolerates its absence
+- [x] 1.1 Add optional `conversationState?: unknown` to `ModelProviderInput` and `ModelProviderOutput` in `src/runtime/model-provider.ts`
+- [x] 1.2 Update the runtime provider call site (`src/runtime/provider-runtime.ts`) to forward an incoming `conversationState` into the input and carry the returned `conversationState` through without inspecting it
+- [x] 1.3 Add a runtime test proving the runtime forwards `conversationState` verbatim and tolerates its absence
 
 ## 2. Add the Codex direct-spawn provider
 

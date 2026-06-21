@@ -212,6 +212,72 @@ test("provider runtime records provider errors and marks run and goal failed", a
   db.close();
 });
 
+test("provider runtime forwards conversation state verbatim and surfaces the returned value", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const incomingState = { sessionId: "abc-123", nested: { resume: true } };
+  const returnedState = { sessionId: "abc-456" };
+  const receivedInputs: ModelProviderInput[] = [];
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      async complete(input: ModelProviderInput) {
+        receivedInputs.push(input);
+        return {
+          text: "Continued response",
+          metadata: { provider: "fake", model: "fake-model" },
+          conversationState: returnedState,
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Continue a session",
+    description: "Thread conversation state through",
+  });
+
+  const output = await runtime.run(goal.id, { conversationState: incomingState });
+
+  assert.equal(receivedInputs.length, 1);
+  assert.strictEqual(receivedInputs[0]?.conversationState, incomingState);
+  assert.strictEqual(output?.conversationState, returnedState);
+
+  db.close();
+});
+
+test("provider runtime tolerates absent conversation state", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  let received: ModelProviderInput | undefined;
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      async complete(input: ModelProviderInput) {
+        received = input;
+        return {
+          text: "Fresh response",
+          metadata: { provider: "fake", model: "fake-model" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Start fresh",
+    description: "No conversation state supplied",
+  });
+
+  const output = await runtime.run(goal.id);
+
+  assert.equal(received?.conversationState, undefined);
+  assert.equal(output?.conversationState, undefined);
+
+  db.close();
+});
+
 test("provider runtime throws if goal does not exist", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const runtime = createProviderRuntime({
