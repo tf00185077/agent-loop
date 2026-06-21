@@ -1,10 +1,12 @@
-import type { ProviderStatus } from "../domain/index.js";
 import {
   detectCodexCliCommand,
   type CodexCliDetectionOptions,
   type CodexCliDetectionResult,
-  type CodexCliDetectionSource,
 } from "./codex-cli-detection.js";
+import {
+  resolveCliCommandPath,
+  type ResolveCliCommandPathResult,
+} from "./cli-command-path.js";
 
 export interface ResolveCodexCommandPathOptions {
   /** The currently saved Codex command path, if any. */
@@ -21,40 +23,20 @@ export interface ResolveCodexCommandPathOptions {
   persist?: (commandPath: string) => void;
 }
 
-export interface ResolveCodexCommandPathResult {
-  /** Resolved usable command path, or null when none could be found. */
-  commandPath: string | null;
-  /** True when the resolved path differs from the saved path (i.e. self-healed). */
-  changed: boolean;
-  source: CodexCliDetectionSource;
-  status: ProviderStatus;
-}
+export type ResolveCodexCommandPathResult = ResolveCliCommandPathResult;
 
 /**
- * Validates the saved Codex command path and re-detects when it is stale.
- *
- * The saved path is offered to detection as the manual candidate: if it still
- * exists and can execute Codex it is reused unchanged; otherwise detection
- * falls back to PATH and common install locations. When a different path is
- * found, `persist` is invoked so the caller can update saved settings instead
- * of spawning a stale path. When nothing resolves, the returned status carries
- * the not-found condition.
+ * Codex-specific wrapper over {@link resolveCliCommandPath}: validates the
+ * saved Codex command path and re-detects via `detectCodexCliCommand` when it
+ * is stale, persisting the re-detected path through `persist`.
  */
 export function resolveCodexCommandPath(
   options: ResolveCodexCommandPathOptions,
 ): ResolveCodexCommandPathResult {
   const detect = options.detect ?? detectCodexCliCommand;
-  const result = detect({ ...options.detection, manualPath: options.savedPath });
-
-  const changed = result.commandPath !== null && result.commandPath !== options.savedPath;
-  if (changed && result.commandPath) {
-    options.persist?.(result.commandPath);
-  }
-
-  return {
-    commandPath: result.commandPath,
-    changed,
-    source: result.source,
-    status: result.status,
-  };
+  return resolveCliCommandPath({
+    savedPath: options.savedPath,
+    detect: (manualPath) => detect({ ...options.detection, manualPath }),
+    persist: options.persist,
+  });
 }

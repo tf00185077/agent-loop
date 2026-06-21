@@ -6,8 +6,8 @@
 
 ## 2. Generalize self-healing path resolution
 
-- [ ] 2.1 Add generic `resolveCliCommandPath(config, { savedPath, detect?, persist? })` (validate saved path, re-detect stale, persist via callback) and express `resolveCodexCommandPath` over it
-- [ ] 2.2 Add tests: valid saved path reused; stale path re-detected + persisted; nothing resolves yields not-found — for a generic config and for Codex
+- [x] 2.1 Add generic `resolveCliCommandPath({ savedPath, detect, persist? })` (validate saved path, re-detect stale, persist via callback) and express `resolveCodexCommandPath` over it
+- [x] 2.2 Add tests: valid saved path reused; stale path re-detected + persisted; nothing resolves yields not-found — for the generic resolver (existing Codex resolver tests pass unchanged)
 
 ## 3. Add the Claude direct-spawn provider
 
