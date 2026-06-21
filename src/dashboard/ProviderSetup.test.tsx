@@ -4,7 +4,11 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ProviderSetupPanel } from "./ProviderSetup.js";
-import type { ProviderConnectionState, ProviderSettings } from "./api.js";
+import type {
+  CodexModelCatalogResult,
+  ProviderConnectionState,
+  ProviderSettings,
+} from "./api.js";
 
 test("provider setup panel renders Codex Local controls", () => {
   const html = renderToStaticMarkup(
@@ -137,6 +141,108 @@ test("provider setup panel shows connected status without credential material", 
     assert.equal(html.includes(forbidden), false);
   }
 });
+
+test("provider setup panel renders catalog models as picker options", () => {
+  const html = renderCatalogPanel(
+    {
+      models: [
+        { slug: "gpt-5-codex-mini", displayName: "GPT-5 Codex Mini", description: null, priority: 10 },
+        { slug: "gpt-5-codex", displayName: "GPT-5 Codex", description: "Latest", priority: 20 },
+      ],
+      defaultModelSlug: "gpt-5-codex-mini",
+      source: "path",
+      status: { state: "available", checkedAt: null, message: null },
+    },
+    { modelLabel: "gpt-5-codex" },
+  );
+
+  assert.match(html, /Codex CLI default/);
+  assert.match(html, /value="gpt-5-codex-mini"/);
+  assert.match(html, /GPT-5 Codex Mini/);
+  assert.match(html, /value="gpt-5-codex"/);
+  assert.match(html, /2 models available/);
+  // The currently selected model slug is reflected as the chosen option.
+  assert.match(html, /<option value="gpt-5-codex" selected="">/);
+});
+
+test("provider setup panel keeps manual and Codex default fallback when catalog is unavailable", () => {
+  const html = renderCatalogPanel(null, { modelLabel: "" });
+
+  assert.match(html, /Model catalog unavailable/);
+  // A manual text input (with the Codex default placeholder) remains available.
+  assert.match(html, /placeholder="Codex CLI default"/);
+});
+
+test("provider setup panel shows empty-state fallback when no models are returned", () => {
+  const html = renderCatalogPanel({
+    models: [],
+    defaultModelSlug: null,
+    source: "path",
+    status: { state: "empty", checkedAt: null, message: null },
+  });
+
+  assert.match(html, /No selectable models were found/);
+  assert.match(html, /placeholder="Codex CLI default"/);
+});
+
+test("provider setup panel does not display raw catalog metadata or status messages", () => {
+  const html = renderCatalogPanel(
+    {
+      models: [
+        {
+          slug: "gpt-5-codex",
+          displayName: "GPT-5 Codex",
+          description: "DESCRIPTION-RAW-METADATA",
+          priority: 1,
+        },
+      ],
+      defaultModelSlug: "gpt-5-codex",
+      source: "path",
+      status: {
+        state: "available",
+        checkedAt: null,
+        message: "STATUS-RAW-MESSAGE sk-catalog-secret",
+      },
+    },
+    { modelLabel: "gpt-5-codex" },
+  );
+
+  assert.equal(html.includes("DESCRIPTION-RAW-METADATA"), false);
+  assert.equal(html.includes("STATUS-RAW-MESSAGE"), false);
+  assert.equal(html.includes("sk-catalog-secret"), false);
+});
+
+function renderCatalogPanel(
+  modelCatalog: CodexModelCatalogResult | null,
+  overrides?: { modelLabel?: string; manualEntry?: boolean },
+) {
+  return renderToStaticMarkup(
+    <ProviderSetupPanel
+      settings={{
+        provider: "codex-local",
+        modelLabel: overrides?.modelLabel ?? "",
+        codexCommandPath: "C:\\Tools\\codex.cmd",
+        status: { state: "detected", detected: true, checkedAt: null, message: null },
+      }}
+      busy={null}
+      error={null}
+      modelCatalog={modelCatalog}
+      catalogBusy={false}
+      manualEntry={overrides?.manualEntry ?? false}
+      draftProvider="codex-local"
+      modelLabel={overrides?.modelLabel ?? ""}
+      codexCommandPath="C:\\Tools\\codex.cmd"
+      onProviderChange={() => undefined}
+      onModelLabelChange={() => undefined}
+      onCodexCommandPathChange={() => undefined}
+      onManualEntryChange={() => undefined}
+      onSave={() => undefined}
+      onDetect={() => undefined}
+      onTestConnection={() => undefined}
+      onReloadCatalog={() => undefined}
+    />,
+  );
+}
 
 function renderProviderSetupPanel(settings: ProviderSettings) {
   return renderToStaticMarkup(
