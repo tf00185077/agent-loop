@@ -201,6 +201,7 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
   // is an explicit user choice for unlisted or experimental slugs. A blank
   // value always means "use Codex CLI default".
   const showManualInput = manualEntry || !hasCatalogModels;
+  const catalogNote = catalogStatusNote(catalogBusy, modelCatalog);
 
   return (
     <section style={panelStyle}>
@@ -284,6 +285,7 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
               Enter model manually
             </label>
           )}
+          <div style={catalogNoteStyle}>{catalogNote}</div>
           <label style={labelStyle}>
             Command path
             <input
@@ -415,6 +417,12 @@ const checkboxLabelStyle: React.CSSProperties = {
   color: "#555",
 };
 
+const catalogNoteStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: "#777",
+  marginBottom: 12,
+};
+
 const inputStyle: React.CSSProperties = {
   padding: "6px 10px",
   border: "1px solid #ccc",
@@ -508,6 +516,24 @@ function providerStatusView(state: ProviderSettings["status"]["state"]) {
         color: "#777",
       };
   }
+}
+
+function catalogStatusNote(
+  catalogBusy: boolean,
+  modelCatalog: CodexModelCatalogResult | null,
+): string {
+  if (catalogBusy) {
+    return "Loading models from Codex CLI...";
+  }
+  // Only friendly copy is shown here — raw Codex CLI output is never surfaced.
+  if (!modelCatalog || modelCatalog.status.state === "unavailable") {
+    return "Model catalog unavailable. Enter a model manually or leave blank for the Codex CLI default.";
+  }
+  if (modelCatalog.status.state === "empty") {
+    return "No selectable models were found. Enter a model manually or leave blank for the Codex CLI default.";
+  }
+  const count = modelCatalog.models.length;
+  return `${count} model${count === 1 ? "" : "s"} available from Codex CLI.`;
 }
 
 function redactCredentialMaterial(value: string): string {
