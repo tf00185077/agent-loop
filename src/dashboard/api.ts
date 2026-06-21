@@ -75,6 +75,28 @@ export interface CodexLocalConnectionTestResult {
   status: ProviderStatus;
 }
 
+export interface CodexModelCatalogEntry {
+  slug: string;
+  displayName: string;
+  description: string | null;
+  priority: number;
+}
+
+export type CodexModelCatalogStatusState = "available" | "empty" | "unavailable";
+
+export interface CodexModelCatalogStatus {
+  state: CodexModelCatalogStatusState;
+  checkedAt: string | null;
+  message: string | null;
+}
+
+export interface CodexModelCatalogResult {
+  models: CodexModelCatalogEntry[];
+  defaultModelSlug: string | null;
+  source: "manual" | "path" | "common" | "none";
+  status: CodexModelCatalogStatus;
+}
+
 export async function listGoals(): Promise<Goal[]> {
   const res = await fetch(`${BASE}/goals`);
   if (!res.ok) throw new Error(`listGoals: ${res.status}`);
@@ -144,5 +166,11 @@ export async function testCodexLocalConnection(): Promise<CodexLocalConnectionTe
     method: "POST",
   });
   if (!res.ok) throw new Error(`testCodexLocalConnection: ${res.status}`);
+  return res.json();
+}
+
+export async function loadCodexModelCatalog(): Promise<CodexModelCatalogResult> {
+  const res = await fetch(`${BASE}/provider-settings/models`);
+  if (!res.ok) throw new Error(`loadCodexModelCatalog: ${res.status}`);
   return res.json();
 }
