@@ -6,10 +6,10 @@
 
 ## 2. Add the Codex direct-spawn provider
 
-- [ ] 2.1 Create `src/runtime/codex-cli-provider.ts` implementing `ModelProvider`, spawning the resolved Codex command with `codex exec --skip-git-repo-check --output-last-message <tmp> -` and the prompt on stdin
-- [ ] 2.2 Port model-argument selection (blank / `gpt-5-codex-subscription` / `mock-v1` => omit `--model`; concrete label => `--model <label>`) into the provider, replacing the wrapper's `resolveModelArgument`
-- [ ] 2.3 Read the last-message temp file, map non-zero exit / empty output to a provider error, and return `{ text, metadata, conversationState: undefined }`
-- [ ] 2.4 Add provider tests using a fake `codex` binary (mirror the existing wrapper tests) covering default-model omission, concrete `--model`, and error mapping
+- [x] 2.1 Create `src/runtime/codex-cli-provider.ts` implementing `ModelProvider`, spawning the resolved Codex command with `codex exec --skip-git-repo-check --output-last-message <tmp> -` and the prompt on stdin
+- [x] 2.2 Port model-argument selection (blank / `gpt-5-codex-subscription` / `mock-v1` => omit `--model`; concrete label => `--model <label>`) into the provider, replacing the wrapper's `resolveModelArgument`
+- [x] 2.3 Read the last-message temp file, map non-zero exit / empty output to a provider error, and return `{ text, metadata, conversationState: undefined }`
+- [x] 2.4 Add provider tests using a fake `codex` binary (mirror the existing wrapper tests) covering default-model omission, concrete `--model`, and error mapping
 
 ## 3. Self-heal the saved Codex command path
 

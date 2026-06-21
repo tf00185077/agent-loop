@@ -81,14 +81,21 @@ export type CodexModelCatalogSource = "manual" | "path" | "common" | "none";
 export const LEGACY_CODEX_MODEL_LABEL = "gpt-5-codex-subscription";
 
 /**
+ * The mock provider's placeholder model label. It must never be forced as a
+ * Codex `--model` argument if it ever appears on Codex Local settings.
+ */
+export const MOCK_MODEL_LABEL = "mock-v1";
+
+/**
  * Returns the model slug to pass as `--model`, or null when Codex CLI should
- * use its own default model. A blank label or the legacy unsupported default
- * yields null.
+ * use its own default model. A blank label, the legacy unsupported default, or
+ * the mock placeholder all yield null.
  */
 export function resolveCodexModelArgument(modelLabel: string | null | undefined): string | null {
   const trimmed = modelLabel?.trim();
   if (!trimmed) return null;
   if (trimmed === LEGACY_CODEX_MODEL_LABEL) return null;
+  if (trimmed === MOCK_MODEL_LABEL) return null;
   return trimmed;
 }
 
