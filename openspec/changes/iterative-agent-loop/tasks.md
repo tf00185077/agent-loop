@@ -14,7 +14,7 @@
 ## 3. Quorum completion gate
 
 - [x] 3.1 Implement voter resolution preferring three distinct providers (codex-local / claude-local / openai-compatible), with persona-based fallback when fewer are configured
-- [ ] 3.2 Run the three voters (in parallel) on the binary acceptance proposition; map error/timeout to abstain; tally majority with abstain counted as "not done"
+- [x] 3.2 Run the three voters (in parallel) on the binary acceptance proposition; map error/timeout to abstain; tally majority with abstain counted as "not done"
 - [ ] 3.3 Return and record the per-voter ballots plus the final majority decision
 - [ ] 3.4 Tests: majority-done, majority-not-done, abstaining voter counts as not done, decorrelation (distinct voters used)
 
