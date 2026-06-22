@@ -1,9 +1,7 @@
 ## Purpose
 
 Define the backend-only model provider integration boundary for provider-backed runtime smoke execution, including OpenAI-compatible adapters, Codex direct-spawn execution, durable lifecycle events, failure handling, and dashboard credential isolation.
-
 ## Requirements
-
 ### Requirement: Backend provider contract
 The system SHALL define a backend-only model provider contract that runtime code can call without depending on provider-specific HTTP or process details. The contract SHALL carry an opaque, provider-owned conversation-state value that the runtime passes through unchanged: a provider MAY return a conversation-state value in its output, and the runtime MAY supply a previously returned value on a later call so a provider can continue a session. The runtime MUST NOT interpret the conversation-state value.
 
@@ -280,7 +278,6 @@ The system SHALL avoid forcing stale or unsupported Codex Local model labels whe
 - **THEN** provider-backed goal execution and connection testing do not force that label as a Codex CLI model
 - **AND** the dashboard allows the user to replace it with a catalog model or Codex CLI default
 
-
 ### Requirement: Reusable CLI command detection
 The system SHALL provide a reusable CLI command detection mechanism, parameterized by candidate command names, a capability probe, and common install locations, so that each subscription-backed local CLI provider is configured rather than reimplemented. Codex detection SHALL be expressed as a configuration of this mechanism without changing its existing behavior.
 
@@ -348,3 +345,36 @@ The system SHALL persist the selected Claude Local provider settings so a user c
 - **WHEN** the backend detects the Claude CLI and `claude` is available on PATH or a common install location such as `~/.local/bin`
 - **THEN** the provider status reports Claude CLI as detected and the detected command is used for Claude Local goal execution
 - **AND** when Claude CLI cannot be found automatically, the user may save a manual command path that the backend uses instead
+
+### Requirement: Start goal accepts provider override
+The backend SHALL accept an optional provider override in the start-goal request and use it for that run instead of saved provider settings.
+
+#### Scenario: Start with Codex Local override
+- **WHEN** a draft goal is started with a Codex Local override containing a model label and command path
+- **THEN** the backend invokes the Codex Local provider using that override for the run
+- **AND** the run metadata records the override provider and model actually used
+
+#### Scenario: Start with mock override
+- **WHEN** a draft goal is started with a mock provider override
+- **THEN** the backend uses the mock runtime for that run even if saved provider settings point to another provider
+
+#### Scenario: Start without override preserves existing behavior
+- **WHEN** a draft goal is started without a provider override
+- **THEN** the backend selects the runtime from saved provider settings as before
+
+### Requirement: Provider override is not persisted as settings
+The system SHALL NOT persist per-run provider overrides into provider settings unless the user explicitly saves provider settings.
+
+#### Scenario: Override differs from saved settings
+- **WHEN** a goal is started with a provider override whose model differs from saved provider settings
+- **THEN** the run uses the override model
+- **AND** a later provider settings read still returns the saved model
+
+### Requirement: Provider override is credential-safe
+The backend SHALL sanitize and validate provider override fields before constructing a runtime.
+
+#### Scenario: Override command path contains secret-like arguments
+- **WHEN** a start request includes a command path with credential-like arguments
+- **THEN** the backend removes or redacts unsafe secret-like arguments before using or recording the override
+- **AND** dashboard responses and durable events do not expose credential material
+
