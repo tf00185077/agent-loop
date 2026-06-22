@@ -1,4 +1,6 @@
 export interface ModelProvider {
+  /** Display-only provider/model metadata known before execution, if available. */
+  metadata?: ModelProviderMetadata;
   complete(input: ModelProviderInput): Promise<ModelProviderOutput>;
 }
 

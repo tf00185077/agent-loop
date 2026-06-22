@@ -18,8 +18,13 @@ export class OpenAICompatibleProviderError extends Error {
 export function createOpenAICompatibleProvider(deps: OpenAICompatibleProviderDeps): ModelProvider {
   const fetchImpl = deps.fetch ?? globalThis.fetch;
   const config = deps.config;
+  const metadata = {
+    provider: config.provider,
+    model: config.model,
+  };
 
   return {
+    metadata,
     async complete(input) {
       validateConfig(config);
 
@@ -43,10 +48,7 @@ export function createOpenAICompatibleProvider(deps: OpenAICompatibleProviderDep
 
       return {
         text,
-        metadata: {
-          provider: config.provider,
-          model: config.model,
-        },
+        metadata,
       } satisfies ModelProviderOutput;
     },
   };

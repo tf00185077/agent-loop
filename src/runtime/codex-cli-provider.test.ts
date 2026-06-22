@@ -14,6 +14,21 @@ const input: ModelProviderInput = {
   prompt: "Reply exactly once.",
 };
 
+test("provider exposes display metadata before execution without command details", () => {
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: "C:\\secret\\codex.cmd --token hidden",
+      modelLabel: "gpt-5-codex",
+    },
+  });
+
+  assert.deepEqual(provider.metadata, { provider: "codex-cli", model: "gpt-5-codex" });
+  const serializedMetadata = JSON.stringify(provider.metadata);
+  assert.equal(serializedMetadata.includes("commandPath"), false);
+  assert.equal(serializedMetadata.includes("secret"), false);
+  assert.equal(serializedMetadata.includes("token"), false);
+});
+
 /**
  * Writes an executable fake `codex` that captures argv + stdin to capturePath
  * and writes `response` to the `--output-last-message` file. Returned path is

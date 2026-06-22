@@ -212,6 +212,47 @@ test("provider runtime records provider errors and marks run and goal failed", a
   db.close();
 });
 
+test("provider runtime records known provider metadata on error events without credentials", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+      async complete() {
+        throw new Error("provider exploded");
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Handle known provider failure",
+    description: "Persist display-safe provider metadata",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  await runtime.run(goal.id);
+
+  const error = eventRepo.listForGoal(goal.id).find((event) => event.type === "error");
+  assert.ok(error?.runId, "error event must include runId");
+  assert.deepEqual(error.data, {
+    runId: error.runId,
+    provider: "codex-cli",
+    model: "gpt-5-codex",
+  });
+  const serializedData = JSON.stringify(error.data);
+  assert.equal(serializedData.includes("commandPath"), false);
+  assert.equal(serializedData.includes("apiKey"), false);
+  assert.equal(serializedData.includes("Authorization"), false);
+
+  const run = runRepo.getById(error.runId);
+  assert.equal(run?.provider, "codex-cli");
+  assert.equal(run?.model, "gpt-5-codex");
+
+  db.close();
+});
+
 test("provider runtime forwards conversation state verbatim and surfaces the returned value", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const incomingState = { sessionId: "abc-123", nested: { resume: true } };

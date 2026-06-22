@@ -7,9 +7,9 @@
 
 ## 2. Run Metadata Recording
 
-- [ ] 2.1 Ensure mock runtime run-level events include displayable provider/model metadata
-- [ ] 2.2 Ensure provider-backed error events include displayable provider/model metadata when the runtime knows it
-- [ ] 2.3 Add runtime/persistence tests proving run/event metadata stays non-sensitive and usable for display
+- [x] 2.1 Ensure mock runtime run-level events include displayable provider/model metadata
+- [x] 2.2 Ensure provider-backed error events include displayable provider/model metadata when the runtime knows it
+- [x] 2.3 Add runtime/persistence tests proving run/event metadata stays non-sensitive and usable for display
 
 ## 3. Dashboard Run Metadata Display
 

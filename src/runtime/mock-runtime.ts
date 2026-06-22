@@ -22,6 +22,8 @@ const MOCK_STEPS = [
   { title: "Execute work", description: "Carry out the planned approach" },
 ];
 
+const MOCK_METADATA = { provider: "mock", model: "mock-v1" };
+
 // Deterministic block: goals whose title starts with "block" go to blocked state
 function shouldBlock(title: string): boolean {
   return title.trim().toLowerCase().startsWith("block");
@@ -38,8 +40,8 @@ export function createMockRuntime(deps: MockRuntimeDeps): MockRuntime {
       // 4.2 Create run and record run.started
       const run = runRepo.create({
         goalId,
-        provider: "mock",
-        model: "mock-v1",
+        provider: MOCK_METADATA.provider,
+        model: MOCK_METADATA.model,
       });
 
       eventRepo.create({
@@ -47,7 +49,7 @@ export function createMockRuntime(deps: MockRuntimeDeps): MockRuntime {
         runId: run.id,
         type: "run.started",
         message: "Mock run started",
-        data: { runId: run.id },
+        data: { runId: run.id, ...MOCK_METADATA },
       });
 
       // 4.5 Blocked path — deterministic
@@ -62,7 +64,7 @@ export function createMockRuntime(deps: MockRuntimeDeps): MockRuntime {
           runId: run.id,
           type: "goal.blocked",
           message: "Goal could not proceed — blocked by mock runtime",
-          data: { runId: run.id },
+          data: { runId: run.id, ...MOCK_METADATA },
         });
         return;
       }
@@ -118,7 +120,7 @@ export function createMockRuntime(deps: MockRuntimeDeps): MockRuntime {
         runId: run.id,
         type: "run.completed",
         message: "Mock run completed successfully",
-        data: { runId: run.id },
+        data: { runId: run.id, ...MOCK_METADATA },
       });
 
       eventRepo.create({
@@ -126,7 +128,7 @@ export function createMockRuntime(deps: MockRuntimeDeps): MockRuntime {
         runId: run.id,
         type: "goal.completed",
         message: "Goal completed successfully",
-        data: { goalId, runId: run.id },
+        data: { goalId, runId: run.id, ...MOCK_METADATA },
       });
     },
   };

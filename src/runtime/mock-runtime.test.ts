@@ -24,6 +24,27 @@ function setup() {
   return { db, goalRepo, eventRepo, runtime };
 }
 
+test("mock run-level events carry display-safe provider and model metadata", async () => {
+  const { db, goalRepo, eventRepo, runtime } = setup();
+
+  const goal = goalRepo.create({ title: "Expose metadata", description: "Make timeline displayable" });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  for (const type of ["run.started", "run.completed", "goal.completed"]) {
+    const event = events.find((candidate) => candidate.type === type);
+    assert.ok(event, `missing ${type}`);
+    assert.equal(event.data.provider, "mock");
+    assert.equal(event.data.model, "mock-v1");
+    assert.equal(JSON.stringify(event.data).includes("token"), false);
+    assert.equal(JSON.stringify(event.data).includes("command"), false);
+  }
+
+  db.close();
+});
+
 test("happy path event timeline covers full lifecycle", async () => {
   const { db, goalRepo, eventRepo, runtime } = setup();
 

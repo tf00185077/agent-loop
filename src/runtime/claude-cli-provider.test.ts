@@ -14,6 +14,21 @@ const input: ModelProviderInput = {
   prompt: "Reply exactly once.",
 };
 
+test("provider exposes display metadata before execution without command details", () => {
+  const provider = createClaudeCliProvider({
+    config: {
+      commandPath: "C:\\secret\\claude.cmd --token hidden",
+      modelLabel: "claude-sonnet-4-6",
+    },
+  });
+
+  assert.deepEqual(provider.metadata, { provider: "claude-cli", model: "claude-sonnet-4-6" });
+  const serializedMetadata = JSON.stringify(provider.metadata);
+  assert.equal(serializedMetadata.includes("commandPath"), false);
+  assert.equal(serializedMetadata.includes("secret"), false);
+  assert.equal(serializedMetadata.includes("token"), false);
+});
+
 /**
  * Writes an executable fake `claude` that captures argv + stdin to capturePath
  * and prints `response` to stdout (mirroring `claude --print --output-format

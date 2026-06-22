@@ -28,8 +28,13 @@ export class ClaudeCliProviderError extends Error {
 
 export function createClaudeCliProvider(deps: ClaudeCliProviderDeps): ModelProvider {
   const config = deps.config;
+  const metadata = {
+    provider: PROVIDER_NAME,
+    model: describeClaudeModelLabel(config.modelLabel),
+  };
 
   return {
+    metadata,
     async complete(input) {
       if (!config.commandPath?.trim()) {
         throw new ClaudeCliProviderError("Claude command path is required");
@@ -39,10 +44,7 @@ export function createClaudeCliProvider(deps: ClaudeCliProviderDeps): ModelProvi
 
       return {
         text,
-        metadata: {
-          provider: PROVIDER_NAME,
-          model: describeClaudeModelLabel(config.modelLabel),
-        },
+        metadata,
         conversationState: undefined,
       } satisfies ModelProviderOutput;
     },

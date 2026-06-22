@@ -45,10 +45,11 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
         output = await provider.complete(input);
       } catch (err) {
         const message = errorMessage(err);
+        const metadata = provider.metadata ?? { provider: "unknown", model: "unknown" };
         const run = runRepo.create({
           goalId,
-          provider: "unknown",
-          model: "unknown",
+          provider: metadata.provider,
+          model: metadata.model,
         });
         const finishedAt = new Date().toISOString();
         runRepo.updateStatus(run.id, "failed", { finishedAt, error: message });
@@ -58,7 +59,7 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
           runId: run.id,
           type: "error",
           message,
-          data: { runId: run.id },
+          data: { runId: run.id, provider: metadata.provider, model: metadata.model },
         });
         return undefined;
       }

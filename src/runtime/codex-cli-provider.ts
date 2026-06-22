@@ -31,8 +31,13 @@ export class CodexCliProviderError extends Error {
 
 export function createCodexCliProvider(deps: CodexCliProviderDeps): ModelProvider {
   const config = deps.config;
+  const metadata = {
+    provider: PROVIDER_NAME,
+    model: describeCodexModelLabel(config.modelLabel),
+  };
 
   return {
+    metadata,
     async complete(input) {
       if (!config.commandPath?.trim()) {
         throw new CodexCliProviderError("Codex command path is required");
@@ -42,10 +47,7 @@ export function createCodexCliProvider(deps: CodexCliProviderDeps): ModelProvide
 
       return {
         text,
-        metadata: {
-          provider: PROVIDER_NAME,
-          model: describeCodexModelLabel(config.modelLabel),
-        },
+        metadata,
         conversationState: undefined,
       } satisfies ModelProviderOutput;
     },
