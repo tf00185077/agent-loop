@@ -3,6 +3,7 @@ import type {
   ImplementerResult,
   PlannerResult,
   QuorumVoteResult,
+  ScopeVoteResult,
   Step,
 } from "../domain/index.js";
 import type { GoalRepository } from "../persistence/goal-repository.js";
@@ -14,6 +15,7 @@ import type {
 import type { Implementer } from "./agent-implementer.js";
 import type { Planner } from "./agent-planner.js";
 import type { ModelProviderMetadata } from "./model-provider.js";
+import { buildScopeVotedEventData } from "./quorum-voters.js";
 
 export interface CompletionGateInput {
   goal: Goal;
@@ -25,6 +27,17 @@ export interface CompletionGate {
   vote(input: CompletionGateInput): Promise<QuorumVoteResult>;
 }
 
+export interface ScopeGateInput {
+  goal: Goal;
+  decision: Extract<PlannerResult, { decision: "DECOMPOSE" }>;
+  assessmentAttempt: number;
+  refinementRound: number;
+}
+
+export interface ScopeGate {
+  vote(input: ScopeGateInput): Promise<ScopeVoteResult>;
+}
+
 export interface AgentLoopRuntimeDeps {
   goalRepo: GoalRepository;
   runRepo: RunRepository;
@@ -33,10 +46,13 @@ export interface AgentLoopRuntimeDeps {
   metadata: ModelProviderMetadata;
   maxSteps?: number;
   maxDepth?: number;
+  maxScopeAssessmentAttempts?: number;
+  maxScopeRefinementRounds?: number;
   runStartedMessage?: string;
   planner: Planner;
   implementer: Implementer;
   gate: CompletionGate;
+  scopeGate?: ScopeGate;
 }
 
 export interface AgentLoopRuntime {
@@ -44,9 +60,12 @@ export interface AgentLoopRuntime {
 }
 
 export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRuntime {
-  const { goalRepo, runRepo, stepRepo, eventRepo, metadata, planner, implementer, gate } = deps;
+  const { goalRepo, runRepo, stepRepo, eventRepo, metadata, planner, implementer, scopeGate } =
+    deps;
   const maxSteps = deps.maxSteps ?? 1;
   const maxDepth = deps.maxDepth ?? 0;
+  const maxScopeAssessmentAttempts = deps.maxScopeAssessmentAttempts ?? 3;
+  const maxScopeRefinementRounds = deps.maxScopeRefinementRounds ?? 3;
   const runStartedMessage = deps.runStartedMessage ?? "Agent loop run started";
 
   return {
@@ -73,7 +92,10 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
       });
 
       let depth = 0;
-      for (let order = 1; order <= maxSteps; order += 1) {
+      let order = 1;
+      let scopeAssessmentAttempt = 0;
+      let scopeRefinementRound = 0;
+      while (order <= maxSteps) {
         const priorSteps = stepRepo.listForRun(run.id);
         const decision = await planner.plan({ goal, priorSteps });
 
@@ -85,6 +107,43 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
             message: `Planner decision: ${decision.decision}`,
             data: plannerDecisionData(decision),
           });
+          if (decision.scopeAssessment === "too_large") {
+            scopeAssessmentAttempt += 1;
+            if (scopeAssessmentAttempt < maxScopeAssessmentAttempts) {
+              continue;
+            }
+            const vote = await runScopeGate({
+              goal,
+              decision,
+              assessmentAttempt: scopeAssessmentAttempt,
+              refinementRound: scopeRefinementRound,
+              scopeGate,
+            });
+            eventRepo.create({
+              goalId,
+              runId: run.id,
+              type: "scope.voted",
+              message: `Scope voted: ${vote.decision}`,
+              data: buildScopeVotedEventData(vote),
+            });
+            if (vote.shouldRefine) {
+              scopeRefinementRound += 1;
+              if (scopeRefinementRound >= maxScopeRefinementRounds) {
+                finishBounded({
+                  goalId,
+                  runId: run.id,
+                  bound: "maxScopeRefinementRounds",
+                  value: maxScopeRefinementRounds,
+                  goalRepo,
+                  runRepo,
+                  eventRepo,
+                });
+                return;
+              }
+              scopeAssessmentAttempt = 0;
+              continue;
+            }
+          }
           if (depth >= maxDepth) {
             finishBounded({
               goalId,
@@ -191,6 +250,18 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
   };
 }
 
+async function runScopeGate(input: ScopeGateInput & { scopeGate?: ScopeGate }): Promise<ScopeVoteResult> {
+  if (!input.scopeGate) {
+    throw new Error("Scope gate is required for too-large planner assessments");
+  }
+  return input.scopeGate.vote({
+    goal: input.goal,
+    decision: input.decision,
+    assessmentAttempt: input.assessmentAttempt,
+    refinementRound: input.refinementRound,
+  });
+}
+
 function plannerDecisionData(result: PlannerResult) {
   return { ...result };
 }
@@ -237,7 +308,7 @@ function finishCompleted({
 }
 
 interface FinishBoundedInput extends FinishInput {
-  bound: "maxSteps" | "maxDepth";
+  bound: "maxSteps" | "maxDepth" | "maxScopeRefinementRounds";
   value: number;
 }
 
