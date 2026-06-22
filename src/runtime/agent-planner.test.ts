@@ -75,3 +75,24 @@ test("planner calls the provider without session state and parses a direct step"
     reason: "This is a small isolated runtime piece.",
   });
 });
+
+test("planner defaults malformed provider output to blocked with raw output", async () => {
+  const rawOutput = "I think we should probably keep going, but I forgot the format.";
+  const provider: ModelProvider = {
+    async complete() {
+      return {
+        text: rawOutput,
+        metadata: { provider: "codex-local", model: "codex" },
+      };
+    },
+  };
+
+  const planner = createPlanner({ provider });
+  const result = await planner.plan({ goal, priorSteps: [] });
+
+  assert.deepEqual(result, {
+    decision: "BLOCKED",
+    reason: "Planner output could not be parsed: Missing planner output line: DECISION:",
+    rawOutput,
+  });
+});

@@ -27,6 +27,7 @@ export interface NeedsOpenSpecPlannerResult {
 export interface BlockedPlannerResult {
   decision: "BLOCKED";
   reason: string;
+  rawOutput?: string;
 }
 
 export type PlannerResult =

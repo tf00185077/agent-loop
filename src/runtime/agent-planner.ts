@@ -66,6 +66,18 @@ export function buildPlannerPrompt({ goal, priorSteps }: PlannerPromptInput): st
 }
 
 export function parsePlannerOutput(output: string): PlannerResult {
+  try {
+    return parseStrictPlannerOutput(output);
+  } catch (err) {
+    return {
+      decision: "BLOCKED",
+      reason: `Planner output could not be parsed: ${errorMessage(err)}`,
+      rawOutput: output,
+    };
+  }
+}
+
+function parseStrictPlannerOutput(output: string): PlannerResult {
   const decision = lineValue(output, "DECISION");
   const reason = lineValue(output, "REASON");
 
@@ -94,6 +106,10 @@ export function parsePlannerOutput(output: string): PlannerResult {
   }
 
   throw new Error(`Unsupported planner decision: ${decision}`);
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function lineValue(output: string, label: string): string {
