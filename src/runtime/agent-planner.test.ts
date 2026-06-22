@@ -41,6 +41,7 @@ test("buildPlannerPrompt includes the goal, prior persisted steps, and output co
   assert.match(prompt, /1\. Inspect current runtime/);
   assert.match(prompt, /Result: Provider runtime is single-shot\./);
   assert.match(prompt, /DECISION: IMPLEMENT_DIRECTLY\|DECOMPOSE\|NEEDS_OPENSPEC\|BLOCKED/);
+  assert.match(prompt, /SCOPE: ready\|too_large\|too_small/);
   assert.match(prompt, /NEXT_STEP:/);
   assert.match(prompt, /SUB_STEPS:/);
   assert.match(prompt, /REASON:/);
@@ -148,6 +149,46 @@ test("parsePlannerOutput parses DECOMPOSE", () => {
       decision: "DECOMPOSE",
       subSteps: ["Add planner", "Add implementer"],
       reason: "The work has separable parts.",
+    },
+  );
+});
+
+test("parsePlannerOutput parses DECOMPOSE with a too-large scope assessment", () => {
+  assert.deepEqual(
+    parsePlannerOutput(
+      [
+        "DECISION: DECOMPOSE",
+        "SCOPE: too_large",
+        "SUB_STEPS:",
+        "- Split planner context",
+        "- Split scope voting",
+        "REASON: The current task is too broad for one implementer.",
+      ].join("\n"),
+    ),
+    {
+      decision: "DECOMPOSE",
+      scopeAssessment: "too_large",
+      subSteps: ["Split planner context", "Split scope voting"],
+      reason: "The current task is too broad for one implementer.",
+    },
+  );
+});
+
+test("parsePlannerOutput parses IMPLEMENT_DIRECTLY with a too-small scope assessment", () => {
+  assert.deepEqual(
+    parsePlannerOutput(
+      [
+        "DECISION: IMPLEMENT_DIRECTLY",
+        "SCOPE: too_small",
+        "NEXT_STEP: Apply the one-line event type update",
+        "REASON: The task is tiny enough to proceed without refinement.",
+      ].join("\n"),
+    ),
+    {
+      decision: "IMPLEMENT_DIRECTLY",
+      scopeAssessment: "too_small",
+      nextStep: "Apply the one-line event type update",
+      reason: "The task is tiny enough to proceed without refinement.",
     },
   );
 });

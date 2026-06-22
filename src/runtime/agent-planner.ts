@@ -1,4 +1,4 @@
-import type { Goal, PlannerResult, Step } from "../domain/index.js";
+import type { Goal, PlannerResult, PlannerScopeAssessment, Step } from "../domain/index.js";
 import type { ModelProvider } from "./model-provider.js";
 
 export interface PlannerPromptInput {
@@ -73,6 +73,7 @@ export function buildPlannerPrompt({
     "You are the planner for a bounded iterative agent loop.",
     "Choose exactly one next action using this strict output convention:",
     "DECISION: IMPLEMENT_DIRECTLY|DECOMPOSE|NEEDS_OPENSPEC|BLOCKED",
+    "SCOPE: ready|too_large|too_small",
     "NEXT_STEP: <required for IMPLEMENT_DIRECTLY>",
     "SUB_STEPS: <one sub-step per line, prefixed with -; required for DECOMPOSE>",
     "REASON: <brief reason>",
@@ -107,6 +108,7 @@ function parseStrictPlannerOutput(output: string): PlannerResult {
   if (decision === "IMPLEMENT_DIRECTLY") {
     return {
       decision,
+      ...scopeAssessmentData(output),
       nextStep: lineValue(output, "NEXT_STEP"),
       reason,
     };
@@ -115,6 +117,7 @@ function parseStrictPlannerOutput(output: string): PlannerResult {
   if (decision === "DECOMPOSE") {
     return {
       decision,
+      ...scopeAssessmentData(output),
       subSteps: parseSubSteps(output),
       reason,
     };
@@ -131,6 +134,15 @@ function parseStrictPlannerOutput(output: string): PlannerResult {
   throw new Error(`Unsupported planner decision: ${decision}`);
 }
 
+function scopeAssessmentData(output: string): { scopeAssessment?: PlannerScopeAssessment } {
+  const value = optionalLineValue(output, "SCOPE");
+  if (value === undefined) return {};
+  if (value === "ready" || value === "too_large" || value === "too_small") {
+    return { scopeAssessment: value };
+  }
+  throw new Error(`Unsupported planner scope assessment: ${value}`);
+}
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -141,6 +153,17 @@ function lineValue(output: string, label: string): string {
     .split(/\r?\n/)
     .find((candidate) => candidate.trim().startsWith(prefix));
   if (!line) throw new Error(`Missing planner output line: ${prefix}`);
+  const value = line.trim().slice(prefix.length).trim();
+  if (!value) throw new Error(`Empty planner output line: ${prefix}`);
+  return value;
+}
+
+function optionalLineValue(output: string, label: string): string | undefined {
+  const prefix = `${label}:`;
+  const line = output
+    .split(/\r?\n/)
+    .find((candidate) => candidate.trim().startsWith(prefix));
+  if (!line) return undefined;
   const value = line.trim().slice(prefix.length).trim();
   if (!value) throw new Error(`Empty planner output line: ${prefix}`);
   return value;

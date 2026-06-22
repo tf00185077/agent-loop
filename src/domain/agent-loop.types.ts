@@ -9,12 +9,14 @@ export type PlannerDecision = (typeof plannerDecisionValues)[number];
 
 export interface ImplementDirectlyPlannerResult {
   decision: "IMPLEMENT_DIRECTLY";
+  scopeAssessment?: PlannerScopeAssessment;
   nextStep: string;
   reason: string;
 }
 
 export interface DecomposePlannerResult {
   decision: "DECOMPOSE";
+  scopeAssessment?: PlannerScopeAssessment;
   subSteps: string[];
   reason: string;
 }
