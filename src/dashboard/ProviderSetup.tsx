@@ -5,13 +5,14 @@ import {
   loadCodexModelCatalog,
   saveProviderSettings,
   testCodexLocalConnection,
+  type CodexLocalConnectionTestResult,
   type CodexModelCatalogResult,
   type ProviderSettings,
   type SaveProviderSettingsInput,
 } from "./api";
 
 type LocalProvider = ProviderSettings["provider"];
-type BusyAction = "save" | "detect" | "test" | null;
+type BusyAction = "save" | "auto-test" | "detect" | "test" | null;
 
 interface ProviderSetupPanelProps {
   settings: ProviderSettings;
@@ -125,6 +126,7 @@ export default function ProviderSetup() {
         save: saveProviderSettings,
         testConnection: testCodexLocalConnection,
         onSaved: applySettings,
+        onBeforeTest: () => setBusy("auto-test"),
       });
     } catch (err) {
       setError(String(err));
@@ -222,8 +224,9 @@ function toSaveProviderSettingsInput(draft: SaveProviderSettingsDraft): SaveProv
 
 interface SaveProviderSettingsWithOptionalCodexTestDeps {
   save: (input: SaveProviderSettingsInput) => Promise<ProviderSettings>;
-  testConnection: () => Promise<unknown>;
+  testConnection: () => Promise<CodexLocalConnectionTestResult>;
   onSaved?: (settings: ProviderSettings) => void;
+  onBeforeTest?: () => void;
 }
 
 export async function saveProviderSettingsWithOptionalCodexTest(
@@ -234,7 +237,11 @@ export async function saveProviderSettingsWithOptionalCodexTest(
   deps.onSaved?.(saved);
 
   if (saved.provider === "codex-local" && saved.codexCommandPath) {
-    await deps.testConnection();
+    deps.onBeforeTest?.();
+    const tested = await deps.testConnection();
+    const testedSettings = { ...saved, status: tested.status };
+    deps.onSaved?.(testedSettings);
+    return testedSettings;
   }
 
   return saved;
@@ -289,6 +296,10 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
           {busy === "save" ? "Saving..." : "Save"}
         </button>
       </div>
+
+      {busy === "auto-test" && (
+        <div style={autoTestNoticeStyle}>Testing saved model connection...</div>
+      )}
 
       <div style={segmentedStyle} role="group" aria-label="Provider">
         <button
@@ -524,6 +535,15 @@ const labelRowStyle: React.CSSProperties = {
   alignItems: "flex-end",
   gap: 8,
   marginBottom: 12,
+};
+
+const autoTestNoticeStyle: React.CSSProperties = {
+  marginTop: 12,
+  padding: "8px 10px",
+  background: "#eef6ff",
+  borderLeft: "3px solid #1976d2",
+  color: "#24415f",
+  fontSize: 13,
 };
 
 const catalogNoteStyle: React.CSSProperties = {

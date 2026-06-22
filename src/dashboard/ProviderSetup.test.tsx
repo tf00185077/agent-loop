@@ -326,9 +326,91 @@ test("saving Codex Local settings triggers a connection test after save succeeds
       },
       testConnection: async () => {
         calls.push("test");
+        return {
+          status: {
+            state: "connected",
+            detected: true,
+            checkedAt: "2026-06-22T01:52:33.000Z",
+            message: "Codex Local connection test succeeded.",
+          },
+        };
       },
     },
   );
 
   assert.deepEqual(calls, ["save", "test"]);
+});
+
+test("auto-testing saved Codex settings has a distinct visible state and keeps retry visible", () => {
+  const html = renderToStaticMarkup(
+    <ProviderSetupPanel
+      settings={{
+        provider: "codex-local",
+        modelLabel: "gpt-5-codex",
+        codexCommandPath: "C:\\Tools\\codex.cmd",
+        status: { state: "not_checked", detected: false, checkedAt: null, message: null },
+      }}
+      busy="auto-test"
+      error={null}
+      modelCatalog={{
+        models: [
+          { slug: "gpt-5-codex", displayName: "GPT-5 Codex", description: null, priority: 1 },
+        ],
+        defaultModelSlug: "gpt-5-codex",
+        source: "manual",
+        status: { state: "available", checkedAt: null, message: null },
+      }}
+      catalogBusy={false}
+      draftProvider="codex-local"
+      modelLabel="gpt-5-codex"
+      codexCommandPath="C:\\Tools\\codex.cmd"
+      claudeCommandPath=""
+      onProviderChange={() => undefined}
+      onModelLabelChange={() => undefined}
+      onCodexCommandPathChange={() => undefined}
+      onClaudeCommandPathChange={() => undefined}
+      onSave={() => undefined}
+      onDetect={() => undefined}
+      onTestConnection={() => undefined}
+      onReloadCatalog={() => undefined}
+    />,
+  );
+
+  assert.match(html, /Testing saved model/);
+  assert.match(html, /Test connection/);
+  assert.doesNotMatch(html, /Saving\.\.\./);
+});
+
+test("auto-test result updates the rendered provider status", async () => {
+  const applied: ProviderSettings[] = [];
+
+  await saveProviderSettingsWithOptionalCodexTest(
+    {
+      provider: "codex-local",
+      modelLabel: "gpt-5-codex",
+      codexCommandPath: "C:\\Tools\\codex.cmd",
+    },
+    {
+      save: async () => ({
+        provider: "codex-local",
+        modelLabel: "gpt-5-codex",
+        codexCommandPath: "C:\\Tools\\codex.cmd",
+        status: { state: "not_checked", detected: false, checkedAt: null, message: null },
+      }),
+      testConnection: async () => ({
+        status: {
+          state: "connected",
+          detected: true,
+          checkedAt: "2026-06-22T01:52:33.000Z",
+          message: "Codex Local connection test succeeded.",
+        },
+      }),
+      onSaved: (settings) => applied.push(settings),
+    },
+  );
+
+  assert.deepEqual(
+    applied.map((settings) => settings.status.state),
+    ["not_checked", "connected"],
+  );
 });

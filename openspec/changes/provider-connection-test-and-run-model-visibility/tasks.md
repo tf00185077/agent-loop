@@ -1,7 +1,7 @@
 ## 1. Provider Setup Auto-Test
 
 - [x] 1.1 Update the provider setup save flow so saving Codex Local settings triggers the existing backend connection test after the save succeeds
-- [ ] 1.2 Show distinct save/test busy states and render the sanitized auto-test result without hiding manual Test connection retry
+- [x] 1.2 Show distinct save/test busy states and render the sanitized auto-test result without hiding manual Test connection retry
 - [ ] 1.3 Ensure mock and Claude Local saves do not trigger Codex Local connection tests
 - [ ] 1.4 Add dashboard/API tests covering auto-test success, auto-test failure, and no auto-test for non-Codex providers
 
