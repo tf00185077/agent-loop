@@ -414,3 +414,71 @@ test("auto-test result updates the rendered provider status", async () => {
     ["not_checked", "connected"],
   );
 });
+
+test("saving mock settings does not trigger a Codex connection test", async () => {
+  const calls: string[] = [];
+
+  await saveProviderSettingsWithOptionalCodexTest(
+    { provider: "mock" },
+    {
+      save: async () => {
+        calls.push("save");
+        return {
+          provider: "mock",
+          modelLabel: "mock-v1",
+          codexCommandPath: null,
+          status: { state: "not_checked", detected: false, checkedAt: null, message: null },
+        };
+      },
+      testConnection: async () => {
+        calls.push("test");
+        return {
+          status: {
+            state: "connected",
+            detected: true,
+            checkedAt: "2026-06-22T01:52:33.000Z",
+            message: "Codex Local connection test succeeded.",
+          },
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(calls, ["save"]);
+});
+
+test("saving Claude Local settings does not trigger a Codex connection test", async () => {
+  const calls: string[] = [];
+
+  await saveProviderSettingsWithOptionalCodexTest(
+    {
+      provider: "claude-local",
+      modelLabel: "claude-sonnet-4-6",
+      claudeCommandPath: "/home/u/.local/bin/claude",
+    },
+    {
+      save: async () => {
+        calls.push("save");
+        return {
+          provider: "claude-local",
+          modelLabel: "claude-sonnet-4-6",
+          claudeCommandPath: "/home/u/.local/bin/claude",
+          status: { state: "not_checked", detected: false, checkedAt: null, message: null },
+        };
+      },
+      testConnection: async () => {
+        calls.push("test");
+        return {
+          status: {
+            state: "connected",
+            detected: true,
+            checkedAt: "2026-06-22T01:52:33.000Z",
+            message: "Codex Local connection test succeeded.",
+          },
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(calls, ["save"]);
+});
