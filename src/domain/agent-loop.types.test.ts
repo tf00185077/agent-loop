@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   plannerDecisionValues,
   type EventType,
+  type QuorumGateDecision,
   type PlannerDecision,
   type QuorumVoteDecision,
   type QuorumVoteResult,
@@ -56,12 +57,16 @@ test("quorum vote types model ballots and the final tally", () => {
     ballots,
     tally,
     isDone: false,
+    decision: "not_done",
   } satisfies QuorumVoteResult;
   const abstainDecision = "abstain" satisfies QuorumVoteDecision;
+  const finalDecision = "not_done" satisfies QuorumGateDecision;
 
   assert.equal(result.ballots[0]?.providerKind, "codex-local");
   assert.equal(result.ballots[1]?.persona, "skeptic");
   assert.equal(result.tally.abstain, 1);
   assert.equal(result.isDone, false);
+  assert.equal(result.decision, "not_done");
   assert.equal(abstainDecision, "abstain");
+  assert.equal(finalDecision, "not_done");
 });

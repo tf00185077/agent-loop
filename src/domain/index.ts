@@ -6,6 +6,7 @@ export type {
   NeedsOpenSpecPlannerResult,
   PlannerDecision,
   PlannerResult,
+  QuorumGateDecision,
   QuorumVoteDecision,
   QuorumVoteResult,
   QuorumVoteTally,

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { resolveQuorumVoters, runQuorumVote } from "./quorum-voters.js";
+import {
+  buildGateVotedEventData,
+  resolveQuorumVoters,
+  runQuorumVote,
+} from "./quorum-voters.js";
 
 test("resolveQuorumVoters prefers three distinct configured providers", () => {
   assert.deepEqual(
@@ -83,6 +87,7 @@ test("runQuorumVote runs voters in parallel and tallies majority done", async ()
   assert.deepEqual(await resultPromise, {
     proposition: "Does the result satisfy the goal?",
     isDone: true,
+    decision: "done",
     tally: {
       done: 2,
       notDone: 1,
@@ -134,6 +139,7 @@ test("runQuorumVote maps voter errors to abstain counted as not done", async () 
   });
 
   assert.equal(result.isDone, false);
+  assert.equal(result.decision, "not_done");
   assert.deepEqual(result.tally, {
     done: 0,
     notDone: 2,
@@ -147,5 +153,54 @@ test("runQuorumVote maps voter errors to abstain counted as not done", async () 
     decision: "abstain",
     reason: "Voter failed: timeout",
     error: "timeout",
+  });
+});
+
+test("buildGateVotedEventData records ballots and the final majority decision", async () => {
+  const result = await runQuorumVote({
+    proposition: "Does the result satisfy the goal?",
+    voters: [
+      { voterId: "codex-local", providerKind: "codex-local" },
+      { voterId: "claude-local", providerKind: "claude-local" },
+      { voterId: "codex-local-skeptic", providerKind: "codex-local", persona: "skeptic" },
+    ],
+    vote: async (voter) => ({
+      decision: voter.voterId === "codex-local" ? "done" : "not_done",
+      reason: `${voter.voterId} voted`,
+    }),
+  });
+
+  assert.deepEqual(buildGateVotedEventData(result), {
+    proposition: "Does the result satisfy the goal?",
+    decision: "not_done",
+    isDone: false,
+    tally: {
+      done: 1,
+      notDone: 2,
+      abstain: 0,
+      total: 3,
+      majorityReached: false,
+    },
+    ballots: [
+      {
+        voterId: "codex-local",
+        providerKind: "codex-local",
+        decision: "done",
+        reason: "codex-local voted",
+      },
+      {
+        voterId: "claude-local",
+        providerKind: "claude-local",
+        decision: "not_done",
+        reason: "claude-local voted",
+      },
+      {
+        voterId: "codex-local-skeptic",
+        providerKind: "codex-local",
+        persona: "skeptic",
+        decision: "not_done",
+        reason: "codex-local-skeptic voted",
+      },
+    ],
   });
 });

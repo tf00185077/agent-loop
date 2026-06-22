@@ -43,6 +43,8 @@ export interface ImplementerResult {
 
 export type QuorumVoteDecision = "done" | "not_done" | "abstain";
 
+export type QuorumGateDecision = "done" | "not_done";
+
 export interface QuorumVoterBallot {
   voterId: string;
   providerKind: string;
@@ -66,4 +68,5 @@ export interface QuorumVoteResult {
   ballots: QuorumVoterBallot[];
   tally: QuorumVoteTally;
   isDone: boolean;
+  decision: QuorumGateDecision;
 }

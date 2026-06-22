@@ -1,4 +1,5 @@
 import type {
+  EventData,
   QuorumVoteDecision,
   QuorumVoteResult,
   QuorumVoterBallot,
@@ -89,12 +90,24 @@ export async function runQuorumVote(input: RunQuorumVoteInput): Promise<QuorumVo
     majorityReached: false,
   };
   tally.majorityReached = tally.done >= 2;
+  const decision = tally.majorityReached ? "done" : "not_done";
 
   return {
     proposition: input.proposition,
     ballots,
     tally,
     isDone: tally.majorityReached,
+    decision,
+  };
+}
+
+export function buildGateVotedEventData(result: QuorumVoteResult): EventData {
+  return {
+    proposition: result.proposition,
+    decision: result.decision,
+    isDone: result.isDone,
+    tally: result.tally,
+    ballots: result.ballots,
   };
 }
 
