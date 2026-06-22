@@ -46,6 +46,25 @@ test("buildPlannerPrompt includes the goal, prior persisted steps, and output co
   assert.match(prompt, /REASON:/);
 });
 
+test("buildPlannerPrompt includes bounded scope refinement context", () => {
+  const prompt = buildPlannerPrompt({
+    goal,
+    priorSteps,
+    scopeRefinementContext: {
+      assessmentAttempt: 2,
+      refinementRound: 1,
+      previousPlannerReason: "The work spans planner, voter, and runtime changes.",
+      previousVoterReason: "Two voters agreed the task still crosses too many modules.",
+    },
+  });
+
+  assert.match(prompt, /Scope refinement context/);
+  assert.match(prompt, /Assessment attempt: 2/);
+  assert.match(prompt, /Refinement round: 1/);
+  assert.match(prompt, /Previous planner reason: The work spans planner, voter, and runtime changes\./);
+  assert.match(prompt, /Previous voter reason: Two voters agreed the task still crosses too many modules\./);
+});
+
 test("planner calls the provider without session state and parses a direct step", async () => {
   let seenPrompt = "";
   let seenConversationState: unknown = "not-called";

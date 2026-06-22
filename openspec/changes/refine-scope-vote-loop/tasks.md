@@ -6,7 +6,7 @@
 
 ## 2. Planner Context
 
-- [ ] 2.1 Extend planner input and prompt construction to include bounded prior scope refinement context.
+- [x] 2.1 Extend planner input and prompt construction to include bounded prior scope refinement context.
 - [ ] 2.2 Parse or map planner output so too-large assessments drive refinement and too-small assessments proceed to implementation.
 - [ ] 2.3 Add planner tests for scope assessment output and reason propagation.
 

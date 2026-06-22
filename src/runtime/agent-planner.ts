@@ -4,9 +4,17 @@ import type { ModelProvider } from "./model-provider.js";
 export interface PlannerPromptInput {
   goal: Goal;
   priorSteps: Step[];
+  scopeRefinementContext?: PlannerScopeRefinementContext;
 }
 
 export interface PlannerPlanInput extends PlannerPromptInput {}
+
+export interface PlannerScopeRefinementContext {
+  assessmentAttempt: number;
+  refinementRound: number;
+  previousPlannerReason?: string;
+  previousVoterReason?: string;
+}
 
 export interface Planner {
   plan(input: PlannerPlanInput): Promise<PlannerResult>;
@@ -33,7 +41,11 @@ export function createPlanner({ provider }: PlannerDeps): Planner {
   };
 }
 
-export function buildPlannerPrompt({ goal, priorSteps }: PlannerPromptInput): string {
+export function buildPlannerPrompt({
+  goal,
+  priorSteps,
+  scopeRefinementContext,
+}: PlannerPromptInput): string {
   const stepHistory =
     priorSteps.length === 0
       ? "No prior steps have been persisted for this run."
@@ -45,8 +57,17 @@ export function buildPlannerPrompt({ goal, priorSteps }: PlannerPromptInput): st
               `Status: ${step.status}`,
               `Result: ${step.result ?? "(none)"}`,
             ].join("\n"),
-          )
+      )
           .join("\n\n");
+  const refinementContext = scopeRefinementContext
+    ? [
+        "Scope refinement context:",
+        `Assessment attempt: ${scopeRefinementContext.assessmentAttempt}`,
+        `Refinement round: ${scopeRefinementContext.refinementRound}`,
+        `Previous planner reason: ${scopeRefinementContext.previousPlannerReason ?? "(none)"}`,
+        `Previous voter reason: ${scopeRefinementContext.previousVoterReason ?? "(none)"}`,
+      ].join("\n")
+    : "No scope refinement context is active.";
 
   return [
     "You are the planner for a bounded iterative agent loop.",
@@ -62,6 +83,8 @@ export function buildPlannerPrompt({ goal, priorSteps }: PlannerPromptInput): st
     "",
     "Persisted prior steps:",
     stepHistory,
+    "",
+    refinementContext,
   ].join("\n");
 }
 
