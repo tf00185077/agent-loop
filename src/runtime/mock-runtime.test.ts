@@ -68,6 +68,45 @@ test("happy path event timeline covers full lifecycle", async () => {
   db.close();
 });
 
+test("mock runtime drives a deterministic terminating multi-step loop", async () => {
+  const { db, goalRepo, eventRepo, runtime } = setup();
+
+  const goal = goalRepo.create({ title: "Loop deterministically", description: "Use the mock loop" });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  const types = events.map((event) => event.type);
+
+  assert.deepEqual(types, [
+    "run.started",
+    "step.started",
+    "agent.decision",
+    "agent.message",
+    "gate.voted",
+    "step.completed",
+    "step.started",
+    "agent.decision",
+    "agent.message",
+    "gate.voted",
+    "step.completed",
+    "run.completed",
+    "goal.completed",
+  ]);
+  assert.deepEqual(
+    events.filter((event) => event.type === "agent.decision").map((event) => event.data.nextStep),
+    ["Analyze goal", "Execute mock result"],
+  );
+  assert.deepEqual(
+    events.filter((event) => event.type === "gate.voted").map((event) => event.data.decision),
+    ["not_done", "done"],
+  );
+  assert.equal(goalRepo.getById(goal.id)?.status, "completed");
+
+  db.close();
+});
+
 test("every started step has a matching step.completed — timeline is self-contained", async () => {
   const { db, goalRepo, eventRepo, runtime } = setup();
 

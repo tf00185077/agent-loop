@@ -34,6 +34,7 @@ export interface AgentLoopRuntimeDeps {
   metadata: ModelProviderMetadata;
   maxSteps?: number;
   maxDepth?: number;
+  runStartedMessage?: string;
   planner: Planner;
   implementer: Implementer;
   gate: CompletionGate;
@@ -47,6 +48,7 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
   const { goalRepo, runRepo, stepRepo, eventRepo, metadata, planner, implementer, gate } = deps;
   const maxSteps = deps.maxSteps ?? 1;
   const maxDepth = deps.maxDepth ?? 0;
+  const runStartedMessage = deps.runStartedMessage ?? "Agent loop run started";
 
   return {
     async run(goalId) {
@@ -63,7 +65,7 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
         goalId,
         runId: run.id,
         type: "run.started",
-        message: "Agent loop run started",
+        message: runStartedMessage,
         data: {
           runId: run.id,
           provider: metadata.provider,
@@ -184,7 +186,7 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
         });
 
         if (vote.isDone) {
-          finishCompleted({ goalId, runId: run.id, goalRepo, runRepo, eventRepo });
+          finishCompleted({ goalId, runId: run.id, metadata, goalRepo, runRepo, eventRepo });
           return;
         }
       }
@@ -214,7 +216,18 @@ interface FinishInput {
   eventRepo: EventRepository;
 }
 
-function finishCompleted({ goalId, runId, goalRepo, runRepo, eventRepo }: FinishInput): void {
+interface FinishCompletedInput extends FinishInput {
+  metadata: ModelProviderMetadata;
+}
+
+function finishCompleted({
+  goalId,
+  runId,
+  metadata,
+  goalRepo,
+  runRepo,
+  eventRepo,
+}: FinishCompletedInput): void {
   const finishedAt = new Date().toISOString();
   runRepo.updateStatus(runId, "completed", { finishedAt });
   goalRepo.updateStatus(goalId, "completed", { completedAt: finishedAt });
@@ -224,7 +237,7 @@ function finishCompleted({ goalId, runId, goalRepo, runRepo, eventRepo }: Finish
     runId,
     type: "run.completed",
     message: "Agent loop run completed",
-    data: { runId },
+    data: { runId, provider: metadata.provider, model: metadata.model },
   });
 
   eventRepo.create({
@@ -232,7 +245,7 @@ function finishCompleted({ goalId, runId, goalRepo, runRepo, eventRepo }: Finish
     runId,
     type: "goal.completed",
     message: "Goal completed successfully",
-    data: { goalId, runId },
+    data: { goalId, runId, provider: metadata.provider, model: metadata.model },
   });
 }
 
