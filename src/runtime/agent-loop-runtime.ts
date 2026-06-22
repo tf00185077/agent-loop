@@ -14,7 +14,6 @@ import type {
 import type { Implementer } from "./agent-implementer.js";
 import type { Planner } from "./agent-planner.js";
 import type { ModelProviderMetadata } from "./model-provider.js";
-import { buildGateVotedEventData } from "./quorum-voters.js";
 
 export interface CompletionGateInput {
   goal: Goal;
@@ -165,16 +164,6 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
           },
         });
 
-        const vote = await gate.vote({ goal, step, implementation });
-        eventRepo.create({
-          goalId,
-          runId: run.id,
-          stepId: step.id,
-          type: "gate.voted",
-          message: `Gate voted: ${vote.decision}`,
-          data: buildGateVotedEventData(vote),
-        });
-
         stepRepo.update(step.id, { status: "completed", result: implementation.result });
         eventRepo.create({
           goalId,
@@ -185,10 +174,8 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
           data: { stepId: step.id },
         });
 
-        if (vote.isDone) {
-          finishCompleted({ goalId, runId: run.id, metadata, goalRepo, runRepo, eventRepo });
-          return;
-        }
+        finishCompleted({ goalId, runId: run.id, metadata, goalRepo, runRepo, eventRepo });
+        return;
       }
 
       finishBounded({

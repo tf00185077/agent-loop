@@ -68,7 +68,7 @@ test("happy path event timeline covers full lifecycle", async () => {
   db.close();
 });
 
-test("mock runtime drives a deterministic terminating multi-step loop", async () => {
+test("mock runtime drives a deterministic direct work item", async () => {
   const { db, goalRepo, eventRepo, runtime } = setup();
 
   const goal = goalRepo.create({ title: "Loop deterministically", description: "Use the mock loop" });
@@ -84,84 +84,31 @@ test("mock runtime drives a deterministic terminating multi-step loop", async ()
     "step.started",
     "agent.decision",
     "agent.message",
-    "gate.voted",
-    "step.completed",
-    "step.started",
-    "agent.decision",
-    "agent.message",
-    "gate.voted",
     "step.completed",
     "run.completed",
     "goal.completed",
   ]);
   assert.deepEqual(
     events.filter((event) => event.type === "agent.decision").map((event) => event.data.nextStep),
-    ["Analyze goal", "Execute mock result"],
+    ["Analyze goal"],
   );
-  assert.deepEqual(
-    events.filter((event) => event.type === "gate.voted").map((event) => event.data.decision),
-    ["not_done", "done"],
-  );
+  assert.equal(events.some((event) => event.type === "gate.voted"), false);
+  assert.equal(events.some((event) => event.type === "scope.voted"), false);
   assert.equal(goalRepo.getById(goal.id)?.status, "completed");
 
   db.close();
 });
 
-test("mock runtime records deterministic gate voter ballots", async () => {
+test("mock runtime does not record gate voter ballots after direct implementation", async () => {
   const { db, goalRepo, eventRepo, runtime } = setup();
 
-  const goal = goalRepo.create({ title: "Record mock voters", description: "Gate ballots should be predictable" });
+  const goal = goalRepo.create({ title: "Record mock voters", description: "Direct implementation should not vote" });
   goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
 
   await runtime.run(goal.id);
 
   const gateVotes = eventRepo.listForGoal(goal.id).filter((event) => event.type === "gate.voted");
-  assert.equal(gateVotes.length, 2);
-  assert.deepEqual(
-    gateVotes.map((event) => event.data.ballots),
-    [
-      [
-        {
-          voterId: "mock-voter-1",
-          providerKind: "mock",
-          decision: "not_done",
-          reason: "The deterministic mock loop still has one step remaining.",
-        },
-        {
-          voterId: "mock-voter-2",
-          providerKind: "mock",
-          decision: "done",
-          reason: "The first mock implementation result is acceptable but not terminal.",
-        },
-        {
-          voterId: "mock-voter-3",
-          providerKind: "mock",
-          decision: "not_done",
-          reason: "Continue until the fixed mock plan reaches its final step.",
-        },
-      ],
-      [
-        {
-          voterId: "mock-voter-1",
-          providerKind: "mock",
-          decision: "done",
-          reason: "The fixed mock plan reached its final step.",
-        },
-        {
-          voterId: "mock-voter-2",
-          providerKind: "mock",
-          decision: "done",
-          reason: "The final mock implementation result satisfies the goal.",
-        },
-        {
-          voterId: "mock-voter-3",
-          providerKind: "mock",
-          decision: "not_done",
-          reason: "A conservative mock voter asks for one more pass.",
-        },
-      ],
-    ],
-  );
+  assert.equal(gateVotes.length, 0);
 
   db.close();
 });
