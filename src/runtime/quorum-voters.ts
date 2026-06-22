@@ -164,6 +164,16 @@ export function buildGateVotedEventData(result: QuorumVoteResult): EventData {
   };
 }
 
+export function buildScopeVotedEventData(result: ScopeVoteResult): EventData {
+  return {
+    proposition: result.proposition,
+    decision: result.decision,
+    shouldRefine: result.shouldRefine,
+    tally: result.tally,
+    ballots: result.ballots,
+  };
+}
+
 function toBallot(voter: QuorumVoter, response: QuorumVoterResponse): QuorumVoterBallot {
   const ballot: QuorumVoterBallot = {
     voterId: voter.voterId,

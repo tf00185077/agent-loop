@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildGateVotedEventData,
+  buildScopeVotedEventData,
   resolveQuorumVoters,
   runQuorumVote,
   runScopeVote,
@@ -292,6 +293,54 @@ test("buildGateVotedEventData records ballots and the final majority decision", 
         providerKind: "codex-local",
         persona: "skeptic",
         decision: "not_done",
+        reason: "codex-local-skeptic voted",
+      },
+    ],
+  });
+});
+
+test("buildScopeVotedEventData records ballots and binary refinement decision", async () => {
+  const result = await runScopeVote({
+    proposition: "Is the current task still too large?",
+    voters: [
+      { voterId: "codex-local", providerKind: "codex-local" },
+      { voterId: "claude-local", providerKind: "claude-local" },
+      { voterId: "codex-local-skeptic", providerKind: "codex-local", persona: "skeptic" },
+    ],
+    vote: async (voter) => ({
+      decision: voter.voterId !== "claude-local",
+      reason: `${voter.voterId} voted`,
+    }),
+  });
+
+  assert.deepEqual(buildScopeVotedEventData(result), {
+    proposition: "Is the current task still too large?",
+    decision: true,
+    shouldRefine: true,
+    tally: {
+      refine: 2,
+      proceed: 1,
+      total: 3,
+      majorityReached: true,
+    },
+    ballots: [
+      {
+        voterId: "codex-local",
+        providerKind: "codex-local",
+        decision: true,
+        reason: "codex-local voted",
+      },
+      {
+        voterId: "claude-local",
+        providerKind: "claude-local",
+        decision: false,
+        reason: "claude-local voted",
+      },
+      {
+        voterId: "codex-local-skeptic",
+        providerKind: "codex-local",
+        persona: "skeptic",
+        decision: true,
         reason: "codex-local-skeptic voted",
       },
     ],

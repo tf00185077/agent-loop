@@ -13,7 +13,7 @@
 ## 3. Scope Vote Runtime
 
 - [x] 3.1 Replace completion-gate quorum semantics with binary scope vote semantics.
-- [ ] 3.2 Record scope vote event data with true/false majority, voter reasons, and the proposition.
+- [x] 3.2 Record scope vote event data with true/false majority, voter reasons, and the proposition.
 - [ ] 3.3 Add voter tests for majority true, majority false, and voter failure behavior without abstain decisions.
 
 ## 4. Agent Loop Behavior
