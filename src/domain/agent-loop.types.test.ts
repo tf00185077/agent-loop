@@ -26,10 +26,10 @@ test("planner decisions are a closed exported value set", () => {
   ] satisfies PlannerDecision[]);
 });
 
-test("loop event types include planner decisions and gate votes", () => {
-  const loopEventTypes = ["agent.decision", "gate.voted"] satisfies EventType[];
+test("loop event types distinguish planner decisions, scope votes, and gate votes", () => {
+  const loopEventTypes = ["agent.decision", "scope.voted", "gate.voted"] satisfies EventType[];
 
-  assert.deepEqual(loopEventTypes, ["agent.decision", "gate.voted"]);
+  assert.deepEqual(loopEventTypes, ["agent.decision", "scope.voted", "gate.voted"]);
 });
 
 test("quorum vote types model ballots and the final tally", () => {
