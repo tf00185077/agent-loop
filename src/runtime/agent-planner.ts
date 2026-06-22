@@ -1,0 +1,126 @@
+import type { Goal, PlannerResult, Step } from "../domain/index.js";
+import type { ModelProvider } from "./model-provider.js";
+
+export interface PlannerPromptInput {
+  goal: Goal;
+  priorSteps: Step[];
+}
+
+export interface PlannerPlanInput extends PlannerPromptInput {}
+
+export interface Planner {
+  plan(input: PlannerPlanInput): Promise<PlannerResult>;
+}
+
+export interface PlannerDeps {
+  provider: ModelProvider;
+}
+
+export function createPlanner({ provider }: PlannerDeps): Planner {
+  return {
+    async plan(input) {
+      const output = await provider.complete({
+        goal: {
+          id: input.goal.id,
+          title: input.goal.title,
+          description: input.goal.description,
+        },
+        prompt: buildPlannerPrompt(input),
+      });
+
+      return parsePlannerOutput(output.text);
+    },
+  };
+}
+
+export function buildPlannerPrompt({ goal, priorSteps }: PlannerPromptInput): string {
+  const stepHistory =
+    priorSteps.length === 0
+      ? "No prior steps have been persisted for this run."
+      : priorSteps
+          .map((step) =>
+            [
+              `${step.order}. ${step.title}`,
+              `Description: ${step.description}`,
+              `Status: ${step.status}`,
+              `Result: ${step.result ?? "(none)"}`,
+            ].join("\n"),
+          )
+          .join("\n\n");
+
+  return [
+    "You are the planner for a bounded iterative agent loop.",
+    "Choose exactly one next action using this strict output convention:",
+    "DECISION: IMPLEMENT_DIRECTLY|DECOMPOSE|NEEDS_OPENSPEC|BLOCKED",
+    "NEXT_STEP: <required for IMPLEMENT_DIRECTLY>",
+    "SUB_STEPS: <one sub-step per line, prefixed with -; required for DECOMPOSE>",
+    "REASON: <brief reason>",
+    "",
+    "Goal:",
+    `Title: ${goal.title}`,
+    `Description: ${goal.description}`,
+    "",
+    "Persisted prior steps:",
+    stepHistory,
+  ].join("\n");
+}
+
+export function parsePlannerOutput(output: string): PlannerResult {
+  const decision = lineValue(output, "DECISION");
+  const reason = lineValue(output, "REASON");
+
+  if (decision === "IMPLEMENT_DIRECTLY") {
+    return {
+      decision,
+      nextStep: lineValue(output, "NEXT_STEP"),
+      reason,
+    };
+  }
+
+  if (decision === "DECOMPOSE") {
+    return {
+      decision,
+      subSteps: parseSubSteps(output),
+      reason,
+    };
+  }
+
+  if (decision === "NEEDS_OPENSPEC") {
+    return { decision, reason };
+  }
+
+  if (decision === "BLOCKED") {
+    return { decision, reason };
+  }
+
+  throw new Error(`Unsupported planner decision: ${decision}`);
+}
+
+function lineValue(output: string, label: string): string {
+  const prefix = `${label}:`;
+  const line = output
+    .split(/\r?\n/)
+    .find((candidate) => candidate.trim().startsWith(prefix));
+  if (!line) throw new Error(`Missing planner output line: ${prefix}`);
+  const value = line.trim().slice(prefix.length).trim();
+  if (!value) throw new Error(`Empty planner output line: ${prefix}`);
+  return value;
+}
+
+function parseSubSteps(output: string): string[] {
+  const lines = output.split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => line.trim().startsWith("SUB_STEPS:"));
+  if (startIndex === -1) throw new Error("Missing planner output line: SUB_STEPS:");
+
+  const subSteps: string[] = [];
+  for (const line of lines.slice(startIndex + 1)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("REASON:")) break;
+    if (trimmed.startsWith("-")) {
+      const subStep = trimmed.slice(1).trim();
+      if (subStep) subSteps.push(subStep);
+    }
+  }
+  if (subSteps.length === 0) throw new Error("Planner DECOMPOSE output requires sub-steps");
+  return subSteps;
+}
