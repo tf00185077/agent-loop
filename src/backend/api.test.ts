@@ -410,6 +410,47 @@ describe("Backend API", () => {
       }
     });
 
+    it("persists a failed Codex Local connection test status", async () => {
+      const providerServer = await startServer(undefined, {
+        testCodexLocalConnection: async () => ({
+          status: {
+            state: "command_failure",
+            detected: true,
+            checkedAt: "2026-06-22T02:05:00.000Z",
+            message: "Codex Local connection test failed: timed out",
+          },
+        }),
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5-codex",
+            codexCommandPath: "C:\\Tools\\codex.cmd",
+          }),
+        });
+
+        const tested = await fetch(`${providerServer.url}/api/provider-settings/test`, {
+          method: "POST",
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+        assert.equal((tested.status as Record<string, unknown>).state, "command_failure");
+
+        const saved = await fetch(`${providerServer.url}/api/provider-settings`).then(
+          (r) => r.json() as Promise<Record<string, unknown>>,
+        );
+        assert.equal((saved.status as Record<string, unknown>).state, "command_failure");
+        assert.equal(
+          (saved.status as Record<string, unknown>).message,
+          "Codex Local connection test failed: timed out",
+        );
+      } finally {
+        await providerServer.close();
+      }
+    });
+
     it("returns sanitized selectable models from GET /api/provider-settings/models", async () => {
       const providerServer = await startServer(undefined, {
         detectCodexCliCommand: () => ({

@@ -415,6 +415,40 @@ test("auto-test result updates the rendered provider status", async () => {
   );
 });
 
+test("auto-test failure result updates the rendered provider status", async () => {
+  const applied: ProviderSettings[] = [];
+
+  await saveProviderSettingsWithOptionalCodexTest(
+    {
+      provider: "codex-local",
+      modelLabel: "gpt-5-codex",
+      codexCommandPath: "C:\\Tools\\codex.cmd",
+    },
+    {
+      save: async () => ({
+        provider: "codex-local",
+        modelLabel: "gpt-5-codex",
+        codexCommandPath: "C:\\Tools\\codex.cmd",
+        status: { state: "not_checked", detected: false, checkedAt: null, message: null },
+      }),
+      testConnection: async () => ({
+        status: {
+          state: "command_failure",
+          detected: true,
+          checkedAt: "2026-06-22T02:05:00.000Z",
+          message: "Codex Local connection test failed: timed out",
+        },
+      }),
+      onSaved: (settings) => applied.push(settings),
+    },
+  );
+
+  assert.deepEqual(
+    applied.map((settings) => settings.status.state),
+    ["not_checked", "command_failure"],
+  );
+});
+
 test("saving mock settings does not trigger a Codex connection test", async () => {
   const calls: string[] = [];
 
