@@ -20,6 +20,6 @@
 
 ## 4. Verification
 
-- [ ] 4.1 Run typecheck and focused tests for provider setup, runtime metadata, and dashboard timeline rendering
-- [ ] 4.2 Run browser E2E with Codex Local save auto-test and verify the selected model status is visible
-- [ ] 4.3 Run `openspec validate provider-connection-test-and-run-model-visibility --strict`
+- [x] 4.1 Run typecheck and focused tests for provider setup, runtime metadata, and dashboard timeline rendering
+- [x] 4.2 Run browser E2E with Codex Local save auto-test and verify the selected model status is visible
+- [x] 4.3 Run `openspec validate provider-connection-test-and-run-model-visibility --strict`
