@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ProviderSetupPanel } from "./ProviderSetup.js";
+import {
+  ProviderSetupPanel,
+  saveProviderSettingsWithOptionalCodexTest,
+} from "./ProviderSetup.js";
 import type {
   CodexModelCatalogResult,
   ProviderConnectionState,
@@ -300,4 +303,32 @@ test("provider setup panel renders Claude Local controls without a model catalog
   // Deferred for claude-local: no connection test and no model catalog picker.
   assert.doesNotMatch(html, /Test connection/);
   assert.doesNotMatch(html, /Refresh models/);
+});
+
+test("saving Codex Local settings triggers a connection test after save succeeds", async () => {
+  const calls: string[] = [];
+
+  await saveProviderSettingsWithOptionalCodexTest(
+    {
+      provider: "codex-local",
+      modelLabel: "gpt-5-codex",
+      codexCommandPath: "C:\\Tools\\codex.cmd",
+    },
+    {
+      save: async () => {
+        calls.push("save");
+        return {
+          provider: "codex-local",
+          modelLabel: "gpt-5-codex",
+          codexCommandPath: "C:\\Tools\\codex.cmd",
+          status: { state: "not_checked", detected: false, checkedAt: null, message: null },
+        };
+      },
+      testConnection: async () => {
+        calls.push("test");
+      },
+    },
+  );
+
+  assert.deepEqual(calls, ["save", "test"]);
 });

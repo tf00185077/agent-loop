@@ -7,6 +7,7 @@ import {
   testCodexLocalConnection,
   type CodexModelCatalogResult,
   type ProviderSettings,
+  type SaveProviderSettingsInput,
 } from "./api";
 
 type LocalProvider = ProviderSettings["provider"];
@@ -115,25 +116,16 @@ export default function ProviderSetup() {
     setBusy("save");
     setError(null);
     try {
-      const saved = await saveProviderSettings(
-        draftProvider === "mock"
-          ? { provider: "mock" }
-          : draftProvider === "claude-local"
-            ? {
-                // A blank model label means "Claude CLI default".
-                provider: "claude-local",
-                modelLabel: modelLabel.trim(),
-                claudeCommandPath: claudeCommandPath.trim() || null,
-              }
-            : {
-                // A blank model label is saved as "" and means "Codex CLI default";
-                // we no longer fall back to the stale gpt-5-codex-subscription label.
-                provider: "codex-local",
-                modelLabel: modelLabel.trim(),
-                codexCommandPath: codexCommandPath.trim() || null,
-              },
-      );
-      applySettings(saved);
+      await saveProviderSettingsWithOptionalCodexTest(toSaveProviderSettingsInput({
+        draftProvider,
+        modelLabel,
+        codexCommandPath,
+        claudeCommandPath,
+      }), {
+        save: saveProviderSettings,
+        testConnection: testCodexLocalConnection,
+        onSaved: applySettings,
+      });
     } catch (err) {
       setError(String(err));
     } finally {
@@ -198,6 +190,54 @@ export default function ProviderSetup() {
       onReloadCatalog={() => void refreshCatalog()}
     />
   );
+}
+
+interface SaveProviderSettingsDraft {
+  draftProvider: LocalProvider;
+  modelLabel: string;
+  codexCommandPath: string;
+  claudeCommandPath: string;
+}
+
+function toSaveProviderSettingsInput(draft: SaveProviderSettingsDraft): SaveProviderSettingsInput {
+  if (draft.draftProvider === "mock") return { provider: "mock" };
+
+  if (draft.draftProvider === "claude-local") {
+    return {
+      // A blank model label means "Claude CLI default".
+      provider: "claude-local",
+      modelLabel: draft.modelLabel.trim(),
+      claudeCommandPath: draft.claudeCommandPath.trim() || null,
+    };
+  }
+
+  return {
+    // A blank model label is saved as "" and means "Codex CLI default";
+    // we no longer fall back to the stale gpt-5-codex-subscription label.
+    provider: "codex-local",
+    modelLabel: draft.modelLabel.trim(),
+    codexCommandPath: draft.codexCommandPath.trim() || null,
+  };
+}
+
+interface SaveProviderSettingsWithOptionalCodexTestDeps {
+  save: (input: SaveProviderSettingsInput) => Promise<ProviderSettings>;
+  testConnection: () => Promise<unknown>;
+  onSaved?: (settings: ProviderSettings) => void;
+}
+
+export async function saveProviderSettingsWithOptionalCodexTest(
+  input: SaveProviderSettingsInput,
+  deps: SaveProviderSettingsWithOptionalCodexTestDeps,
+): Promise<ProviderSettings> {
+  const saved = await deps.save(input);
+  deps.onSaved?.(saved);
+
+  if (saved.provider === "codex-local" && saved.codexCommandPath) {
+    await deps.testConnection();
+  }
+
+  return saved;
 }
 
 export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
