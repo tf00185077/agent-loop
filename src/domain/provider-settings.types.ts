@@ -42,6 +42,31 @@ export type ProviderSettings =
   | CodexLocalProviderSettings
   | ClaudeLocalProviderSettings;
 
+export interface MockStartGoalProviderOverride {
+  provider: "mock";
+}
+
+export interface CodexLocalStartGoalProviderOverride {
+  provider: "codex-local";
+  modelLabel: string;
+  codexCommandPath: string | null;
+}
+
+export interface ClaudeLocalStartGoalProviderOverride {
+  provider: "claude-local";
+  modelLabel: string;
+  claudeCommandPath: string | null;
+}
+
+export type StartGoalProviderOverride =
+  | MockStartGoalProviderOverride
+  | CodexLocalStartGoalProviderOverride
+  | ClaudeLocalStartGoalProviderOverride;
+
+export interface StartGoalRequestBody {
+  providerOverride?: StartGoalProviderOverride;
+}
+
 /**
  * Sanitized Codex Local catalog model entry. Only safe display fields are
  * exposed to the dashboard; raw catalog metadata (base instructions, prompts,
@@ -132,6 +157,34 @@ export const defaultProviderStatus: ProviderStatus = {
   checkedAt: null,
   message: null,
 };
+
+export function sanitizeStartGoalProviderOverride(
+  override: StartGoalProviderOverride,
+): StartGoalProviderOverride {
+  if (override.provider === "codex-local") {
+    return {
+      ...override,
+      codexCommandPath: sanitizeProviderCommandPath(override.codexCommandPath),
+    };
+  }
+
+  if (override.provider === "claude-local") {
+    return {
+      ...override,
+      claudeCommandPath: sanitizeProviderCommandPath(override.claudeCommandPath),
+    };
+  }
+
+  return override;
+}
+
+export function sanitizeProviderCommandPath(commandPath: string | null): string | null {
+  return commandPath
+    ? commandPath
+        .replace(/\s+--(?:api-key|token|access-token)\s+\S+/gi, "")
+        .trim()
+    : null;
+}
 
 export function createDefaultProviderSettings(): MockProviderSettings {
   return {

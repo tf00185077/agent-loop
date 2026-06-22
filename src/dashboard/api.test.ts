@@ -5,6 +5,7 @@ import {
   detectCodexCli,
   getProviderSettings,
   saveProviderSettings,
+  startGoal,
   testCodexLocalConnection,
 } from "./api.js";
 
@@ -69,6 +70,49 @@ test("saves Codex Local provider settings through dashboard API", async () => {
   assert.equal(saved.provider, "codex-local");
 });
 
+test("starts a goal with a provider override through dashboard API", async () => {
+  let capturedUrl = "";
+  let capturedMethod: string | undefined;
+  let capturedBody: unknown;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    capturedUrl = String(input);
+    capturedMethod = init?.method;
+    capturedBody = JSON.parse(String(init?.body));
+    return jsonResponse({ ok: true });
+  };
+
+  await startGoal("goal-1", {
+    providerOverride: {
+      provider: "codex-local",
+      modelLabel: "gpt5-4",
+      codexCommandPath: "C:\\Tools\\codex.cmd",
+    },
+  });
+
+  assert.equal(capturedUrl, "/api/goals/goal-1/start");
+  assert.equal(capturedMethod, "POST");
+  assert.deepEqual(capturedBody, {
+    providerOverride: {
+      provider: "codex-local",
+      modelLabel: "gpt5-4",
+      codexCommandPath: "C:\\Tools\\codex.cmd",
+    },
+  });
+});
+
+test("starts a goal without a body when no provider override is supplied", async () => {
+  let capturedInit: RequestInit | undefined;
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedInit = init;
+    return jsonResponse({ ok: true });
+  };
+
+  await startGoal("goal-1");
+
+  assert.equal(capturedInit?.method, "POST");
+  assert.equal(capturedInit?.body, undefined);
+});
+
 test("detects and tests Codex Local connection through dashboard API", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
@@ -110,6 +154,34 @@ test("detects and tests Codex Local connection through dashboard API", async () 
   );
   assert.equal(detected.commandPath, "C:\\Tools\\codex.cmd");
   assert.equal(tested.status.state, "connected");
+});
+
+test("detects the currently selected provider draft through dashboard API", async () => {
+  let capturedBody: unknown;
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body));
+    return jsonResponse({
+      detected: true,
+      commandPath: "C:\\Tools\\claude.cmd",
+      source: "manual",
+      status: {
+        state: "detected",
+        detected: true,
+        checkedAt: null,
+        message: "Detected",
+      },
+    });
+  };
+
+  await detectCodexCli({
+    provider: "claude-local",
+    claudeCommandPath: "C:\\Tools\\claude.cmd",
+  });
+
+  assert.deepEqual(capturedBody, {
+    provider: "claude-local",
+    claudeCommandPath: "C:\\Tools\\claude.cmd",
+  });
 });
 
 function jsonResponse(body: unknown): Response {

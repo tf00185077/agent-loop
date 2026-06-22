@@ -69,9 +69,32 @@ export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): 
     }
   });
 
-  router.post("/detect", (_req, res, next) => {
+  router.post("/detect", (req, res, next) => {
     try {
       const settings = deps.providerSettingsRepo.get();
+      const override = parseDetectProviderInput(req.body);
+      if (!override.ok) {
+        res.status(400).json({ error: override.error });
+        return;
+      }
+
+      if (override.input?.provider === "claude-local") {
+        const result = detectClaude({
+          ...(deps.claudeCliDetection ?? {}),
+          manualPath: override.input.claudeCommandPath,
+        });
+        res.json(sanitizeDetectionResult(result));
+        return;
+      }
+
+      if (override.input?.provider === "codex-local") {
+        const result = detect({
+          ...(deps.codexCliDetection ?? {}),
+          manualPath: override.input.codexCommandPath,
+        });
+        res.json(sanitizeDetectionResult(result));
+        return;
+      }
 
       if (settings.provider === "claude-local") {
         const result = detectClaude({
@@ -230,6 +253,49 @@ function sanitizeCommandPath(commandPath: string | null): string | null {
 type ParseProviderSettingsResult =
   | { ok: true; settings: ProviderSettings }
   | { ok: false; error: string };
+
+type DetectProviderInput =
+  | { provider: "codex-local"; codexCommandPath: string | null }
+  | { provider: "claude-local"; claudeCommandPath: string | null };
+
+type ParseDetectProviderInputResult =
+  | { ok: true; input: DetectProviderInput | null }
+  | { ok: false; error: string };
+
+function parseDetectProviderInput(body: unknown): ParseDetectProviderInputResult {
+  if (body === undefined || (isRecord(body) && Object.keys(body).length === 0)) {
+    return { ok: true, input: null };
+  }
+  if (!isRecord(body)) return { ok: false, error: "request body must be an object" };
+
+  if (body.provider === "codex-local") {
+    return {
+      ok: true,
+      input: {
+        provider: "codex-local",
+        codexCommandPath:
+          typeof body.codexCommandPath === "string" && body.codexCommandPath.trim()
+            ? body.codexCommandPath.trim()
+            : null,
+      },
+    };
+  }
+
+  if (body.provider === "claude-local") {
+    return {
+      ok: true,
+      input: {
+        provider: "claude-local",
+        claudeCommandPath:
+          typeof body.claudeCommandPath === "string" && body.claudeCommandPath.trim()
+            ? body.claudeCommandPath.trim()
+            : null,
+      },
+    };
+  }
+
+  return { ok: false, error: "provider must be codex-local or claude-local" };
+}
 
 function parseProviderSettings(body: unknown): ParseProviderSettingsResult {
   if (!isRecord(body)) {

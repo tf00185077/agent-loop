@@ -10,6 +10,7 @@ import { createApp } from "./app.js";
 import type { ProviderEnvironment } from "../runtime/provider-config.js";
 import type { CodexLocalConnectionTestOptions } from "../runtime/codex-local-connection-test.js";
 import type { CodexCliDetectionOptions } from "../runtime/codex-cli-detection.js";
+import type { ClaudeCliDetectionOptions } from "../runtime/claude-cli-detection.js";
 import type { CodexModelCatalogOptions } from "../runtime/codex-local-model-catalog.js";
 
 function startServer(
@@ -60,6 +61,11 @@ process.stdin.on("end", () => {
 `,
   );
   chmodSync(scriptPath, 0o755);
+  if (process.platform === "win32") {
+    const cmdPath = join(dir, "fake-codex.cmd");
+    writeFileSync(cmdPath, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`);
+    return cmdPath;
+  }
   return scriptPath;
 }
 
@@ -94,6 +100,11 @@ process.stdin.on("end", () => {
 `,
   );
   chmodSync(scriptPath, 0o755);
+  if (process.platform === "win32") {
+    const cmdPath = join(dir, "fake-claude.cmd");
+    writeFileSync(cmdPath, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`);
+    return cmdPath;
+  }
   return scriptPath;
 }
 
@@ -293,6 +304,54 @@ describe("Backend API", () => {
         const body = (await json(res)) as Record<string, unknown>;
         assert.equal(res.status, 200);
         assert.equal(body.codexCommandPath, "C:\\Tools\\codex.cmd");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("detects the provider supplied in the request body without changing saved mock settings", async () => {
+      let manualPath: string | null | undefined;
+      const providerServer = await startServer(undefined, {
+        detectClaudeCliCommand: (options: ClaudeCliDetectionOptions) => {
+          manualPath = options.manualPath;
+          return {
+            detected: true,
+            commandPath: "C:\\Draft\\claude.cmd",
+            source: "manual",
+            status: {
+              state: "detected",
+              detected: true,
+              checkedAt: null,
+              message: "Claude draft detected.",
+            },
+          };
+        },
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "mock" }),
+        });
+
+        const detected = await fetch(`${providerServer.url}/api/provider-settings/detect`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "claude-local",
+            claudeCommandPath: "C:\\Draft\\claude.cmd",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        assert.equal(manualPath, "C:\\Draft\\claude.cmd");
+        assert.equal(detected.commandPath, "C:\\Draft\\claude.cmd");
+
+        const saved = await fetch(`${providerServer.url}/api/provider-settings`).then(
+          (r) => r.json() as Promise<Record<string, unknown>>,
+        );
+        assert.equal(saved.provider, "mock");
+        assert.equal(saved.modelLabel, "mock-v1");
       } finally {
         await providerServer.close();
       }
@@ -796,6 +855,218 @@ describe("Backend API", () => {
         method: "POST",
       });
       assert.equal(res.status, 404);
+    });
+
+    it("uses Codex Local provider override from the start request", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-codex-override-"));
+      const capturePath = join(dir, "captured-codex-override.json");
+      const codexPath = createFakeCodexScript(dir, capturePath, "Codex override response");
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => detectedCodexResult(codexPath),
+        codexCliProviderTimeoutMs: 10000,
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "mock" }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Codex override start",
+            description: "uses request provider override",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            providerOverride: {
+              provider: "codex-local",
+              modelLabel: "gpt5-4",
+              codexCommandPath: codexPath,
+            },
+          }),
+        });
+        assert.equal(res.status, 200);
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        assert.ok(
+          events.some(
+            (e) =>
+              e.type === "agent.message" &&
+              e.message === "Codex override response" &&
+              (e.data as Record<string, unknown>).provider === "codex-cli" &&
+              (e.data as Record<string, unknown>).model === "gpt5-4",
+          ),
+        );
+
+        const captured = JSON.parse(readFileSync(capturePath, "utf8")) as { args: string[] };
+        const modelIndex = captured.args.indexOf("--model");
+        assert.equal(captured.args[modelIndex + 1], "gpt5-4");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("uses mock provider override even when saved settings point to Codex Local", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-mock-override-"));
+      const capturePath = join(dir, "captured-mock-override.json");
+      const codexPath = createFakeCodexScript(dir, capturePath, "Should not run");
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => detectedCodexResult(codexPath),
+        codexCliProviderTimeoutMs: 10000,
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "saved-model",
+            codexCommandPath: codexPath,
+          }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Mock override start",
+            description: "request mock should win over saved Codex",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ providerOverride: { provider: "mock" } }),
+        });
+        assert.equal(res.status, 200);
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        assert.ok(events.some((e) => e.type === "run.started" && e.message === "Mock run started"));
+        assert.ok(events.some((e) => e.type === "run.started" && (e.data as Record<string, unknown>).provider === "mock"));
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("uses Claude Local provider override from the start request", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-claude-override-"));
+      const capturePath = join(dir, "captured-claude-override.json");
+      const claudePath = createFakeClaudeScript(dir, capturePath, "Claude override response\n");
+      const providerServer = await startServer(undefined, {
+        detectClaudeCliCommand: () => detectedCodexResult(claudePath),
+        claudeCliProviderTimeoutMs: 10000,
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "mock" }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Claude override start",
+            description: "uses request Claude provider override",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            providerOverride: {
+              provider: "claude-local",
+              modelLabel: "claude-sonnet-4-6",
+              claudeCommandPath: claudePath,
+            },
+          }),
+        });
+        assert.equal(res.status, 200);
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        assert.ok(
+          events.some(
+            (e) =>
+              e.type === "agent.message" &&
+              e.message === "Claude override response" &&
+              (e.data as Record<string, unknown>).provider === "claude-cli" &&
+              (e.data as Record<string, unknown>).model === "claude-sonnet-4-6",
+          ),
+        );
+
+        const captured = JSON.parse(readFileSync(capturePath, "utf8")) as { args: string[] };
+        const modelIndex = captured.args.indexOf("--model");
+        assert.equal(captured.args[modelIndex + 1], "claude-sonnet-4-6");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("does not persist override settings or expose credential material in start responses or events", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "auto-agent-api-safe-override-"));
+      const capturePath = join(dir, "captured-safe-override.json");
+      const codexPath = createFakeCodexScript(dir, capturePath, "Safe override response");
+      const providerServer = await startServer(undefined, {
+        detectCodexCliCommand: () => detectedCodexResult(codexPath),
+        codexCliProviderTimeoutMs: 10000,
+      });
+      const secrets = ["sk-start-secret", "secret-token", "secret-access-token"];
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "mock" }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Credential safe override start",
+            description: "override should not leak secrets",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            providerOverride: {
+              provider: "codex-local",
+              modelLabel: "gpt5-4",
+              codexCommandPath: `${codexPath} --api-key sk-start-secret --token secret-token --access-token secret-access-token`,
+            },
+          }),
+        });
+        assert.equal(res.status, 200);
+        assertDoesNotContainValues(await json(res), secrets);
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        assertDoesNotContainValues(events, secrets);
+
+        const settings = (await fetch(`${providerServer.url}/api/provider-settings`).then(
+          (r) => r.json(),
+        )) as Record<string, unknown>;
+        assert.equal(settings.provider, "mock");
+        assert.equal(settings.modelLabel, "mock-v1");
+        assertDoesNotContainValues(settings, secrets);
+      } finally {
+        await providerServer.close();
+      }
     });
 
     it("uses current saved Codex Local settings when starting a goal", { skip: process.platform === "win32" }, async () => {

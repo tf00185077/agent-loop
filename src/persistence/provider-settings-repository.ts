@@ -5,6 +5,7 @@ import type {
 } from "../domain/index.js";
 import {
   createDefaultProviderSettings,
+  sanitizeProviderCommandPath,
   sanitizeProviderStatus,
 } from "../domain/index.js";
 import type { AppDatabase } from "./database.js";
@@ -80,7 +81,7 @@ function sanitizeProviderSettings(settings: ProviderSettings): ProviderSettings 
   if (settings.provider === "codex-local") {
     return {
       ...settings,
-      codexCommandPath: sanitizeCommandPath(settings.codexCommandPath),
+      codexCommandPath: sanitizeProviderCommandPath(settings.codexCommandPath),
       status: sanitizeProviderStatus(settings.status),
     };
   }
@@ -88,7 +89,7 @@ function sanitizeProviderSettings(settings: ProviderSettings): ProviderSettings 
   if (settings.provider === "claude-local") {
     return {
       ...settings,
-      claudeCommandPath: sanitizeCommandPath(settings.claudeCommandPath),
+      claudeCommandPath: sanitizeProviderCommandPath(settings.claudeCommandPath),
       status: sanitizeProviderStatus(settings.status),
     };
   }
@@ -98,14 +99,6 @@ function sanitizeProviderSettings(settings: ProviderSettings): ProviderSettings 
     codexCommandPath: null,
     status: sanitizeProviderStatus(settings.status),
   };
-}
-
-function sanitizeCommandPath(commandPath: string | null): string | null {
-  return commandPath
-    ? commandPath
-        .replace(/\s+--(?:api-key|token|access-token)\s+\S+/gi, "")
-        .trim()
-    : null;
 }
 
 function toProviderSettingsParams(settings: ProviderSettings) {

@@ -1,6 +1,9 @@
 import express from "express";
 
-import { type ProviderSettings } from "../domain/index.js";
+import {
+  type ProviderSettings,
+  type StartGoalProviderOverride,
+} from "../domain/index.js";
 import type { AppDatabase } from "../persistence/database.js";
 import { createGoalRepository } from "../persistence/goal-repository.js";
 import {
@@ -134,8 +137,8 @@ function createRuntimeFromSavedProviderSettings(
   deps: CreateRuntimeFromSavedProviderSettingsDeps,
 ) {
   return {
-    async run(goalId: string) {
-      const settings = deps.providerSettingsRepo.get();
+    async run(goalId: string, options?: { providerOverride?: StartGoalProviderOverride }) {
+      const settings = options?.providerOverride ?? deps.providerSettingsRepo.get();
       const runtime = selectRuntimeForSettings(settings, deps);
 
       return runtime.run(goalId);
@@ -144,7 +147,7 @@ function createRuntimeFromSavedProviderSettings(
 }
 
 function selectRuntimeForSettings(
-  settings: ProviderSettings,
+  settings: ProviderSettings | StartGoalProviderOverride,
   deps: CreateRuntimeFromSavedProviderSettingsDeps,
 ) {
   if (settings.provider === "codex-local") {
@@ -169,7 +172,9 @@ function selectRuntimeForSettings(
 }
 
 function createRuntimeFromCodexLocalSettings(
-  settings: Extract<ProviderSettings, { provider: "codex-local" }>,
+  settings:
+    | Extract<ProviderSettings, { provider: "codex-local" }>
+    | Extract<StartGoalProviderOverride, { provider: "codex-local" }>,
   deps: CreateRuntimeFromSavedProviderSettingsDeps,
 ) {
   // Validate the saved command path and self-heal a stale one before spawning.
@@ -179,9 +184,12 @@ function createRuntimeFromCodexLocalSettings(
     savedPath: settings.codexCommandPath,
     detection: deps.codexCliDetection,
     detect: deps.detectCodexCliCommand,
-    persist: (codexCommandPath) => {
-      deps.providerSettingsRepo.save({ ...settings, codexCommandPath });
-    },
+    persist:
+      "status" in settings
+        ? (codexCommandPath) => {
+            deps.providerSettingsRepo.save({ ...settings, codexCommandPath });
+          }
+        : undefined,
   });
 
   return createProviderRuntime({
@@ -200,7 +208,9 @@ function createRuntimeFromCodexLocalSettings(
 }
 
 function createRuntimeFromClaudeLocalSettings(
-  settings: Extract<ProviderSettings, { provider: "claude-local" }>,
+  settings:
+    | Extract<ProviderSettings, { provider: "claude-local" }>
+    | Extract<StartGoalProviderOverride, { provider: "claude-local" }>,
   deps: CreateRuntimeFromSavedProviderSettingsDeps,
 ) {
   // Validate the saved command path and self-heal a stale one before spawning;
@@ -209,9 +219,12 @@ function createRuntimeFromClaudeLocalSettings(
   const resolved = resolveCliCommandPath({
     savedPath: settings.claudeCommandPath,
     detect: (manualPath) => detect({ ...deps.claudeCliDetection, manualPath }),
-    persist: (claudeCommandPath) => {
-      deps.providerSettingsRepo.save({ ...settings, claudeCommandPath });
-    },
+    persist:
+      "status" in settings
+        ? (claudeCommandPath) => {
+            deps.providerSettingsRepo.save({ ...settings, claudeCommandPath });
+          }
+        : undefined,
   });
 
   return createProviderRuntime({

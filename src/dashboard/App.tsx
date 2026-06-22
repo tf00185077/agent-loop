@@ -4,12 +4,16 @@ import CreateGoalForm from "./CreateGoalForm";
 import GoalDetail from "./GoalDetail";
 import EventTimeline from "./EventTimeline";
 import ProviderSetup from "./ProviderSetup";
+import type { StartGoalProviderOverride } from "./api";
 
 type View = { page: "list" } | { page: "detail"; goalId: string };
 
 export default function App() {
   const [view, setView] = useState<View>({ page: "list" });
   const [refreshKey, setRefreshKey] = useState(0);
+  const [providerOverride, setProviderOverride] = useState<StartGoalProviderOverride>({
+    provider: "mock",
+  });
 
   function goList() {
     setView({ page: "list" });
@@ -26,7 +30,7 @@ export default function App() {
       <main>
         {view.page === "list" && (
           <>
-            <ProviderSetup />
+            <ProviderSetup onProviderOverrideChange={setProviderOverride} />
             <CreateGoalForm onCreated={() => setRefreshKey((k) => k + 1)} />
             <GoalList
               refreshKey={refreshKey}
@@ -40,6 +44,7 @@ export default function App() {
             <GoalDetail
               goalId={view.goalId}
               refreshKey={refreshKey}
+              providerOverride={providerOverride}
               onStarted={() => setRefreshKey((k) => k + 1)}
             />
             <EventTimeline goalId={view.goalId} refreshKey={refreshKey} />

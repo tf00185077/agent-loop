@@ -9,6 +9,7 @@ import {
   type CodexModelCatalogResult,
   type ProviderSettings,
   type SaveProviderSettingsInput,
+  type StartGoalProviderOverride,
 } from "./api";
 
 type LocalProvider = ProviderSettings["provider"];
@@ -34,7 +35,11 @@ interface ProviderSetupPanelProps {
   onReloadCatalog: () => void;
 }
 
-export default function ProviderSetup() {
+interface ProviderSetupProps {
+  onProviderOverrideChange?: (override: StartGoalProviderOverride) => void;
+}
+
+export default function ProviderSetup({ onProviderOverrideChange }: ProviderSetupProps = {}) {
   const [settings, setSettings] = useState<ProviderSettings | null>(null);
   const [draftProvider, setDraftProvider] = useState<LocalProvider>("mock");
   const [modelLabel, setModelLabel] = useState("gpt-5-codex-subscription");
@@ -44,6 +49,17 @@ export default function ProviderSetup() {
   const [error, setError] = useState<string | null>(null);
   const [modelCatalog, setModelCatalog] = useState<CodexModelCatalogResult | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
+
+  useEffect(() => {
+    onProviderOverrideChange?.(
+      toStartGoalProviderOverride({
+        draftProvider,
+        modelLabel,
+        codexCommandPath,
+        claudeCommandPath,
+      }),
+    );
+  }, [draftProvider, modelLabel, codexCommandPath, claudeCommandPath, onProviderOverrideChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -139,9 +155,17 @@ export default function ProviderSetup() {
     setBusy("detect");
     setError(null);
     try {
-      await detectCodexCli();
-      applySettings(await getProviderSettings());
-      await refreshCatalog();
+      const detected = await detectCodexCli(toDetectProviderInput({
+        draftProvider,
+        codexCommandPath,
+        claudeCommandPath,
+      }));
+      if (draftProvider === "claude-local") {
+        setClaudeCommandPath(detected.commandPath ?? claudeCommandPath);
+      } else if (draftProvider === "codex-local") {
+        setCodexCommandPath(detected.commandPath ?? codexCommandPath);
+        await refreshCatalog();
+      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -199,6 +223,42 @@ interface SaveProviderSettingsDraft {
   modelLabel: string;
   codexCommandPath: string;
   claudeCommandPath: string;
+}
+
+export function toStartGoalProviderOverride(
+  draft: SaveProviderSettingsDraft,
+): StartGoalProviderOverride {
+  if (draft.draftProvider === "mock") return { provider: "mock" };
+
+  if (draft.draftProvider === "claude-local") {
+    return {
+      provider: "claude-local",
+      modelLabel: draft.modelLabel.trim(),
+      claudeCommandPath: draft.claudeCommandPath.trim() || null,
+    };
+  }
+
+  return {
+    provider: "codex-local",
+    modelLabel: draft.modelLabel.trim(),
+    codexCommandPath: draft.codexCommandPath.trim() || null,
+  };
+}
+
+function toDetectProviderInput(
+  draft: Pick<SaveProviderSettingsDraft, "draftProvider" | "codexCommandPath" | "claudeCommandPath">,
+) {
+  if (draft.draftProvider === "claude-local") {
+    return {
+      provider: "claude-local" as const,
+      claudeCommandPath: draft.claudeCommandPath.trim() || null,
+    };
+  }
+
+  return {
+    provider: "codex-local" as const,
+    codexCommandPath: draft.codexCommandPath.trim() || null,
+  };
 }
 
 function toSaveProviderSettingsInput(draft: SaveProviderSettingsDraft): SaveProviderSettingsInput {

@@ -75,12 +75,41 @@ export type SaveProviderSettingsInput =
       claudeCommandPath: string | null;
     };
 
+export type StartGoalProviderOverride =
+  | {
+      provider: "mock";
+    }
+  | {
+      provider: "codex-local";
+      modelLabel: string;
+      codexCommandPath: string | null;
+    }
+  | {
+      provider: "claude-local";
+      modelLabel: string;
+      claudeCommandPath: string | null;
+    };
+
+export interface StartGoalOptions {
+  providerOverride?: StartGoalProviderOverride;
+}
+
 export interface CodexCliDetectionResult {
   detected: boolean;
   commandPath: string | null;
   source: "manual" | "path" | "common" | "none";
   status: ProviderStatus;
 }
+
+export type DetectProviderInput =
+  | {
+      provider: "codex-local";
+      codexCommandPath: string | null;
+    }
+  | {
+      provider: "claude-local";
+      claudeCommandPath: string | null;
+    };
 
 export interface CodexLocalConnectionTestResult {
   status: ProviderStatus;
@@ -137,8 +166,15 @@ export async function createGoal(body: {
   return res.json();
 }
 
-export async function startGoal(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/goals/${id}/start`, { method: "POST" });
+export async function startGoal(id: string, options?: StartGoalOptions): Promise<void> {
+  const init: RequestInit = options?.providerOverride
+    ? {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerOverride: options.providerOverride }),
+      }
+    : { method: "POST" };
+  const res = await fetch(`${BASE}/goals/${id}/start`, init);
   if (!res.ok) throw new Error(`startGoal: ${res.status}`);
 }
 
@@ -166,10 +202,15 @@ export async function saveProviderSettings(
   return res.json();
 }
 
-export async function detectCodexCli(): Promise<CodexCliDetectionResult> {
-  const res = await fetch(`${BASE}/provider-settings/detect`, {
-    method: "POST",
-  });
+export async function detectCodexCli(input?: DetectProviderInput): Promise<CodexCliDetectionResult> {
+  const init: RequestInit = input
+    ? {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    : { method: "POST" };
+  const res = await fetch(`${BASE}/provider-settings/detect`, init);
   if (!res.ok) throw new Error(`detectCodexCli: ${res.status}`);
   return res.json();
 }

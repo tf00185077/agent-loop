@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { getGoal, listEvents, startGoal, Goal } from "./api";
+import { getGoal, listEvents, startGoal, Goal, type StartGoalProviderOverride } from "./api";
 import {
   latestRunMetadata,
   type RunDisplayMetadata,
@@ -8,10 +8,11 @@ import {
 interface Props {
   goalId: string;
   refreshKey: number;
+  providerOverride?: StartGoalProviderOverride;
   onStarted?: () => void;
 }
 
-export default function GoalDetail({ goalId, refreshKey, onStarted }: Props) {
+export default function GoalDetail({ goalId, refreshKey, providerOverride, onStarted }: Props) {
   const [goal, setGoal] = useState<Goal | null>(null);
   const [latestMetadata, setLatestMetadata] = useState<RunDisplayMetadata | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +35,7 @@ export default function GoalDetail({ goalId, refreshKey, onStarted }: Props) {
     setStarting(true);
     setError(null);
     try {
-      await startGoal(goalId);
+      await startGoal(goalId, providerOverride ? { providerOverride } : undefined);
       setVersion((v) => v + 1);
       onStarted?.();
     } catch (e) {

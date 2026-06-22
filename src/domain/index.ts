@@ -51,6 +51,8 @@ export type {
   ProviderConnectionState,
   ProviderSettings,
   ProviderStatus,
+  StartGoalProviderOverride,
+  StartGoalRequestBody,
 } from "./provider-settings.types.js";
 export {
   CODEX_DEFAULT_MODEL_LABEL,
@@ -59,5 +61,7 @@ export {
   describeCodexModelLabel,
   LEGACY_CODEX_MODEL_LABEL,
   resolveCodexModelArgument,
+  sanitizeProviderCommandPath,
   sanitizeProviderStatus,
+  sanitizeStartGoalProviderOverride,
 } from "./provider-settings.types.js";

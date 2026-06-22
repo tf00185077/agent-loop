@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   ProviderSetupPanel,
   saveProviderSettingsWithOptionalCodexTest,
+  toStartGoalProviderOverride,
 } from "./ProviderSetup.js";
 import type {
   CodexModelCatalogResult,
@@ -50,6 +51,34 @@ test("provider setup panel renders Codex Local controls", () => {
   assert.match(html, /Command path/);
   assert.match(html, /Detect/);
   assert.match(html, /Test connection/);
+});
+
+test("builds a start override from unsaved Codex Local draft settings", () => {
+  assert.deepEqual(
+    toStartGoalProviderOverride({
+      draftProvider: "codex-local",
+      modelLabel: "gpt5-4",
+      codexCommandPath: "C:\\Tools\\codex.cmd",
+      claudeCommandPath: "",
+    }),
+    {
+      provider: "codex-local",
+      modelLabel: "gpt5-4",
+      codexCommandPath: "C:\\Tools\\codex.cmd",
+    },
+  );
+});
+
+test("builds a start override from unsaved mock draft settings", () => {
+  assert.deepEqual(
+    toStartGoalProviderOverride({
+      draftProvider: "mock",
+      modelLabel: "mock-v1",
+      codexCommandPath: "C:\\Tools\\codex.cmd",
+      claudeCommandPath: "",
+    }),
+    { provider: "mock" },
+  );
 });
 
 test("provider setup panel hides Codex controls for mock provider", () => {
