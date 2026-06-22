@@ -1,4 +1,14 @@
 export type {
+  BlockedPlannerResult,
+  DecomposePlannerResult,
+  ImplementDirectlyPlannerResult,
+  ImplementerResult,
+  NeedsOpenSpecPlannerResult,
+  PlannerDecision,
+  PlannerResult,
+} from "./agent-loop.types.js";
+export { plannerDecisionValues } from "./agent-loop.types.js";
+export type {
   AgentType,
   CreateGoalInput,
   Goal,
