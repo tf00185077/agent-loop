@@ -6,6 +6,10 @@ export type {
   NeedsOpenSpecPlannerResult,
   PlannerDecision,
   PlannerResult,
+  QuorumVoteDecision,
+  QuorumVoteResult,
+  QuorumVoteTally,
+  QuorumVoterBallot,
 } from "./agent-loop.types.js";
 export { plannerDecisionValues } from "./agent-loop.types.js";
 export type {

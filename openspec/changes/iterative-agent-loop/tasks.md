@@ -1,7 +1,7 @@
 ## 1. Domain types and events
 
 - [x] 1.1 Add a closed `PlannerDecision` type (`IMPLEMENT_DIRECTLY` | `DECOMPOSE` | `NEEDS_OPENSPEC` | `BLOCKED`) and planner/implementer result types
-- [ ] 1.2 Add a quorum vote type (per-voter ballot + tally) and add `agent.decision` and `gate.voted` to the `EventType` union; export through `src/domain/index.js`
+- [x] 1.2 Add a quorum vote type (per-voter ballot + tally) and add `agent.decision` and `gate.voted` to the `EventType` union; export through `src/domain/index.js`
 - [ ] 1.3 Add domain tests for the new types/enums
 
 ## 2. Planner and implementer roles

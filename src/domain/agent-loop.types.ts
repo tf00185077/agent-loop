@@ -39,3 +39,30 @@ export interface ImplementerResult {
   step: string;
   result: string;
 }
+
+export type QuorumVoteDecision = "done" | "not_done" | "abstain";
+
+export interface QuorumVoterBallot {
+  voterId: string;
+  providerKind: string;
+  persona?: string;
+  decision: QuorumVoteDecision;
+  reason: string;
+  rawOutput?: string;
+  error?: string;
+}
+
+export interface QuorumVoteTally {
+  done: number;
+  notDone: number;
+  abstain: number;
+  total: number;
+  majorityReached: boolean;
+}
+
+export interface QuorumVoteResult {
+  proposition: string;
+  ballots: QuorumVoterBallot[];
+  tally: QuorumVoteTally;
+  isDone: boolean;
+}
