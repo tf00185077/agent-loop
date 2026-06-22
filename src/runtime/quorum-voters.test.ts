@@ -5,6 +5,7 @@ import {
   buildGateVotedEventData,
   resolveQuorumVoters,
   runQuorumVote,
+  runScopeVote,
 } from "./quorum-voters.js";
 
 test("resolveQuorumVoters prefers three distinct configured providers", () => {
@@ -116,6 +117,73 @@ test("runQuorumVote runs voters in parallel and tallies majority done", async ()
         decision: "not_done",
         reason: "openai-compatible voted",
         rawOutput: "openai-compatible: NO",
+      },
+    ],
+  });
+});
+
+test("runScopeVote runs voters in parallel and tallies majority refine", async () => {
+  const started: string[] = [];
+  let releaseFirstVote = () => {};
+  const firstVoteStarted = new Promise<void>((resolve) => {
+    releaseFirstVote = resolve;
+  });
+
+  const resultPromise = runScopeVote({
+    proposition: "Is the current task still too large?",
+    voters: [
+      { voterId: "codex-local", providerKind: "codex-local" },
+      { voterId: "claude-local", providerKind: "claude-local" },
+      { voterId: "openai-compatible", providerKind: "openai-compatible" },
+    ],
+    vote: async (voter) => {
+      started.push(voter.voterId);
+      if (voter.voterId === "codex-local") {
+        await firstVoteStarted;
+      }
+      return {
+        decision: voter.voterId !== "openai-compatible",
+        reason: `${voter.voterId} voted`,
+        rawOutput: `${voter.voterId}: ${voter.voterId !== "openai-compatible"}`,
+      };
+    },
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(started, ["codex-local", "claude-local", "openai-compatible"]);
+  releaseFirstVote();
+
+  assert.deepEqual(await resultPromise, {
+    proposition: "Is the current task still too large?",
+    shouldRefine: true,
+    decision: true,
+    tally: {
+      refine: 2,
+      proceed: 1,
+      total: 3,
+      majorityReached: true,
+    },
+    ballots: [
+      {
+        voterId: "codex-local",
+        providerKind: "codex-local",
+        decision: true,
+        reason: "codex-local voted",
+        rawOutput: "codex-local: true",
+      },
+      {
+        voterId: "claude-local",
+        providerKind: "claude-local",
+        decision: true,
+        reason: "claude-local voted",
+        rawOutput: "claude-local: true",
+      },
+      {
+        voterId: "openai-compatible",
+        providerKind: "openai-compatible",
+        decision: false,
+        reason: "openai-compatible voted",
+        rawOutput: "openai-compatible: false",
       },
     ],
   });

@@ -3,6 +3,9 @@ import type {
   QuorumVoteDecision,
   QuorumVoteResult,
   QuorumVoterBallot,
+  ScopeVoteDecision,
+  ScopeVoteResult,
+  ScopeVoterBallot,
 } from "../domain/index.js";
 
 export type QuorumProviderKind = "codex-local" | "claude-local" | "openai-compatible";
@@ -26,8 +29,20 @@ export interface RunQuorumVoteInput {
   vote: (voter: QuorumVoter, proposition: string) => Promise<QuorumVoterResponse>;
 }
 
+export interface RunScopeVoteInput {
+  proposition: string;
+  voters: QuorumVoter[];
+  vote: (voter: QuorumVoter, proposition: string) => Promise<ScopeVoterResponse>;
+}
+
 export interface QuorumVoterResponse {
   decision: QuorumVoteDecision;
+  reason: string;
+  rawOutput?: string;
+}
+
+export interface ScopeVoterResponse {
+  decision: ScopeVoteDecision;
   reason: string;
   rawOutput?: string;
 }
@@ -101,6 +116,44 @@ export async function runQuorumVote(input: RunQuorumVoteInput): Promise<QuorumVo
   };
 }
 
+export async function runScopeVote(input: RunScopeVoteInput): Promise<ScopeVoteResult> {
+  const ballots = await Promise.all(
+    input.voters.map(async (voter) => {
+      try {
+        const response = await input.vote(voter, input.proposition);
+        return toScopeBallot(voter, response);
+      } catch (err) {
+        const message = errorMessage(err);
+        const ballot: ScopeVoterBallot = {
+          voterId: voter.voterId,
+          providerKind: voter.providerKind,
+          decision: false,
+          reason: `Voter failed: ${message}`,
+          error: message,
+        };
+        if (voter.persona) ballot.persona = voter.persona;
+        return ballot;
+      }
+    }),
+  );
+
+  const tally = {
+    refine: ballots.filter((ballot) => ballot.decision).length,
+    proceed: ballots.filter((ballot) => !ballot.decision).length,
+    total: ballots.length,
+    majorityReached: false,
+  };
+  tally.majorityReached = tally.refine >= 2;
+
+  return {
+    proposition: input.proposition,
+    ballots,
+    tally,
+    shouldRefine: tally.majorityReached,
+    decision: tally.majorityReached,
+  };
+}
+
 export function buildGateVotedEventData(result: QuorumVoteResult): EventData {
   return {
     proposition: result.proposition,
@@ -113,6 +166,18 @@ export function buildGateVotedEventData(result: QuorumVoteResult): EventData {
 
 function toBallot(voter: QuorumVoter, response: QuorumVoterResponse): QuorumVoterBallot {
   const ballot: QuorumVoterBallot = {
+    voterId: voter.voterId,
+    providerKind: voter.providerKind,
+    decision: response.decision,
+    reason: response.reason,
+  };
+  if (voter.persona) ballot.persona = voter.persona;
+  if (response.rawOutput) ballot.rawOutput = response.rawOutput;
+  return ballot;
+}
+
+function toScopeBallot(voter: QuorumVoter, response: ScopeVoterResponse): ScopeVoterBallot {
+  const ballot: ScopeVoterBallot = {
     voterId: voter.voterId,
     providerKind: voter.providerKind,
     decision: response.decision,
