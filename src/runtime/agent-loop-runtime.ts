@@ -32,6 +32,8 @@ export interface AgentLoopRuntimeDeps {
   stepRepo: StepRepository;
   eventRepo: EventRepository;
   metadata: ModelProviderMetadata;
+  maxSteps?: number;
+  maxDepth?: number;
   planner: Planner;
   implementer: Implementer;
   gate: CompletionGate;
@@ -43,6 +45,8 @@ export interface AgentLoopRuntime {
 
 export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRuntime {
   const { goalRepo, runRepo, stepRepo, eventRepo, metadata, planner, implementer, gate } = deps;
+  const maxSteps = deps.maxSteps ?? 1;
+  const maxDepth = deps.maxDepth ?? 0;
 
   return {
     async run(goalId) {
@@ -67,97 +71,181 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
         },
       });
 
-      const priorSteps = stepRepo.listForRun(run.id);
-      const decision = await planner.plan({ goal, priorSteps });
-      if (decision.decision !== "IMPLEMENT_DIRECTLY") {
-        throw new Error(`Unsupported loop decision for this step: ${decision.decision}`);
-      }
+      let depth = 0;
+      for (let order = 1; order <= maxSteps; order += 1) {
+        const priorSteps = stepRepo.listForRun(run.id);
+        const decision = await planner.plan({ goal, priorSteps });
 
-      const step = stepRepo.create({
-        goalId,
-        runId: run.id,
-        title: decision.nextStep,
-        description: decision.reason,
-        order: 1,
-      });
+        if (decision.decision === "DECOMPOSE") {
+          eventRepo.create({
+            goalId,
+            runId: run.id,
+            type: "agent.decision",
+            message: `Planner decision: ${decision.decision}`,
+            data: plannerDecisionData(decision),
+          });
+          if (depth >= maxDepth) {
+            finishBounded({
+              goalId,
+              runId: run.id,
+              bound: "maxDepth",
+              value: maxDepth,
+              goalRepo,
+              runRepo,
+              eventRepo,
+            });
+            return;
+          }
+          depth += 1;
+          continue;
+        }
 
-      eventRepo.create({
-        goalId,
-        runId: run.id,
-        stepId: step.id,
-        type: "step.started",
-        message: `Step started: ${step.title}`,
-        data: { stepId: step.id },
-      });
+        if (decision.decision !== "IMPLEMENT_DIRECTLY") {
+          throw new Error(`Unsupported loop decision for this step: ${decision.decision}`);
+        }
 
-      eventRepo.create({
-        goalId,
-        runId: run.id,
-        stepId: step.id,
-        type: "agent.decision",
-        message: `Planner decision: ${decision.decision}`,
-        data: plannerDecisionData(decision),
-      });
+        const step = stepRepo.create({
+          goalId,
+          runId: run.id,
+          title: decision.nextStep,
+          description: decision.reason,
+          order,
+        });
 
-      const implementation = await implementer.implement({ goal, step: decision.nextStep });
-      eventRepo.create({
-        goalId,
-        runId: run.id,
-        stepId: step.id,
-        type: "agent.message",
-        message: implementation.result,
-        data: {
+        eventRepo.create({
+          goalId,
+          runId: run.id,
           stepId: step.id,
-          role: "implementer",
-          step: implementation.step,
-        },
-      });
-
-      const vote = await gate.vote({ goal, step, implementation });
-      eventRepo.create({
-        goalId,
-        runId: run.id,
-        stepId: step.id,
-        type: "gate.voted",
-        message: `Gate voted: ${vote.decision}`,
-        data: buildGateVotedEventData(vote),
-      });
-
-      stepRepo.update(step.id, { status: "completed", result: implementation.result });
-      eventRepo.create({
-        goalId,
-        runId: run.id,
-        stepId: step.id,
-        type: "step.completed",
-        message: `Step completed: ${step.title}`,
-        data: { stepId: step.id },
-      });
-
-      if (vote.isDone) {
-        const finishedAt = new Date().toISOString();
-        runRepo.updateStatus(run.id, "completed", { finishedAt });
-        goalRepo.updateStatus(goalId, "completed", { completedAt: finishedAt });
-
-        eventRepo.create({
-          goalId,
-          runId: run.id,
-          type: "run.completed",
-          message: "Agent loop run completed",
-          data: { runId: run.id },
+          type: "step.started",
+          message: `Step started: ${step.title}`,
+          data: { stepId: step.id },
         });
 
         eventRepo.create({
           goalId,
           runId: run.id,
-          type: "goal.completed",
-          message: "Goal completed successfully",
-          data: { goalId, runId: run.id },
+          stepId: step.id,
+          type: "agent.decision",
+          message: `Planner decision: ${decision.decision}`,
+          data: plannerDecisionData(decision),
         });
+
+        const implementation = await implementer.implement({ goal, step: decision.nextStep });
+        eventRepo.create({
+          goalId,
+          runId: run.id,
+          stepId: step.id,
+          type: "agent.message",
+          message: implementation.result,
+          data: {
+            stepId: step.id,
+            role: "implementer",
+            step: implementation.step,
+          },
+        });
+
+        const vote = await gate.vote({ goal, step, implementation });
+        eventRepo.create({
+          goalId,
+          runId: run.id,
+          stepId: step.id,
+          type: "gate.voted",
+          message: `Gate voted: ${vote.decision}`,
+          data: buildGateVotedEventData(vote),
+        });
+
+        stepRepo.update(step.id, { status: "completed", result: implementation.result });
+        eventRepo.create({
+          goalId,
+          runId: run.id,
+          stepId: step.id,
+          type: "step.completed",
+          message: `Step completed: ${step.title}`,
+          data: { stepId: step.id },
+        });
+
+        if (vote.isDone) {
+          finishCompleted({ goalId, runId: run.id, goalRepo, runRepo, eventRepo });
+          return;
+        }
       }
+
+      finishBounded({
+        goalId,
+        runId: run.id,
+        bound: "maxSteps",
+        value: maxSteps,
+        goalRepo,
+        runRepo,
+        eventRepo,
+      });
     },
   };
 }
 
 function plannerDecisionData(result: PlannerResult) {
   return { ...result };
+}
+
+interface FinishInput {
+  goalId: string;
+  runId: string;
+  goalRepo: GoalRepository;
+  runRepo: RunRepository;
+  eventRepo: EventRepository;
+}
+
+function finishCompleted({ goalId, runId, goalRepo, runRepo, eventRepo }: FinishInput): void {
+  const finishedAt = new Date().toISOString();
+  runRepo.updateStatus(runId, "completed", { finishedAt });
+  goalRepo.updateStatus(goalId, "completed", { completedAt: finishedAt });
+
+  eventRepo.create({
+    goalId,
+    runId,
+    type: "run.completed",
+    message: "Agent loop run completed",
+    data: { runId },
+  });
+
+  eventRepo.create({
+    goalId,
+    runId,
+    type: "goal.completed",
+    message: "Goal completed successfully",
+    data: { goalId, runId },
+  });
+}
+
+interface FinishBoundedInput extends FinishInput {
+  bound: "maxSteps" | "maxDepth";
+  value: number;
+}
+
+function finishBounded(input: FinishBoundedInput): void {
+  const finishedAt = new Date().toISOString();
+  input.runRepo.updateStatus(input.runId, "completed", { finishedAt });
+  input.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
+
+  input.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "run.completed",
+    message: `Agent loop stopped at ${input.bound}`,
+    data: { runId: input.runId, terminalState: "bounded", bound: input.bound },
+  });
+
+  input.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "goal.blocked",
+    message: `Goal stopped at ${input.bound}`,
+    data: {
+      goalId: input.goalId,
+      runId: input.runId,
+      terminalState: "bounded",
+      bound: input.bound,
+      [input.bound]: input.value,
+    },
+  });
 }

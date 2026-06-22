@@ -147,3 +147,137 @@ test("agent loop persists planner decision, implementer result, and gate vote fo
 
   db.close();
 });
+
+test("agent loop stops at maxSteps and records a bounded terminal state", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const goal = goalRepo.create({
+    title: "Respect step bounds",
+    description: "Keep planning until the step bound stops the loop",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+  let plannerCalls = 0;
+
+  const runtime = createAgentLoopRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    metadata: { provider: "fake-loop", model: "fake-model" },
+    maxSteps: 2,
+    maxDepth: 1,
+    planner: {
+      async plan(input) {
+        assert.equal(input.priorSteps.length, plannerCalls);
+        plannerCalls += 1;
+        return {
+          decision: "IMPLEMENT_DIRECTLY",
+          nextStep: `Bounded step ${plannerCalls}`,
+          reason: "Try one more bounded step",
+        };
+      },
+    },
+    implementer: {
+      async implement(input) {
+        return {
+          step: input.step,
+          result: `${input.step} result`,
+        };
+      },
+    },
+    gate: {
+      async vote() {
+        return {
+          proposition: "Does the current result satisfy the goal?",
+          decision: "not_done",
+          isDone: false,
+          tally: {
+            done: 1,
+            notDone: 2,
+            abstain: 0,
+            total: 3,
+            majorityReached: false,
+          },
+          ballots: [],
+        };
+      },
+    },
+  });
+
+  await runtime.run(goal.id);
+
+  const runId = eventRepo.listForGoal(goal.id)[0]?.runId;
+  assert.ok(runId);
+  assert.equal(plannerCalls, 2);
+  assert.equal(stepRepo.listForRun(runId).length, 2);
+  assert.equal(runRepo.getById(runId)?.status, "completed");
+  assert.equal(goalRepo.getById(goal.id)?.status, "blocked");
+
+  const terminal = eventRepo.listForGoal(goal.id).at(-1);
+  assert.equal(terminal?.type, "goal.blocked");
+  assert.deepEqual(terminal?.data, {
+    goalId: goal.id,
+    runId,
+    terminalState: "bounded",
+    bound: "maxSteps",
+    maxSteps: 2,
+  });
+
+  db.close();
+});
+
+test("agent loop stops decomposition at maxDepth and records a bounded terminal state", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const goal = goalRepo.create({
+    title: "Respect depth bounds",
+    description: "Do not decompose past the configured depth",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  const runtime = createAgentLoopRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    metadata: { provider: "fake-loop", model: "fake-model" },
+    maxSteps: 3,
+    maxDepth: 0,
+    planner: {
+      async plan() {
+        return {
+          decision: "DECOMPOSE",
+          subSteps: ["First child step"],
+          reason: "Needs a child step",
+        };
+      },
+    },
+    implementer: {
+      async implement() {
+        throw new Error("Implementer should not run when decomposition is bounded");
+      },
+    },
+    gate: {
+      async vote() {
+        throw new Error("Gate should not run when decomposition is bounded");
+      },
+    },
+  });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  const runId = events[0]?.runId;
+  assert.ok(runId);
+  assert.equal(stepRepo.listForRun(runId).length, 0);
+  assert.equal(events.some((event) => event.type === "agent.decision"), true);
+  assert.equal(runRepo.getById(runId)?.status, "completed");
+  assert.equal(goalRepo.getById(goal.id)?.status, "blocked");
+  assert.deepEqual(events.at(-1)?.data, {
+    goalId: goal.id,
+    runId,
+    terminalState: "bounded",
+    bound: "maxDepth",
+    maxDepth: 0,
+  });
+
+  db.close();
+});
