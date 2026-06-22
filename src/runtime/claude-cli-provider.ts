@@ -92,8 +92,9 @@ function runClaudePrint(
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
+    child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
+      input.onProgress?.(chunk);
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk;

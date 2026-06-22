@@ -61,6 +61,28 @@ function readCapture(capturePath: string): { args: string[]; stdin: string } {
   return JSON.parse(readFileSync(capturePath, "utf8"));
 }
 
+/** Like fakeCodex, but also writes `progressText` to stdout before the final-message file. */
+function fakeCodexWithStdoutProgress(progressText: string, response: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-progress-test-"));
+  const scriptPath = join(dir, "fake-codex-progress.mjs");
+  writeFileSync(
+    scriptPath,
+    `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+process.stdout.write(${JSON.stringify(progressText)});
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { stdin += chunk; });
+process.stdin.on("end", () => {
+  const outputIndex = process.argv.indexOf("--output-last-message");
+  writeFileSync(process.argv[outputIndex + 1], ${JSON.stringify(response)});
+});
+`,
+  );
+  chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
 test("provider spawns codex and returns the last-message text", skipOnWindows, async () => {
   const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-cap-")), "cap.json");
   const provider = createCodexCliProvider({
@@ -103,6 +125,39 @@ test("provider omits --model for blank, legacy, and mock labels", skipOnWindows,
     assert.equal(output.metadata.model, label?.trim() ? label : "codex-default");
     assert.equal(readCapture(capturePath).args.includes("--model"), false, `label=${String(label)}`);
   }
+});
+
+test("provider forwards stdout chunks to onProgress while still using --output-last-message for the final text", skipOnWindows, async () => {
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodexWithStdoutProgress("reasoning: thinking about it...", "final answer"),
+      modelLabel: "gpt-5-codex",
+      timeoutMs: 10_000,
+    },
+  });
+  const progressChunks: string[] = [];
+
+  const output = await provider.complete({ ...input, onProgress: (chunk) => progressChunks.push(chunk) });
+
+  assert.equal(output.text, "final answer");
+  assert.ok(progressChunks.join("").includes("reasoning: thinking about it..."));
+});
+
+test("provider succeeds without progress chunks when codex emits no useful stdout", skipOnWindows, async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-cap-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodex("no stdout response", capturePath),
+      modelLabel: "gpt-5-codex",
+      timeoutMs: 10_000,
+    },
+  });
+  const progressChunks: string[] = [];
+
+  const output = await provider.complete({ ...input, onProgress: (chunk) => progressChunks.push(chunk) });
+
+  assert.equal(output.text, "no stdout response");
+  assert.equal(progressChunks.length, 0);
 });
 
 test("provider maps non-zero exit to a provider error", skipOnWindows, async () => {

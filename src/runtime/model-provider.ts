@@ -13,6 +13,13 @@ export interface ModelProviderInput {
    * provider can resume a session. Undefined starts a fresh interaction.
    */
   conversationState?: unknown;
+  /**
+   * Optional sink for raw, unsanitized process output chunks observed while
+   * the provider runs. The runtime sanitizes and persists non-empty chunks
+   * as durable progress events; providers that have no streamable output
+   * may simply not call it.
+   */
+  onProgress?: (chunk: string) => void;
 }
 
 export interface ModelProviderGoalContext {

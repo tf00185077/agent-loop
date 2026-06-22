@@ -319,6 +319,115 @@ test("provider runtime tolerates absent conversation state", async () => {
   db.close();
 });
 
+test("provider runtime persists sanitized progress chunks as durable agent.progress events", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "fake-cli", model: "fake-model" },
+      async complete(input: ModelProviderInput) {
+        input.onProgress?.("Analyzing the goal...");
+        input.onProgress?.("Drafting a plan...");
+        return {
+          text: "Final response",
+          metadata: { provider: "fake-cli", model: "fake-model" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Stream progress",
+    description: "Persist progress chunks as durable events",
+  });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  const progressEvents = events.filter((event) => event.type === "agent.progress");
+  assert.deepEqual(
+    progressEvents.map((event) => event.message),
+    ["Analyzing the goal...", "Drafting a plan..."],
+  );
+  assert.deepEqual(progressEvents[0]?.data, { provider: "fake-cli" });
+
+  const finalMessageIndex = events.findIndex((event) => event.type === "agent.message");
+  const lastProgressIndex = events.findIndex(
+    (event) => event === progressEvents[progressEvents.length - 1],
+  );
+  assert.ok(lastProgressIndex < finalMessageIndex, "progress events must precede the final result");
+
+  db.close();
+});
+
+test("provider runtime ignores empty or whitespace-only progress chunks", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      async complete(input: ModelProviderInput) {
+        input.onProgress?.("   ");
+        input.onProgress?.("");
+        return {
+          text: "Final response",
+          metadata: { provider: "fake", model: "fake-model" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "No-op progress",
+    description: "Empty chunks must not create events",
+  });
+
+  await runtime.run(goal.id);
+
+  const progressEvents = eventRepo.listForGoal(goal.id).filter((event) => event.type === "agent.progress");
+  assert.equal(progressEvents.length, 0);
+
+  db.close();
+});
+
+test("provider runtime redacts secret-like progress chunks before persisting and streaming", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "fake-cli", model: "fake-model" },
+      async complete(input: ModelProviderInput) {
+        input.onProgress?.("Authorization: Bearer sk-abcdefghijklmnop");
+        input.onProgress?.("codex --api-key supersecretvalue exec");
+        return {
+          text: "Final response",
+          metadata: { provider: "fake-cli", model: "fake-model" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Redact secrets",
+    description: "Secret-bearing progress output must be sanitized",
+  });
+
+  await runtime.run(goal.id);
+
+  const progressEvents = eventRepo.listForGoal(goal.id).filter((event) => event.type === "agent.progress");
+  const serialized = JSON.stringify(progressEvents);
+  assert.equal(serialized.includes("sk-abcdefghijklmnop"), false);
+  assert.equal(serialized.includes("supersecretvalue"), false);
+  assert.ok(progressEvents.every((event) => event.message.includes("[redacted]")));
+
+  db.close();
+});
+
 test("provider runtime throws if goal does not exist", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const runtime = createProviderRuntime({

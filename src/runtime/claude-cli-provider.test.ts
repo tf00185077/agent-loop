@@ -84,6 +84,23 @@ test("provider spawns claude --print and returns the stdout text", skipOnWindows
   assert.equal(captured.args[modelIndex + 1], "claude-sonnet-4-6");
 });
 
+test("provider forwards stdout chunks to onProgress while still returning the final text", skipOnWindows, async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-claude-cap-")), "cap.json");
+  const provider = createClaudeCliProvider({
+    config: {
+      commandPath: fakeClaude("claude direct response", capturePath),
+      modelLabel: "claude-sonnet-4-6",
+      timeoutMs: 10_000,
+    },
+  });
+  const progressChunks: string[] = [];
+
+  const output = await provider.complete({ ...input, onProgress: (chunk) => progressChunks.push(chunk) });
+
+  assert.equal(output.text, "claude direct response");
+  assert.ok(progressChunks.join("").includes("claude direct response"));
+});
+
 test("provider omits --model for a blank label and reports claude-default", skipOnWindows, async () => {
   for (const label of [null, "", "   "]) {
     const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-claude-cap-")), "cap.json");

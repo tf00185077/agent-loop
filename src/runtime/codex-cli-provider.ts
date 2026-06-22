@@ -74,6 +74,7 @@ async function runCodexExec(
       args,
       input.prompt,
       config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      input.onProgress,
     );
     if (code !== 0) {
       throw new CodexCliProviderError(
@@ -96,11 +97,12 @@ function spawnCodex(
   args: string[],
   stdin: string,
   timeoutMs: number,
+  onProgress?: (chunk: string) => void,
 ): Promise<{ code: number | null; stderr: string }> {
   return new Promise((resolve, reject) => {
     const request = toSpawnRequest(command, args);
     const child = spawn(request.command, request.args, {
-      stdio: ["pipe", "ignore", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
     let stderr = "";
@@ -113,6 +115,13 @@ function spawnCodex(
       reject(new CodexCliProviderError("Codex CLI command timed out"));
     }, timeoutMs);
 
+    // Codex normally ignores stdout in favor of --output-last-message, but
+    // it may still print useful progress text; forward it without relying
+    // on it for the final result.
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      onProgress?.(chunk);
+    });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
       stderr += chunk;

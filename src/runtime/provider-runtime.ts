@@ -6,6 +6,7 @@ import type {
   StepRepository,
 } from "../persistence/runtime-repositories.js";
 import type { ModelProvider, ModelProviderOutput } from "./model-provider.js";
+import { sanitizeProcessOutput } from "./process-output-sanitizer.js";
 
 export interface ProviderRuntimeDeps {
   goalRepo: GoalRepository;
@@ -39,6 +40,16 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
         goal: toProviderGoalContext(goal),
         prompt: buildProviderPrompt(goal),
         conversationState: options?.conversationState,
+        onProgress: (chunk: string) => {
+          const sanitized = sanitizeProcessOutput(chunk).trim();
+          if (!sanitized) return;
+          eventRepo.create({
+            goalId,
+            type: "agent.progress",
+            message: sanitized,
+            data: { provider: provider.metadata?.provider ?? "unknown" },
+          });
+        },
       };
       let output: ModelProviderOutput;
       try {

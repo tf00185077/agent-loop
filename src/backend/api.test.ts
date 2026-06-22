@@ -1010,6 +1010,11 @@ describe("Backend API", () => {
         const captured = JSON.parse(readFileSync(capturePath, "utf8")) as { args: string[] };
         const modelIndex = captured.args.indexOf("--model");
         assert.equal(captured.args[modelIndex + 1], "claude-sonnet-4-6");
+
+        assert.ok(
+          events.some((e) => e.type === "agent.progress" && e.message === "Claude override response"),
+          "Claude CLI stdout must be captured as a durable agent.progress event",
+        );
       } finally {
         await providerServer.close();
       }

@@ -12,11 +12,11 @@
 
 ## 3. Provider Process Output
 
-- [ ] 3.1 Add provider-runtime tests for persisting sanitized progress events from provider output chunks.
-- [ ] 3.2 Extend provider contract or runtime dependencies to accept progress callbacks.
-- [ ] 3.3 Capture and sanitize Claude CLI stdout/stderr chunks as progress events while preserving final result behavior.
-- [ ] 3.4 Investigate Codex CLI process output with the current `codex exec --output-last-message` invocation and implement safe chunk capture where useful output is available.
-- [ ] 3.5 Add provider tests proving secret-like process output is redacted before persistence and streaming.
+- [x] 3.1 Add provider-runtime tests for persisting sanitized progress events from provider output chunks.
+- [x] 3.2 Extend provider contract or runtime dependencies to accept progress callbacks.
+- [x] 3.3 Capture and sanitize Claude CLI stdout/stderr chunks as progress events while preserving final result behavior.
+- [x] 3.4 Investigate Codex CLI process output with the current `codex exec --output-last-message` invocation and implement safe chunk capture where useful output is available.
+- [x] 3.5 Add provider tests proving secret-like process output is redacted before persistence and streaming.
 
 ## 4. Dashboard Live Timeline
 
