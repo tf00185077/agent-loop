@@ -1033,6 +1033,42 @@ describe("Backend API", () => {
       }
     });
 
+    it("wires configured scope assessment bounds into the mock runtime", async () => {
+      const providerServer = await startServer(undefined, {
+        agentLoopMaxScopeAssessmentAttempts: 1,
+        agentLoopMaxScopeRefinementRounds: 3,
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "mock" }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "scope API wiring",
+            description: "exercise configured scope assessment bounds",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+        });
+        assert.equal(res.status, 200);
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        const scopeVote = events.find((event) => event.type === "scope.voted");
+        assert.equal((scopeVote?.data as Record<string, unknown>).decision, false);
+        assert.equal(events.filter((event) => event.type === "agent.decision").length, 1);
+      } finally {
+        await providerServer.close();
+      }
+    });
+
     it("records a full iterative mock loop timeline through the API", async () => {
       const providerServer = await startServer();
 

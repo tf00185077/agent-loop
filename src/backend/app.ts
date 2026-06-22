@@ -39,6 +39,8 @@ export interface CreateAppOptions {
   claudeCliProviderTimeoutMs?: number;
   agentLoopMaxSteps?: number;
   agentLoopMaxDepth?: number;
+  agentLoopMaxScopeAssessmentAttempts?: number;
+  agentLoopMaxScopeRefinementRounds?: number;
 }
 
 export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
@@ -65,6 +67,8 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     claudeCliProviderTimeoutMs: options.claudeCliProviderTimeoutMs,
     agentLoopMaxSteps: options.agentLoopMaxSteps,
     agentLoopMaxDepth: options.agentLoopMaxDepth,
+    agentLoopMaxScopeAssessmentAttempts: options.agentLoopMaxScopeAssessmentAttempts,
+    agentLoopMaxScopeRefinementRounds: options.agentLoopMaxScopeRefinementRounds,
   });
 
   app.get("/health", (_req, res) => {
@@ -108,6 +112,8 @@ interface CreateRuntimeFromEnvironmentDeps extends RuntimeRepositories {
   env: ProviderEnvironment;
   agentLoopMaxSteps?: number;
   agentLoopMaxDepth?: number;
+  agentLoopMaxScopeAssessmentAttempts?: number;
+  agentLoopMaxScopeRefinementRounds?: number;
 }
 
 interface CreateRuntimeFromSavedProviderSettingsDeps extends CreateRuntimeFromEnvironmentDeps {
@@ -120,6 +126,8 @@ interface CreateRuntimeFromSavedProviderSettingsDeps extends CreateRuntimeFromEn
   claudeCliProviderTimeoutMs?: number;
   agentLoopMaxSteps?: number;
   agentLoopMaxDepth?: number;
+  agentLoopMaxScopeAssessmentAttempts?: number;
+  agentLoopMaxScopeRefinementRounds?: number;
 }
 
 function createRuntimeFromSavedProviderSettings(
@@ -152,6 +160,8 @@ function selectRuntimeForSettings(
       ...deps,
       maxSteps: deps.agentLoopMaxSteps,
       maxDepth: deps.agentLoopMaxDepth,
+      maxScopeAssessmentAttempts: deps.agentLoopMaxScopeAssessmentAttempts,
+      maxScopeRefinementRounds: deps.agentLoopMaxScopeRefinementRounds,
     });
   }
 
@@ -231,6 +241,8 @@ function createRuntimeFromEnvironment(deps: CreateRuntimeFromEnvironmentDeps) {
       eventRepo,
       maxSteps: deps.agentLoopMaxSteps,
       maxDepth: deps.agentLoopMaxDepth,
+      maxScopeAssessmentAttempts: deps.agentLoopMaxScopeAssessmentAttempts,
+      maxScopeRefinementRounds: deps.agentLoopMaxScopeRefinementRounds,
     });
   }
 
