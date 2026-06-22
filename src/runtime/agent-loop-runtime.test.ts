@@ -348,3 +348,59 @@ test("agent loop sources planner memory from persisted prior steps each iteratio
 
   db.close();
 });
+
+test("agent loop records a blocked terminal state when the planner blocks", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const goal = goalRepo.create({
+    title: "Ask for human input",
+    description: "Planner cannot proceed safely",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  const runtime = createAgentLoopRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    metadata: { provider: "fake-loop", model: "fake-model" },
+    planner: {
+      async plan() {
+        return {
+          decision: "BLOCKED",
+          reason: "Need the user to choose the deployment target",
+        };
+      },
+    },
+    implementer: {
+      async implement() {
+        throw new Error("Implementer should not run for blocked planner decisions");
+      },
+    },
+    gate: {
+      async vote() {
+        throw new Error("Gate should not run for blocked planner decisions");
+      },
+    },
+  });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  const runId = events[0]?.runId;
+  assert.ok(runId);
+  assert.equal(stepRepo.listForRun(runId).length, 0);
+  assert.equal(runRepo.getById(runId)?.status, "completed");
+  assert.equal(goalRepo.getById(goal.id)?.status, "blocked");
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["run.started", "agent.decision", "run.completed", "goal.blocked"],
+  );
+  assert.deepEqual(events.at(-1)?.data, {
+    goalId: goal.id,
+    runId,
+    terminalState: "blocked",
+    reason: "Need the user to choose the deployment target",
+  });
+
+  db.close();
+});

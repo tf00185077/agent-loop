@@ -100,6 +100,25 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
           continue;
         }
 
+        if (decision.decision === "BLOCKED") {
+          eventRepo.create({
+            goalId,
+            runId: run.id,
+            type: "agent.decision",
+            message: `Planner decision: ${decision.decision}`,
+            data: plannerDecisionData(decision),
+          });
+          finishBlocked({
+            goalId,
+            runId: run.id,
+            reason: decision.reason,
+            goalRepo,
+            runRepo,
+            eventRepo,
+          });
+          return;
+        }
+
         if (decision.decision !== "IMPLEMENT_DIRECTLY") {
           throw new Error(`Unsupported loop decision for this step: ${decision.decision}`);
         }
@@ -246,6 +265,37 @@ function finishBounded(input: FinishBoundedInput): void {
       terminalState: "bounded",
       bound: input.bound,
       [input.bound]: input.value,
+    },
+  });
+}
+
+interface FinishBlockedInput extends FinishInput {
+  reason: string;
+}
+
+function finishBlocked(input: FinishBlockedInput): void {
+  const finishedAt = new Date().toISOString();
+  input.runRepo.updateStatus(input.runId, "completed", { finishedAt });
+  input.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
+
+  input.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "run.completed",
+    message: "Agent loop blocked",
+    data: { runId: input.runId, terminalState: "blocked" },
+  });
+
+  input.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "goal.blocked",
+    message: input.reason,
+    data: {
+      goalId: input.goalId,
+      runId: input.runId,
+      terminalState: "blocked",
+      reason: input.reason,
     },
   });
 }
