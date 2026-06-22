@@ -113,6 +113,53 @@ test("mock runtime does not record gate voter ballots after direct implementatio
   db.close();
 });
 
+test("mock runtime records deterministic scope voter ballots for broad mock goals", async () => {
+  const { db, goalRepo, eventRepo, runtime } = setup();
+
+  const goal = goalRepo.create({ title: "scope this goal", description: "Exercise scope voting" });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  const scopeVotes = events.filter((event) => event.type === "scope.voted");
+  assert.equal(scopeVotes.length, 1);
+  assert.deepEqual(scopeVotes[0]?.data, {
+    proposition: "Is the current task still too large?",
+    decision: false,
+    shouldRefine: false,
+    tally: {
+      refine: 1,
+      proceed: 2,
+      total: 3,
+      majorityReached: false,
+    },
+    ballots: [
+      {
+        voterId: "mock-voter-1",
+        providerKind: "mock",
+        decision: false,
+        reason: "The mock scope is acceptable for one implementer.",
+      },
+      {
+        voterId: "mock-voter-2",
+        providerKind: "mock",
+        decision: false,
+        reason: "Proceed with the first mock sub-step.",
+      },
+      {
+        voterId: "mock-voter-3",
+        providerKind: "mock",
+        decision: true,
+        reason: "A conservative mock voter requests one more split.",
+      },
+    ],
+  });
+  assert.equal(goalRepo.getById(goal.id)?.status, "completed");
+
+  db.close();
+});
+
 test("every started step has a matching step.completed — timeline is self-contained", async () => {
   const { db, goalRepo, eventRepo, runtime } = setup();
 
