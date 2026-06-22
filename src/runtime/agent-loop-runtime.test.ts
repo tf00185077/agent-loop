@@ -281,3 +281,70 @@ test("agent loop stops decomposition at maxDepth and records a bounded terminal 
 
   db.close();
 });
+
+test("agent loop sources planner memory from persisted prior steps each iteration", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const goal = goalRepo.create({
+    title: "Remember persisted work",
+    description: "Use durable steps as planner memory",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+  const observedPriorResults: Array<string | null> = [];
+
+  const runtime = createAgentLoopRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    metadata: { provider: "fake-loop", model: "fake-model" },
+    maxSteps: 2,
+    planner: {
+      async plan(input) {
+        observedPriorResults.push(input.priorSteps.at(-1)?.result ?? null);
+        return {
+          decision: "IMPLEMENT_DIRECTLY",
+          nextStep: input.priorSteps.length === 0 ? "First durable step" : "Second durable step",
+          reason: "Use persisted history",
+        };
+      },
+    },
+    implementer: {
+      async implement(input) {
+        return {
+          step: input.step,
+          result: `${input.step} persisted result`,
+        };
+      },
+    },
+    gate: {
+      async vote(input) {
+        return {
+          proposition: "Does the current result satisfy the goal?",
+          decision: input.implementation.step === "Second durable step" ? "done" : "not_done",
+          isDone: input.implementation.step === "Second durable step",
+          tally: {
+            done: input.implementation.step === "Second durable step" ? 2 : 1,
+            notDone: input.implementation.step === "Second durable step" ? 1 : 2,
+            abstain: 0,
+            total: 3,
+            majorityReached: input.implementation.step === "Second durable step",
+          },
+          ballots: [],
+        };
+      },
+    },
+  });
+
+  await runtime.run(goal.id);
+
+  assert.deepEqual(observedPriorResults, [null, "First durable step persisted result"]);
+  const runId = eventRepo.listForGoal(goal.id)[0]?.runId;
+  assert.ok(runId);
+  assert.deepEqual(
+    stepRepo.listForRun(runId).map((step) => step.result),
+    ["First durable step persisted result", "Second durable step persisted result"],
+  );
+  assert.equal(goalRepo.getById(goal.id)?.status, "completed");
+
+  db.close();
+});
