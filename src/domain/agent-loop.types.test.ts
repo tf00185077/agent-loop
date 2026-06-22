@@ -6,10 +6,15 @@ import {
   type EventType,
   type QuorumGateDecision,
   type PlannerDecision,
+  type PlannerScopeAssessment,
   type QuorumVoteDecision,
   type QuorumVoteResult,
   type QuorumVoteTally,
   type QuorumVoterBallot,
+  type ScopeVoteDecision,
+  type ScopeVoteResult,
+  type ScopeVoteTally,
+  type ScopeVoterBallot,
 } from "./index.js";
 
 test("planner decisions are a closed exported value set", () => {
@@ -69,4 +74,44 @@ test("quorum vote types model ballots and the final tally", () => {
   assert.equal(result.decision, "not_done");
   assert.equal(abstainDecision, "abstain");
   assert.equal(finalDecision, "not_done");
+});
+
+test("scope assessment and vote types model binary refinement decisions", () => {
+  const assessment = "too_large" satisfies PlannerScopeAssessment;
+  const ballots = [
+    {
+      voterId: "codex-primary",
+      providerKind: "codex-local",
+      decision: true,
+      reason: "The task still crosses too many files.",
+      rawOutput: "REFINE: true",
+    },
+    {
+      voterId: "fallback-skeptic",
+      providerKind: "codex-local",
+      persona: "skeptic",
+      decision: false,
+      reason: "The task is implementable as one step.",
+    },
+  ] satisfies ScopeVoterBallot[];
+  const tally = {
+    refine: 1,
+    proceed: 1,
+    total: 2,
+    majorityReached: false,
+  } satisfies ScopeVoteTally;
+  const result = {
+    proposition: "Is the current task still too large?",
+    ballots,
+    tally,
+    shouldRefine: false,
+    decision: false,
+  } satisfies ScopeVoteResult;
+  const finalDecision = false satisfies ScopeVoteDecision;
+
+  assert.equal(assessment, "too_large");
+  assert.equal(result.ballots[0]?.decision, true);
+  assert.equal(result.tally.proceed, 1);
+  assert.equal(result.shouldRefine, false);
+  assert.equal(finalDecision, false);
 });

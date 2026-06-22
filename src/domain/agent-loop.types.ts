@@ -41,6 +41,35 @@ export interface ImplementerResult {
   result: string;
 }
 
+export type PlannerScopeAssessment = "ready" | "too_large" | "too_small";
+
+export type ScopeVoteDecision = boolean;
+
+export interface ScopeVoterBallot {
+  voterId: string;
+  providerKind: string;
+  persona?: string;
+  decision: ScopeVoteDecision;
+  reason: string;
+  rawOutput?: string;
+  error?: string;
+}
+
+export interface ScopeVoteTally {
+  refine: number;
+  proceed: number;
+  total: number;
+  majorityReached: boolean;
+}
+
+export interface ScopeVoteResult {
+  proposition: string;
+  ballots: ScopeVoterBallot[];
+  tally: ScopeVoteTally;
+  shouldRefine: boolean;
+  decision: ScopeVoteDecision;
+}
+
 export type QuorumVoteDecision = "done" | "not_done" | "abstain";
 
 export type QuorumGateDecision = "done" | "not_done";
