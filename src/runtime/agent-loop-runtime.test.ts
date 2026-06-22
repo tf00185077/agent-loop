@@ -238,6 +238,95 @@ test("agent loop runs a scope vote after the scope assessment attempt limit", as
   db.close();
 });
 
+test("agent loop carries planner and voter reasons into the next refinement round", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const goal = goalRepo.create({
+    title: "Carry refinement context",
+    description: "Avoid repeating the same broad decomposition",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+  const observedContexts: unknown[] = [];
+
+  const runtime = createAgentLoopRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    metadata: { provider: "fake-loop", model: "fake-model" },
+    maxScopeAssessmentAttempts: 1,
+    maxScopeRefinementRounds: 2,
+    planner: {
+      async plan(input) {
+        observedContexts.push(input.scopeRefinementContext ?? null);
+        if (observedContexts.length === 1) {
+          return {
+            decision: "DECOMPOSE",
+            scopeAssessment: "too_large",
+            subSteps: ["Split runtime changes"],
+            reason: "The runtime and voter work are bundled together.",
+          };
+        }
+        return {
+          decision: "IMPLEMENT_DIRECTLY",
+          nextStep: "Implement only the runtime transition",
+          reason: "The scope is now narrow enough.",
+        };
+      },
+    },
+    implementer: {
+      async implement(input) {
+        return {
+          step: input.step,
+          result: "Implemented the runtime transition",
+        };
+      },
+    },
+    gate: {
+      async vote() {
+        throw new Error("Completion gate should not run for direct implementation");
+      },
+    },
+    scopeGate: {
+      async vote() {
+        return {
+          proposition: "Is the current task still too large?",
+          decision: true,
+          shouldRefine: true,
+          tally: {
+            refine: 2,
+            proceed: 1,
+            total: 3,
+            majorityReached: true,
+          },
+          ballots: [
+            {
+              voterId: "codex-local",
+              providerKind: "codex-local",
+              decision: true,
+              reason: "Keep only the runtime transition in the next round.",
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  await runtime.run(goal.id);
+
+  assert.deepEqual(observedContexts, [
+    null,
+    {
+      assessmentAttempt: 0,
+      refinementRound: 1,
+      previousPlannerReason: "The runtime and voter work are bundled together.",
+      previousVoterReason: "Keep only the runtime transition in the next round.",
+    },
+  ]);
+  assert.equal(goalRepo.getById(goal.id)?.status, "completed");
+
+  db.close();
+});
+
 test("agent loop records a blocked terminal state when the planner blocks", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const goal = goalRepo.create({

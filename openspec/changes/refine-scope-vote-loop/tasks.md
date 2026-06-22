@@ -20,7 +20,7 @@
 
 - [x] 4.1 Remove post-implementation voting from `IMPLEMENT_DIRECTLY` and close the current work item after marking the step completed.
 - [x] 4.2 Add separate `maxScopeAssessmentAttempts` and `maxScopeRefinementRounds` loop bounds.
-- [ ] 4.3 Carry the latest planner and voter reasons into the next refinement round.
+- [x] 4.3 Carry the latest planner and voter reasons into the next refinement round.
 - [ ] 4.4 Proceed directly to implementation when a binary scope vote returns false.
 - [ ] 4.5 Block only when the planner returns blocked or scope refinement rounds are exhausted.
 

@@ -13,7 +13,7 @@ import type {
   StepRepository,
 } from "../persistence/runtime-repositories.js";
 import type { Implementer } from "./agent-implementer.js";
-import type { Planner } from "./agent-planner.js";
+import type { Planner, PlannerScopeRefinementContext } from "./agent-planner.js";
 import type { ModelProviderMetadata } from "./model-provider.js";
 import { buildScopeVotedEventData } from "./quorum-voters.js";
 
@@ -95,9 +95,10 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
       let order = 1;
       let scopeAssessmentAttempt = 0;
       let scopeRefinementRound = 0;
+      let scopeRefinementContext: PlannerScopeRefinementContext | undefined;
       while (order <= maxSteps) {
         const priorSteps = stepRepo.listForRun(run.id);
-        const decision = await planner.plan({ goal, priorSteps });
+        const decision = await planner.plan({ goal, priorSteps, scopeRefinementContext });
 
         if (decision.decision === "DECOMPOSE") {
           eventRepo.create({
@@ -141,6 +142,12 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
                 return;
               }
               scopeAssessmentAttempt = 0;
+              scopeRefinementContext = {
+                assessmentAttempt: scopeAssessmentAttempt,
+                refinementRound: scopeRefinementRound,
+                previousPlannerReason: decision.reason,
+                previousVoterReason: scopeVoteReason(vote),
+              };
               continue;
             }
           }
@@ -248,6 +255,13 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
       });
     },
   };
+}
+
+function scopeVoteReason(vote: ScopeVoteResult): string | undefined {
+  return (
+    vote.ballots.find((ballot) => ballot.decision === vote.decision)?.reason ??
+    vote.ballots[0]?.reason
+  );
 }
 
 async function runScopeGate(input: ScopeGateInput & { scopeGate?: ScopeGate }): Promise<ScopeVoteResult> {
