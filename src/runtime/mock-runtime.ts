@@ -57,6 +57,47 @@ export function createMockRuntime(deps: MockRuntimeDeps): MockRuntime {
     gate: {
       async vote(input) {
         const isDone = input.implementation.step === "Execute mock result";
+        const ballots = isDone
+          ? [
+              {
+                voterId: "mock-voter-1",
+                providerKind: "mock",
+                decision: "done" as const,
+                reason: "The fixed mock plan reached its final step.",
+              },
+              {
+                voterId: "mock-voter-2",
+                providerKind: "mock",
+                decision: "done" as const,
+                reason: "The final mock implementation result satisfies the goal.",
+              },
+              {
+                voterId: "mock-voter-3",
+                providerKind: "mock",
+                decision: "not_done" as const,
+                reason: "A conservative mock voter asks for one more pass.",
+              },
+            ]
+          : [
+              {
+                voterId: "mock-voter-1",
+                providerKind: "mock",
+                decision: "not_done" as const,
+                reason: "The deterministic mock loop still has one step remaining.",
+              },
+              {
+                voterId: "mock-voter-2",
+                providerKind: "mock",
+                decision: "done" as const,
+                reason: "The first mock implementation result is acceptable but not terminal.",
+              },
+              {
+                voterId: "mock-voter-3",
+                providerKind: "mock",
+                decision: "not_done" as const,
+                reason: "Continue until the fixed mock plan reaches its final step.",
+              },
+            ];
         return {
           proposition: "Does the current result satisfy the goal?",
           decision: isDone ? "done" : "not_done",
@@ -68,7 +109,7 @@ export function createMockRuntime(deps: MockRuntimeDeps): MockRuntime {
             total: 3,
             majorityReached: isDone,
           },
-          ballots: [],
+          ballots,
         };
       },
     },

@@ -107,6 +107,65 @@ test("mock runtime drives a deterministic terminating multi-step loop", async ()
   db.close();
 });
 
+test("mock runtime records deterministic gate voter ballots", async () => {
+  const { db, goalRepo, eventRepo, runtime } = setup();
+
+  const goal = goalRepo.create({ title: "Record mock voters", description: "Gate ballots should be predictable" });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  await runtime.run(goal.id);
+
+  const gateVotes = eventRepo.listForGoal(goal.id).filter((event) => event.type === "gate.voted");
+  assert.equal(gateVotes.length, 2);
+  assert.deepEqual(
+    gateVotes.map((event) => event.data.ballots),
+    [
+      [
+        {
+          voterId: "mock-voter-1",
+          providerKind: "mock",
+          decision: "not_done",
+          reason: "The deterministic mock loop still has one step remaining.",
+        },
+        {
+          voterId: "mock-voter-2",
+          providerKind: "mock",
+          decision: "done",
+          reason: "The first mock implementation result is acceptable but not terminal.",
+        },
+        {
+          voterId: "mock-voter-3",
+          providerKind: "mock",
+          decision: "not_done",
+          reason: "Continue until the fixed mock plan reaches its final step.",
+        },
+      ],
+      [
+        {
+          voterId: "mock-voter-1",
+          providerKind: "mock",
+          decision: "done",
+          reason: "The fixed mock plan reached its final step.",
+        },
+        {
+          voterId: "mock-voter-2",
+          providerKind: "mock",
+          decision: "done",
+          reason: "The final mock implementation result satisfies the goal.",
+        },
+        {
+          voterId: "mock-voter-3",
+          providerKind: "mock",
+          decision: "not_done",
+          reason: "A conservative mock voter asks for one more pass.",
+        },
+      ],
+    ],
+  );
+
+  db.close();
+});
+
 test("every started step has a matching step.completed — timeline is self-contained", async () => {
   const { db, goalRepo, eventRepo, runtime } = setup();
 

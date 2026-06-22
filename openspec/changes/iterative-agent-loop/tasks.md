@@ -28,7 +28,7 @@
 ## 5. Mock determinism
 
 - [x] 5.1 Make the mock provider drive a deterministic, terminating multi-step loop (fixed plan → implement → done)
-- [ ] 5.2 Provide deterministic mock voters so the gate outcome and recorded ballots are predictable
+- [x] 5.2 Provide deterministic mock voters so the gate outcome and recorded ballots are predictable
 - [ ] 5.3 Tests asserting deterministic termination, recorded decisions, and recorded votes
 
 ## 6. Backend wiring
