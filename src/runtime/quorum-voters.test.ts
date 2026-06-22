@@ -8,17 +8,17 @@ import {
 } from "./quorum-voters.js";
 
 test("resolveQuorumVoters prefers three distinct configured providers", () => {
-  assert.deepEqual(
-    resolveQuorumVoters({
-      availableProviders: ["claude-local", "codex-local", "openai-compatible"],
-      fallbackProvider: "codex-local",
-    }),
-    [
-      { voterId: "codex-local", providerKind: "codex-local" },
-      { voterId: "claude-local", providerKind: "claude-local" },
-      { voterId: "openai-compatible", providerKind: "openai-compatible" },
-    ],
-  );
+  const voters = resolveQuorumVoters({
+    availableProviders: ["claude-local", "codex-local", "openai-compatible"],
+    fallbackProvider: "codex-local",
+  });
+
+  assert.deepEqual(voters, [
+    { voterId: "codex-local", providerKind: "codex-local" },
+    { voterId: "claude-local", providerKind: "claude-local" },
+    { voterId: "openai-compatible", providerKind: "openai-compatible" },
+  ]);
+  assert.equal(new Set(voters.map((voter) => voter.providerKind)).size, 3);
 });
 
 test("resolveQuorumVoters fills missing providers with persona fallbacks", () => {
@@ -153,6 +153,31 @@ test("runQuorumVote maps voter errors to abstain counted as not done", async () 
     decision: "abstain",
     reason: "Voter failed: timeout",
     error: "timeout",
+  });
+});
+
+test("runQuorumVote decides not done when fewer than two voters judge done", async () => {
+  const result = await runQuorumVote({
+    proposition: "Does the result satisfy the goal?",
+    voters: [
+      { voterId: "codex-local", providerKind: "codex-local" },
+      { voterId: "claude-local", providerKind: "claude-local" },
+      { voterId: "openai-compatible", providerKind: "openai-compatible" },
+    ],
+    vote: async (voter) => ({
+      decision: voter.voterId === "codex-local" ? "done" : "not_done",
+      reason: `${voter.voterId} voted`,
+    }),
+  });
+
+  assert.equal(result.isDone, false);
+  assert.equal(result.decision, "not_done");
+  assert.deepEqual(result.tally, {
+    done: 1,
+    notDone: 2,
+    abstain: 0,
+    total: 3,
+    majorityReached: false,
   });
 });
 
