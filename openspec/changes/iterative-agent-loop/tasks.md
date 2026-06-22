@@ -38,5 +38,5 @@
 
 ## 7. Verify
 
-- [ ] 7.1 Run the full test suite and typecheck; confirm existing single-shot, Codex/Claude/mock paths are unaffected
+- [x] 7.1 Run the full test suite and typecheck; confirm existing single-shot, Codex/Claude/mock paths are unaffected
 - [ ] 7.2 Run `openspec validate iterative-agent-loop --strict` and confirm the change is clean
