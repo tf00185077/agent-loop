@@ -346,3 +346,61 @@ test("buildScopeVotedEventData records ballots and binary refinement decision", 
     ],
   });
 });
+
+test("runScopeVote decides proceed when fewer than two voters request refinement", async () => {
+  const result = await runScopeVote({
+    proposition: "Is the current task still too large?",
+    voters: [
+      { voterId: "codex-local", providerKind: "codex-local" },
+      { voterId: "claude-local", providerKind: "claude-local" },
+      { voterId: "openai-compatible", providerKind: "openai-compatible" },
+    ],
+    vote: async (voter) => ({
+      decision: voter.voterId === "codex-local",
+      reason: `${voter.voterId} voted`,
+    }),
+  });
+
+  assert.equal(result.shouldRefine, false);
+  assert.equal(result.decision, false);
+  assert.deepEqual(result.tally, {
+    refine: 1,
+    proceed: 2,
+    total: 3,
+    majorityReached: false,
+  });
+});
+
+test("runScopeVote maps voter errors to false without abstain decisions", async () => {
+  const result = await runScopeVote({
+    proposition: "Is the current task still too large?",
+    voters: [
+      { voterId: "codex-local", providerKind: "codex-local" },
+      { voterId: "claude-local", providerKind: "claude-local" },
+      { voterId: "openai-compatible", providerKind: "openai-compatible" },
+    ],
+    vote: async (voter) => {
+      if (voter.voterId === "claude-local") throw new Error("timeout");
+      return {
+        decision: true,
+        reason: `${voter.voterId} requests refinement`,
+      };
+    },
+  });
+
+  assert.equal(result.shouldRefine, true);
+  assert.equal(result.decision, true);
+  assert.deepEqual(result.tally, {
+    refine: 2,
+    proceed: 1,
+    total: 3,
+    majorityReached: true,
+  });
+  assert.deepEqual(result.ballots[1], {
+    voterId: "claude-local",
+    providerKind: "claude-local",
+    decision: false,
+    reason: "Voter failed: timeout",
+    error: "timeout",
+  });
+});
