@@ -398,6 +398,78 @@ test("agent loop proceeds directly to implementation when scope voters reject re
   db.close();
 });
 
+test("agent loop blocks when scope refinement rounds are exhausted", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const goal = goalRepo.create({
+    title: "Exhaust refinement",
+    description: "Block after too many refinement rounds",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  const runtime = createAgentLoopRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    metadata: { provider: "fake-loop", model: "fake-model" },
+    maxScopeAssessmentAttempts: 1,
+    maxScopeRefinementRounds: 1,
+    planner: {
+      async plan() {
+        return {
+          decision: "DECOMPOSE",
+          scopeAssessment: "too_large",
+          subSteps: ["Still too broad"],
+          reason: "Still too broad after refinement.",
+        };
+      },
+    },
+    implementer: {
+      async implement() {
+        throw new Error("Implementer should not run when refinement is exhausted");
+      },
+    },
+    gate: {
+      async vote() {
+        throw new Error("Completion gate should not run for scope refinement");
+      },
+    },
+    scopeGate: {
+      async vote() {
+        return {
+          proposition: "Is the current task still too large?",
+          decision: true,
+          shouldRefine: true,
+          tally: {
+            refine: 2,
+            proceed: 1,
+            total: 3,
+            majorityReached: true,
+          },
+          ballots: [],
+        };
+      },
+    },
+  });
+
+  await runtime.run(goal.id);
+
+  const runId = eventRepo.listForGoal(goal.id)[0]?.runId;
+  assert.ok(runId);
+  assert.equal(stepRepo.listForRun(runId).length, 0);
+  assert.equal(runRepo.getById(runId)?.status, "completed");
+  assert.equal(goalRepo.getById(goal.id)?.status, "blocked");
+  assert.deepEqual(eventRepo.listForGoal(goal.id).at(-1)?.data, {
+    goalId: goal.id,
+    runId,
+    terminalState: "blocked",
+    reason: "Scope refinement exhausted after 1 rounds",
+    maxScopeRefinementRounds: 1,
+  });
+
+  db.close();
+});
+
 test("agent loop records a blocked terminal state when the planner blocks", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const goal = goalRepo.create({

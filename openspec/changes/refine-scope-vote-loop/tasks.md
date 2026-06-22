@@ -22,7 +22,7 @@
 - [x] 4.2 Add separate `maxScopeAssessmentAttempts` and `maxScopeRefinementRounds` loop bounds.
 - [x] 4.3 Carry the latest planner and voter reasons into the next refinement round.
 - [x] 4.4 Proceed directly to implementation when a binary scope vote returns false.
-- [ ] 4.5 Block only when the planner returns blocked or scope refinement rounds are exhausted.
+- [x] 4.5 Block only when the planner returns blocked or scope refinement rounds are exhausted.
 
 ## 5. Mock Runtime And API Wiring
 

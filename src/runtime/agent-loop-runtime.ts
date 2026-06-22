@@ -130,11 +130,10 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
             if (vote.shouldRefine) {
               scopeRefinementRound += 1;
               if (scopeRefinementRound >= maxScopeRefinementRounds) {
-                finishBounded({
+                finishScopeRefinementExhausted({
                   goalId,
                   runId: run.id,
-                  bound: "maxScopeRefinementRounds",
-                  value: maxScopeRefinementRounds,
+                  maxScopeRefinementRounds,
                   goalRepo,
                   runRepo,
                   eventRepo,
@@ -362,7 +361,7 @@ function finishCompleted({
 }
 
 interface FinishBoundedInput extends FinishInput {
-  bound: "maxSteps" | "maxDepth" | "maxScopeRefinementRounds";
+  bound: "maxSteps" | "maxDepth";
   value: number;
 }
 
@@ -390,6 +389,39 @@ function finishBounded(input: FinishBoundedInput): void {
       terminalState: "bounded",
       bound: input.bound,
       [input.bound]: input.value,
+    },
+  });
+}
+
+interface FinishScopeRefinementExhaustedInput extends FinishInput {
+  maxScopeRefinementRounds: number;
+}
+
+function finishScopeRefinementExhausted(input: FinishScopeRefinementExhaustedInput): void {
+  const finishedAt = new Date().toISOString();
+  input.runRepo.updateStatus(input.runId, "completed", { finishedAt });
+  input.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
+  const reason = `Scope refinement exhausted after ${input.maxScopeRefinementRounds} rounds`;
+
+  input.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "run.completed",
+    message: "Agent loop blocked",
+    data: { runId: input.runId, terminalState: "blocked" },
+  });
+
+  input.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "goal.blocked",
+    message: reason,
+    data: {
+      goalId: input.goalId,
+      runId: input.runId,
+      terminalState: "blocked",
+      reason,
+      maxScopeRefinementRounds: input.maxScopeRefinementRounds,
     },
   });
 }
