@@ -5,6 +5,7 @@ import {
   type StartGoalProviderOverride,
 } from "../domain/index.js";
 import type { AppDatabase } from "../persistence/database.js";
+import { createEventBus } from "../persistence/event-bus.js";
 import { createGoalRepository } from "../persistence/goal-repository.js";
 import {
   createProviderSettingsRepository,
@@ -53,7 +54,8 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
   const goalRepo = createGoalRepository(db);
   const runRepo = createRunRepository(db);
   const stepRepo = createStepRepository(db);
-  const eventRepo = createEventRepository(db);
+  const eventBus = createEventBus();
+  const eventRepo = createEventRepository(db, { eventBus });
   const providerSettingsRepo = createProviderSettingsRepository(db);
   const runtime = createRuntimeFromSavedProviderSettings({
     env: options.env ?? process.env,
@@ -78,7 +80,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     res.json({ status: "ok" });
   });
 
-  app.use("/api/goals", createGoalRouter({ goalRepo, eventRepo, runtime }));
+  app.use("/api/goals", createGoalRouter({ goalRepo, eventRepo, eventBus, runtime }));
   app.use(
     "/api/provider-settings",
     createProviderSettingsRouter({

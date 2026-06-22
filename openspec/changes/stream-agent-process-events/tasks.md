@@ -1,14 +1,14 @@
 ## 1. Event Stream Contract
 
-- [ ] 1.1 Add backend tests for a goal-scoped live event stream endpoint.
-- [ ] 1.2 Implement the SSE endpoint with initial connection handling and terminal cleanup.
-- [ ] 1.3 Ensure live stream payloads use the same event shape as the durable events endpoint.
+- [x] 1.1 Add backend tests for a goal-scoped live event stream endpoint.
+- [x] 1.2 Implement the SSE endpoint with initial connection handling and terminal cleanup.
+- [x] 1.3 Ensure live stream payloads use the same event shape as the durable events endpoint.
 
 ## 2. Event Publication
 
-- [ ] 2.1 Add an internal event publisher that emits after durable event creation.
-- [ ] 2.2 Wire goal event persistence through the publisher without bypassing SQLite.
-- [ ] 2.3 Add tests for reconnect-safe snapshot plus streamed event deduplication assumptions.
+- [x] 2.1 Add an internal event publisher that emits after durable event creation.
+- [x] 2.2 Wire goal event persistence through the publisher without bypassing SQLite.
+- [x] 2.3 Add tests for reconnect-safe snapshot plus streamed event deduplication assumptions.
 
 ## 3. Provider Process Output
 

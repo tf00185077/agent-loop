@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { openDatabase } from "./database.js";
 import { createGoalRepository } from "./goal-repository.js";
+import { createEventBus } from "./event-bus.js";
 import { createEventRepository, createRunRepository, createStepRepository } from "./runtime-repositories.js";
 
 test("creates and updates run records for a goal", () => {
@@ -106,6 +107,29 @@ test("creates and lists event records for a goal timeline", () => {
     events.listForGoal(goal.id).map((event) => event.id),
     [started.id, message.id],
   );
+
+  db.close();
+});
+
+test("publishes each event to the event bus after it is durably persisted", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({
+    title: "Published goal",
+    description: "Exercise event publication.",
+  });
+  const bus = createEventBus();
+  const received: unknown[] = [];
+  bus.subscribe(goal.id, (event) => received.push(event));
+  const events = createEventRepository(db, { eventBus: bus });
+
+  const created = events.create({
+    goalId: goal.id,
+    type: "goal.created",
+    message: "Goal created.",
+  });
+
+  assert.deepEqual(events.listForGoal(goal.id), [created]);
+  assert.deepEqual(received, [created]);
 
   db.close();
 });

@@ -4,6 +4,7 @@ export type EventType =
   | "step.started"
   | "agent.decision"
   | "agent.message"
+  | "agent.progress"
   | "scope.voted"
   | "gate.voted"
   | "step.completed"

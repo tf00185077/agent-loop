@@ -2,10 +2,18 @@ import { Router } from "express";
 
 import {
   sanitizeStartGoalProviderOverride,
+  type Event,
   type StartGoalProviderOverride,
 } from "../../domain/index.js";
+import type { EventBus } from "../../persistence/event-bus.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type { EventRepository } from "../../persistence/runtime-repositories.js";
+
+const TERMINAL_EVENT_TYPES = new Set<Event["type"]>([
+  "goal.completed",
+  "goal.blocked",
+  "error",
+]);
 
 interface RuntimeRunOptions {
   providerOverride?: StartGoalProviderOverride;
@@ -18,11 +26,12 @@ interface RuntimeRunner {
 interface GoalRouterDeps {
   goalRepo: GoalRepository;
   eventRepo: EventRepository;
+  eventBus: EventBus;
   runtime: RuntimeRunner;
 }
 
 export function createGoalRouter(deps: GoalRouterDeps): Router {
-  const { goalRepo, eventRepo, runtime } = deps;
+  const { goalRepo, eventRepo, eventBus, runtime } = deps;
   const router = Router();
 
   // POST /api/goals
@@ -93,6 +102,35 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
         return;
       }
       res.json(eventRepo.listForGoal(req.params.id));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // GET /api/goals/:id/events/stream
+  router.get("/:id/events/stream", (req, res, next) => {
+    try {
+      const goal = goalRepo.getById(req.params.id);
+      if (!goal) {
+        res.status(404).json({ error: "Goal not found" });
+        return;
+      }
+
+      res.status(200);
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders?.();
+
+      const unsubscribe = eventBus.subscribe(goal.id, (event) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (TERMINAL_EVENT_TYPES.has(event.type)) {
+          unsubscribe();
+          res.end();
+        }
+      });
+
+      req.on("close", unsubscribe);
     } catch (err) {
       next(err);
     }

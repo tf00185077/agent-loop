@@ -12,6 +12,7 @@ import type {
   UpdateStepInput,
 } from "../domain/index.js";
 import type { AppDatabase } from "./database.js";
+import type { EventBus } from "./event-bus.js";
 
 export interface RunRepository {
   create(input: CreateRunInput): Run;
@@ -128,7 +129,15 @@ export function createStepRepository(db: AppDatabase): StepRepository {
   };
 }
 
-export function createEventRepository(db: AppDatabase): EventRepository {
+export interface EventRepositoryOptions {
+  /** Notified with the persisted event after each insert, for live streaming. */
+  eventBus?: EventBus;
+}
+
+export function createEventRepository(
+  db: AppDatabase,
+  options: EventRepositoryOptions = {},
+): EventRepository {
   return {
     create(input) {
       const event: Event = {
@@ -146,6 +155,8 @@ export function createEventRepository(db: AppDatabase): EventRepository {
         INSERT INTO events (id, goal_id, run_id, step_id, type, message, data, created_at)
         VALUES (@id, @goalId, @runId, @stepId, @type, @message, @data, @createdAt)
       `).run({ ...event, data: JSON.stringify(event.data) });
+
+      options.eventBus?.publish(event);
 
       return event;
     },
