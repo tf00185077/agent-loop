@@ -33,6 +33,6 @@
 ## 6. Verification
 
 - [x] 6.1 Run focused domain, voter, planner, runtime, mock runtime, and backend API tests.
-- [ ] 6.2 Run typecheck and the full test suite, documenting any pre-existing unrelated failures.
+- [x] 6.2 Run typecheck and the full test suite, documenting any pre-existing unrelated failures.
 - [ ] 6.3 Run browser verification against the local dashboard using the Codex model path and confirm the provider setup still renders.
 - [ ] 6.4 Run `openspec validate refine-scope-vote-loop --strict`.
