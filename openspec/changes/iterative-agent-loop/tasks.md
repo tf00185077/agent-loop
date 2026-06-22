@@ -34,7 +34,7 @@
 ## 6. Backend wiring
 
 - [x] 6.1 Wire goal start to the iterative loop runtime (configurable bounds; default provider for planner/implementer; voter set for the gate)
-- [ ] 6.2 API test: start a goal under the mock loop and assert the event timeline shows multiple steps, planner decisions, implementer results, and a recorded gate vote ending in a terminal state
+- [x] 6.2 API test: start a goal under the mock loop and assert the event timeline shows multiple steps, planner decisions, implementer results, and a recorded gate vote ending in a terminal state
 
 ## 7. Verify
 

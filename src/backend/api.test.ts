@@ -1032,6 +1032,52 @@ describe("Backend API", () => {
         await providerServer.close();
       }
     });
+
+    it("records a full iterative mock loop timeline through the API", async () => {
+      const providerServer = await startServer();
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "mock" }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Mock iterative API",
+            description: "assert the full loop timeline",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+        });
+        assert.equal(res.status, 200);
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        const types = events.map((event) => event.type);
+        assert.equal(types.filter((type) => type === "step.completed").length, 2);
+        assert.deepEqual(
+          events
+            .filter((event) => event.type === "agent.decision")
+            .map((event) => (event.data as Record<string, unknown>).nextStep),
+          ["Analyze goal", "Execute mock result"],
+        );
+        assert.deepEqual(
+          events.filter((event) => event.type === "agent.message").map((event) => event.message),
+          ["Completed: Analyze goal", "Completed: Execute mock result"],
+        );
+        const vote = [...events].reverse().find((event) => event.type === "gate.voted");
+        assert.equal((vote?.data as Record<string, unknown>).decision, "done");
+        assert.equal(((vote?.data as Record<string, unknown>).ballots as unknown[]).length, 3);
+        assert.equal(types.at(-1), "goal.completed");
+      } finally {
+        await providerServer.close();
+      }
+    });
   });
 
   describe("GET /api/goals/:id/events", () => {
