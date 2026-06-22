@@ -28,7 +28,7 @@
 
 - [x] 5.1 Update mock runtime defaults and deterministic planner/voter behavior for scope refinement.
 - [x] 5.2 Wire the new loop-bound options through backend runtime creation without changing dashboard credentials or provider boundaries.
-- [ ] 5.3 Update backend API tests that inspect loop bounds and vote events.
+- [x] 5.3 Update backend API tests that inspect loop bounds and vote events.
 
 ## 6. Verification
 

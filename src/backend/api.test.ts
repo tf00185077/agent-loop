@@ -999,7 +999,7 @@ describe("Backend API", () => {
       }
     });
 
-    it("honors configured iterative loop step bounds under mock settings", async () => {
+    it("completes a direct mock work item within configured step bounds", async () => {
       const providerServer = await startServer(undefined, { agentLoopMaxSteps: 1 });
 
       try {
@@ -1014,7 +1014,7 @@ describe("Backend API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             title: "Bounded mock start",
-            description: "one step is not enough to complete the fixed mock loop",
+            description: "direct implementation closes after one assigned step",
           }),
         }).then((r) => r.json() as Promise<Record<string, unknown>>);
 
@@ -1023,11 +1023,9 @@ describe("Backend API", () => {
         });
         assert.equal(res.status, 200);
 
-        const { event, events } = await waitForEvent(providerServer.url, created.id, "goal.blocked");
-        assert.equal((event.data as Record<string, unknown>).terminalState, "bounded");
-        assert.equal((event.data as Record<string, unknown>).bound, "maxSteps");
-        assert.equal((event.data as Record<string, unknown>).maxSteps, 1);
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
         assert.equal(events.filter((candidate) => candidate.type === "step.completed").length, 1);
+        assert.equal(events.some((candidate) => candidate.type === "gate.voted"), false);
       } finally {
         await providerServer.close();
       }
@@ -1095,20 +1093,19 @@ describe("Backend API", () => {
 
         const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
         const types = events.map((event) => event.type);
-        assert.equal(types.filter((type) => type === "step.completed").length, 2);
+        assert.equal(types.filter((type) => type === "step.completed").length, 1);
         assert.deepEqual(
           events
             .filter((event) => event.type === "agent.decision")
             .map((event) => (event.data as Record<string, unknown>).nextStep),
-          ["Analyze goal", "Execute mock result"],
+          ["Analyze goal"],
         );
         assert.deepEqual(
           events.filter((event) => event.type === "agent.message").map((event) => event.message),
-          ["Completed: Analyze goal", "Completed: Execute mock result"],
+          ["Completed: Analyze goal"],
         );
-        const vote = [...events].reverse().find((event) => event.type === "gate.voted");
-        assert.equal((vote?.data as Record<string, unknown>).decision, "done");
-        assert.equal(((vote?.data as Record<string, unknown>).ballots as unknown[]).length, 3);
+        assert.equal(events.some((event) => event.type === "gate.voted"), false);
+        assert.equal(events.some((event) => event.type === "scope.voted"), false);
         assert.equal(types.at(-1), "goal.completed");
       } finally {
         await providerServer.close();
