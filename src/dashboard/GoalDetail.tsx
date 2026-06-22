@@ -1,5 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { getGoal, startGoal, Goal } from "./api";
+import { getGoal, listEvents, startGoal, Goal } from "./api";
+import {
+  latestRunMetadata,
+  type RunDisplayMetadata,
+} from "./run-metadata";
 
 interface Props {
   goalId: string;
@@ -9,6 +13,7 @@ interface Props {
 
 export default function GoalDetail({ goalId, refreshKey, onStarted }: Props) {
   const [goal, setGoal] = useState<Goal | null>(null);
+  const [latestMetadata, setLatestMetadata] = useState<RunDisplayMetadata | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -16,8 +21,11 @@ export default function GoalDetail({ goalId, refreshKey, onStarted }: Props) {
 
   useEffect(() => {
     setLoading(true);
-    getGoal(goalId)
-      .then(setGoal)
+    Promise.all([getGoal(goalId), listEvents(goalId)])
+      .then(([nextGoal, events]) => {
+        setGoal(nextGoal);
+        setLatestMetadata(latestRunMetadata(events));
+      })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, [goalId, refreshKey, version]);
@@ -36,18 +44,43 @@ export default function GoalDetail({ goalId, refreshKey, onStarted }: Props) {
     }
   }
 
-  if (loading) return <p>Loading…</p>;
+  if (loading) return <p>Loading...</p>;
   if (error) return <p style={{ color: "red" }}>{error}</p>;
   if (!goal) return null;
 
+  return (
+    <GoalDetailPanel
+      goal={goal}
+      latestMetadata={latestMetadata}
+      starting={starting}
+      onStart={handleStart}
+    />
+  );
+}
+
+export function GoalDetailPanel({
+  goal,
+  latestMetadata,
+  starting,
+  onStart,
+}: {
+  goal: Goal;
+  latestMetadata: RunDisplayMetadata | null;
+  starting: boolean;
+  onStart: () => void;
+}) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
         <h2 style={{ margin: 0 }}>{goal.title}</h2>
         <StatusBadge status={goal.status} />
         {goal.status === "draft" && (
-          <button onClick={handleStart} disabled={starting} style={{ marginLeft: "auto", padding: "6px 14px", cursor: "pointer" }}>
-            {starting ? "Starting…" : "Start"}
+          <button
+            onClick={onStart}
+            disabled={starting}
+            style={{ marginLeft: "auto", padding: "6px 14px", cursor: "pointer" }}
+          >
+            {starting ? "Starting..." : "Start"}
           </button>
         )}
       </div>
@@ -63,6 +96,12 @@ export default function GoalDetail({ goalId, refreshKey, onStarted }: Props) {
           <Row label="Created" value={fmt(goal.createdAt)} />
           {goal.startedAt && <Row label="Started" value={fmt(goal.startedAt)} />}
           {goal.completedAt && <Row label="Completed" value={fmt(goal.completedAt)} />}
+          {latestMetadata && (
+            <>
+              <Row label="Run provider" value={latestMetadata.provider} />
+              <Row label="Run model" value={latestMetadata.model} />
+            </>
+          )}
         </tbody>
       </table>
     </div>

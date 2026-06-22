@@ -13,10 +13,10 @@
 
 ## 3. Dashboard Run Metadata Display
 
-- [ ] 3.1 Add dashboard-side helpers to derive latest provider/model metadata from a goal's event timeline
-- [ ] 3.2 Show latest available provider/model metadata in goal detail
-- [ ] 3.3 Show provider/model metadata near timeline events that carry it, while tolerating historical events without metadata
-- [ ] 3.4 Add dashboard rendering tests for latest run metadata, per-event metadata, and missing metadata
+- [x] 3.1 Add dashboard-side helpers to derive latest provider/model metadata from a goal's event timeline
+- [x] 3.2 Show latest available provider/model metadata in goal detail
+- [x] 3.3 Show provider/model metadata near timeline events that carry it, while tolerating historical events without metadata
+- [x] 3.4 Add dashboard rendering tests for latest run metadata, per-event metadata, and missing metadata
 
 ## 4. Verification
 
