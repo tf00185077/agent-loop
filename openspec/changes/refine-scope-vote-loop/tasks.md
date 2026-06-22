@@ -2,7 +2,7 @@
 
 - [x] 1.1 Add explicit scope assessment and binary scope vote domain types.
 - [x] 1.2 Add or rename event typing so scope voting is distinct from completion review voting.
-- [ ] 1.3 Update domain type tests and exports for the new contracts.
+- [x] 1.3 Update domain type tests and exports for the new contracts.
 
 ## 2. Planner Context
 
