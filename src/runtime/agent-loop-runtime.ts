@@ -150,6 +150,46 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
               };
               continue;
             }
+            const acceptedStep = decision.subSteps[0] ?? decision.reason;
+            const step = stepRepo.create({
+              goalId,
+              runId: run.id,
+              title: acceptedStep,
+              description: decision.reason,
+              order,
+            });
+            eventRepo.create({
+              goalId,
+              runId: run.id,
+              stepId: step.id,
+              type: "step.started",
+              message: `Step started: ${step.title}`,
+              data: { stepId: step.id },
+            });
+            const implementation = await implementer.implement({ goal, step: acceptedStep });
+            eventRepo.create({
+              goalId,
+              runId: run.id,
+              stepId: step.id,
+              type: "agent.message",
+              message: implementation.result,
+              data: {
+                stepId: step.id,
+                role: "implementer",
+                step: implementation.step,
+              },
+            });
+            stepRepo.update(step.id, { status: "completed", result: implementation.result });
+            eventRepo.create({
+              goalId,
+              runId: run.id,
+              stepId: step.id,
+              type: "step.completed",
+              message: `Step completed: ${step.title}`,
+              data: { stepId: step.id },
+            });
+            finishCompleted({ goalId, runId: run.id, metadata, goalRepo, runRepo, eventRepo });
+            return;
           }
           if (depth >= maxDepth) {
             finishBounded({

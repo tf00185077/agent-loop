@@ -327,6 +327,77 @@ test("agent loop carries planner and voter reasons into the next refinement roun
   db.close();
 });
 
+test("agent loop proceeds directly to implementation when scope voters reject refinement", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const goal = goalRepo.create({
+    title: "Accept voter scope",
+    description: "Do not ask planner to reassess after a false vote",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+  let plannerCalls = 0;
+
+  const runtime = createAgentLoopRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    metadata: { provider: "fake-loop", model: "fake-model" },
+    maxScopeAssessmentAttempts: 1,
+    planner: {
+      async plan() {
+        plannerCalls += 1;
+        return {
+          decision: "DECOMPOSE",
+          scopeAssessment: "too_large",
+          subSteps: ["Implement accepted broad step"],
+          reason: "Planner thinks this is still broad.",
+        };
+      },
+    },
+    implementer: {
+      async implement(input) {
+        assert.equal(input.step, "Implement accepted broad step");
+        return {
+          step: input.step,
+          result: "Implemented accepted broad step",
+        };
+      },
+    },
+    gate: {
+      async vote() {
+        throw new Error("Completion gate should not run for accepted scope");
+      },
+    },
+    scopeGate: {
+      async vote() {
+        return {
+          proposition: "Is the current task still too large?",
+          decision: false,
+          shouldRefine: false,
+          tally: {
+            refine: 1,
+            proceed: 2,
+            total: 3,
+            majorityReached: false,
+          },
+          ballots: [],
+        };
+      },
+    },
+  });
+
+  await runtime.run(goal.id);
+
+  const runId = eventRepo.listForGoal(goal.id)[0]?.runId;
+  assert.ok(runId);
+  assert.equal(plannerCalls, 1);
+  assert.equal(stepRepo.listForRun(runId).length, 1);
+  assert.equal(goalRepo.getById(goal.id)?.status, "completed");
+  assert.equal(eventRepo.listForGoal(goal.id).some((event) => event.type === "scope.voted"), true);
+
+  db.close();
+});
+
 test("agent loop records a blocked terminal state when the planner blocks", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const goal = goalRepo.create({
