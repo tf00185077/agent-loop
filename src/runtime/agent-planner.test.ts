@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Goal, Step } from "../domain/index.js";
-import { buildPlannerPrompt, createPlanner } from "./agent-planner.js";
+import { buildPlannerPrompt, createPlanner, parsePlannerOutput } from "./agent-planner.js";
 import type { ModelProvider } from "./model-provider.js";
 
 const goal = {
@@ -93,6 +93,85 @@ test("planner defaults malformed provider output to blocked with raw output", as
   assert.deepEqual(result, {
     decision: "BLOCKED",
     reason: "Planner output could not be parsed: Missing planner output line: DECISION:",
+    rawOutput,
+  });
+});
+
+test("parsePlannerOutput parses IMPLEMENT_DIRECTLY", () => {
+  assert.deepEqual(
+    parsePlannerOutput(
+      [
+        "DECISION: IMPLEMENT_DIRECTLY",
+        "NEXT_STEP: Write the loop orchestrator",
+        "REASON: The next direct step is small enough.",
+      ].join("\n"),
+    ),
+    {
+      decision: "IMPLEMENT_DIRECTLY",
+      nextStep: "Write the loop orchestrator",
+      reason: "The next direct step is small enough.",
+    },
+  );
+});
+
+test("parsePlannerOutput parses DECOMPOSE", () => {
+  assert.deepEqual(
+    parsePlannerOutput(
+      [
+        "DECISION: DECOMPOSE",
+        "SUB_STEPS:",
+        "- Add planner",
+        "- Add implementer",
+        "REASON: The work has separable parts.",
+      ].join("\n"),
+    ),
+    {
+      decision: "DECOMPOSE",
+      subSteps: ["Add planner", "Add implementer"],
+      reason: "The work has separable parts.",
+    },
+  );
+});
+
+test("parsePlannerOutput parses NEEDS_OPENSPEC", () => {
+  assert.deepEqual(
+    parsePlannerOutput(
+      [
+        "DECISION: NEEDS_OPENSPEC",
+        "REASON: The requested behavior changes the planned capability.",
+      ].join("\n"),
+    ),
+    {
+      decision: "NEEDS_OPENSPEC",
+      reason: "The requested behavior changes the planned capability.",
+    },
+  );
+});
+
+test("parsePlannerOutput parses BLOCKED", () => {
+  assert.deepEqual(
+    parsePlannerOutput(
+      [
+        "DECISION: BLOCKED",
+        "REASON: A human needs to choose an affected area.",
+      ].join("\n"),
+    ),
+    {
+      decision: "BLOCKED",
+      reason: "A human needs to choose an affected area.",
+    },
+  );
+});
+
+test("parsePlannerOutput treats unsupported decisions as blocked with raw output", () => {
+  const rawOutput = [
+    "DECISION: WAIT",
+    "REASON: This is not part of the closed decision set.",
+  ].join("\n");
+
+  assert.deepEqual(parsePlannerOutput(rawOutput), {
+    decision: "BLOCKED",
+    reason: "Planner output could not be parsed: Unsupported planner decision: WAIT",
     rawOutput,
   });
 });
