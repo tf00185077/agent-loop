@@ -20,7 +20,7 @@
 
 ## 4. Loop orchestrator
 
-- [ ] 4.1 Implement the plan→implement→observe loop that, per iteration, runs the planner, dispatches on the decision, runs the implementer for direct steps, runs the gate, and persists a durable step + events (`agent.decision`, `agent.message`, `gate.voted`)
+- [x] 4.1 Implement the plan→implement→observe loop that, per iteration, runs the planner, dispatches on the decision, runs the implementer for direct steps, runs the gate, and persists a durable step + events (`agent.decision`, `agent.message`, `gate.voted`)
 - [ ] 4.2 Enforce `maxSteps` and `maxDepth` as authoritative bounds that terminate the loop regardless of planner decisions; record the terminal state (completed / blocked / bounded)
 - [ ] 4.3 Source planner memory from persisted steps each iteration (no provider session)
 - [ ] 4.4 Tests: multi-step advance, depth bound stops decomposition, step bound overrides planner, blocked terminal state
