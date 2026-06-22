@@ -8,7 +8,7 @@
 
 - [x] 2.1 Implement a planner that builds its prompt from the goal + persisted prior steps and parses the model output into `{ decision, nextStep | subSteps, reason }` with a strict convention
 - [x] 2.2 Default unparseable planner output to a safe path (record raw output; treat as `BLOCKED` or continue-under-bounds) instead of crashing
-- [ ] 2.3 Implement a text-only implementer that returns a result for an `IMPLEMENT_DIRECTLY` step (no file/command side effects)
+- [x] 2.3 Implement a text-only implementer that returns a result for an `IMPLEMENT_DIRECTLY` step (no file/command side effects)
 - [ ] 2.4 Tests for planner parsing (each decision + malformed output) and implementer result
 
 ## 3. Quorum completion gate
