@@ -998,6 +998,40 @@ describe("Backend API", () => {
         await providerServer.close();
       }
     });
+
+    it("honors configured iterative loop step bounds under mock settings", async () => {
+      const providerServer = await startServer(undefined, { agentLoopMaxSteps: 1 });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "mock" }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Bounded mock start",
+            description: "one step is not enough to complete the fixed mock loop",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+        });
+        assert.equal(res.status, 200);
+
+        const { event, events } = await waitForEvent(providerServer.url, created.id, "goal.blocked");
+        assert.equal((event.data as Record<string, unknown>).terminalState, "bounded");
+        assert.equal((event.data as Record<string, unknown>).bound, "maxSteps");
+        assert.equal((event.data as Record<string, unknown>).maxSteps, 1);
+        assert.equal(events.filter((candidate) => candidate.type === "step.completed").length, 1);
+      } finally {
+        await providerServer.close();
+      }
+    });
   });
 
   describe("GET /api/goals/:id/events", () => {

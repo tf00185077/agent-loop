@@ -11,6 +11,8 @@ export interface MockRuntimeDeps {
   runRepo: RunRepository;
   stepRepo: StepRepository;
   eventRepo: EventRepository;
+  maxSteps?: number;
+  maxDepth?: number;
 }
 
 export interface MockRuntime {
@@ -27,8 +29,8 @@ export function createMockRuntime(deps: MockRuntimeDeps): MockRuntime {
   return createAgentLoopRuntime({
     ...deps,
     metadata: MOCK_METADATA,
-    maxSteps: 2,
-    maxDepth: 1,
+    maxSteps: deps.maxSteps ?? 2,
+    maxDepth: deps.maxDepth ?? 1,
     runStartedMessage: "Mock run started",
     planner: {
       async plan(input) {

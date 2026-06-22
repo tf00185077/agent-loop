@@ -37,6 +37,8 @@ export interface CreateAppOptions {
   claudeCliDetection?: ProviderSettingsRouterDeps["claudeCliDetection"];
   detectClaudeCliCommand?: ProviderSettingsRouterDeps["detectClaudeCliCommand"];
   claudeCliProviderTimeoutMs?: number;
+  agentLoopMaxSteps?: number;
+  agentLoopMaxDepth?: number;
 }
 
 export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
@@ -61,6 +63,8 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     claudeCliDetection: options.claudeCliDetection,
     detectClaudeCliCommand: options.detectClaudeCliCommand,
     claudeCliProviderTimeoutMs: options.claudeCliProviderTimeoutMs,
+    agentLoopMaxSteps: options.agentLoopMaxSteps,
+    agentLoopMaxDepth: options.agentLoopMaxDepth,
   });
 
   app.get("/health", (_req, res) => {
@@ -102,6 +106,8 @@ type RuntimeRepositories = Parameters<typeof createMockRuntime>[0];
 
 interface CreateRuntimeFromEnvironmentDeps extends RuntimeRepositories {
   env: ProviderEnvironment;
+  agentLoopMaxSteps?: number;
+  agentLoopMaxDepth?: number;
 }
 
 interface CreateRuntimeFromSavedProviderSettingsDeps extends CreateRuntimeFromEnvironmentDeps {
@@ -112,6 +118,8 @@ interface CreateRuntimeFromSavedProviderSettingsDeps extends CreateRuntimeFromEn
   claudeCliDetection?: CreateAppOptions["claudeCliDetection"];
   detectClaudeCliCommand?: CreateAppOptions["detectClaudeCliCommand"];
   claudeCliProviderTimeoutMs?: number;
+  agentLoopMaxSteps?: number;
+  agentLoopMaxDepth?: number;
 }
 
 function createRuntimeFromSavedProviderSettings(
@@ -140,7 +148,11 @@ function selectRuntimeForSettings(
   }
 
   if (deps.providerSettingsRepo.hasSaved()) {
-    return createMockRuntime(deps);
+    return createMockRuntime({
+      ...deps,
+      maxSteps: deps.agentLoopMaxSteps,
+      maxDepth: deps.agentLoopMaxDepth,
+    });
   }
 
   return createRuntimeFromEnvironment(deps);
@@ -212,7 +224,14 @@ function createRuntimeFromEnvironment(deps: CreateRuntimeFromEnvironmentDeps) {
   const config = loadProviderConfig(env);
 
   if (config.provider === "mock") {
-    return createMockRuntime({ goalRepo, runRepo, stepRepo, eventRepo });
+    return createMockRuntime({
+      goalRepo,
+      runRepo,
+      stepRepo,
+      eventRepo,
+      maxSteps: deps.agentLoopMaxSteps,
+      maxDepth: deps.agentLoopMaxDepth,
+    });
   }
 
   const provider = createOpenAICompatibleProvider({ config });
