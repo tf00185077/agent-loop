@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { listEvents, GoalEvent } from "./api";
+import { listEvents, openEventStream, GoalEvent } from "./api";
+import { appendEvent, isTerminalEvent } from "./event-timeline-state";
 import { eventRunMetadata } from "./run-metadata";
 
 interface Props {
@@ -13,11 +14,31 @@ export default function EventTimeline({ goalId, refreshKey }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
     setLoading(true);
+    setError(null);
+
     listEvents(goalId)
-      .then(setEvents)
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+      .then((snapshot) => {
+        if (cancelled) return;
+        setEvents(snapshot);
+        unsubscribe = openEventStream(goalId, (event) => {
+          setEvents((prev) => appendEvent(prev, event));
+          if (isTerminalEvent(event)) unsubscribe?.();
+        });
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, [goalId, refreshKey]);
 
   if (loading) return <p>Loading events…</p>;

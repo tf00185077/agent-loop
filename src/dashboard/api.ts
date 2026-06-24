@@ -184,6 +184,14 @@ export async function listEvents(id: string): Promise<GoalEvent[]> {
   return res.json();
 }
 
+export function openEventStream(id: string, onEvent: (event: GoalEvent) => void): () => void {
+  const source = new EventSource(`${BASE}/goals/${id}/events/stream`);
+  source.onmessage = (message) => {
+    onEvent(JSON.parse(message.data));
+  };
+  return () => source.close();
+}
+
 export async function getProviderSettings(): Promise<ProviderSettings> {
   const res = await fetch(`${BASE}/provider-settings`);
   if (!res.ok) throw new Error(`getProviderSettings: ${res.status}`);
