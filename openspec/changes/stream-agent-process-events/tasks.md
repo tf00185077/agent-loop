@@ -20,9 +20,9 @@
 
 ## 4. Dashboard Live Timeline
 
-- [ ] 4.1 Add dashboard tests for EventSource-based timeline updates without polling.
+- [x] 4.1 Add dashboard tests for EventSource-based timeline updates without polling.
 - [ ] 4.2 Load the durable snapshot before opening the live stream.
-- [ ] 4.3 Append streamed events by event id and ignore duplicates.
+- [x] 4.3 Append streamed events by event id and ignore duplicates.
 - [ ] 4.4 Close or stop relying on the stream when the goal reaches a terminal state.
 
 ## 5. Verification
