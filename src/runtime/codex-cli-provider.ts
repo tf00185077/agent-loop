@@ -74,6 +74,10 @@ async function runCodexExec(
       args,
       input.prompt,
       config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      {
+        commandName: safeCommandName(config.commandPath),
+        model: describeCodexModelLabel(config.modelLabel),
+      },
       input.onProgress,
     );
     if (code !== 0) {
@@ -97,6 +101,7 @@ function spawnCodex(
   args: string[],
   stdin: string,
   timeoutMs: number,
+  diagnostics: { commandName: string; model: string },
   onProgress?: (chunk: string) => void,
 ): Promise<{ code: number | null; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -112,7 +117,7 @@ function spawnCodex(
       if (settled) return;
       settled = true;
       child.kill();
-      reject(new CodexCliProviderError("Codex CLI command timed out"));
+      reject(new CodexCliProviderError(formatTimeoutMessage(timeoutMs, diagnostics, stderr)));
     }, timeoutMs);
 
     // Codex normally ignores stdout in favor of --output-last-message, but
@@ -140,6 +145,21 @@ function spawnCodex(
     });
     child.stdin.end(stdin);
   });
+}
+
+function formatTimeoutMessage(
+  timeoutMs: number,
+  diagnostics: { commandName: string; model: string },
+  stderr: string,
+): string {
+  const stderrTail = stderr.trim().slice(-500);
+  const base = `Codex CLI command timed out after ${timeoutMs}ms (model: ${diagnostics.model}, command: ${diagnostics.commandName})`;
+  return stderrTail ? `${base}. Last stderr: ${stderrTail}` : base;
+}
+
+function safeCommandName(command: string): string {
+  const leaf = command.trim().replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? "codex";
+  return leaf.replace(/\s+--(?:api-key|token|access-token)\s+\S+/gi, "");
 }
 
 function toSpawnRequest(

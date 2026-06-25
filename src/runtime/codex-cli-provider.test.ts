@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { argv0 } from "node:process";
 import test from "node:test";
 
 import { createCodexCliProvider } from "./codex-cli-provider.js";
@@ -81,6 +82,24 @@ process.stdin.on("end", () => {
   );
   chmodSync(scriptPath, 0o755);
   return scriptPath;
+}
+
+function fakeCodexThatNeverExits(commandName = "fake-codex-hang"): string {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-timeout-test-"));
+  const scriptPath = join(dir, "fake-codex-hang.mjs");
+  writeFileSync(
+    scriptPath,
+    `#!/usr/bin/env node
+process.stdin.resume();
+`,
+  );
+  chmodSync(scriptPath, 0o755);
+
+  if (process.platform !== "win32") return scriptPath;
+
+  const commandPath = join(dir, `${commandName}.cmd`);
+  writeFileSync(commandPath, `@echo off\r\n"${argv0}" "${scriptPath}" %*\r\n`);
+  return commandPath;
 }
 
 test("provider spawns codex and returns the last-message text", skipOnWindows, async () => {
@@ -176,6 +195,28 @@ process.stdin.on("end", () => { process.stderr.write("boom"); process.exit(3); }
   });
 
   await assert.rejects(() => provider.complete(input), /Codex CLI exited with code 3: boom/);
+});
+
+test("provider timeout error includes safe diagnostic context", async () => {
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodexThatNeverExits("fake-codex-hang-token-secret"),
+      modelLabel: "gpt-5.5",
+      timeoutMs: 5,
+    },
+  });
+
+  await assert.rejects(
+    () => provider.complete(input),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /Codex CLI command timed out after 5ms/);
+      assert.match(err.message, /model: gpt-5\.5/);
+      assert.match(err.message, /command: fake-codex-hang-token-secret\.cmd|command: fake-codex-hang\.mjs/);
+      assert.equal(err.message.includes(tmpdir()), false);
+      return true;
+    },
+  );
 });
 
 test("provider rejects an empty command path", async () => {
