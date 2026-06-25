@@ -27,7 +27,7 @@
 
 ## 5. Verification
 
-- [ ] 5.1 Run focused backend stream, provider runtime, CLI provider, and dashboard timeline tests.
-- [ ] 5.2 Run typecheck and the full test suite, documenting any unrelated pre-existing failures.
-- [ ] 5.3 Run browser verification that a running goal timeline receives pushed events without manual refresh.
-- [ ] 5.4 Run `openspec validate stream-agent-process-events --strict`.
+- [x] 5.1 Run focused backend stream, provider runtime, CLI provider, and dashboard timeline tests.
+- [x] 5.2 Run typecheck and the full test suite, documenting any unrelated pre-existing failures.
+- [x] 5.3 Run browser verification that a running goal timeline receives pushed events without manual refresh.
+- [x] 5.4 Run `openspec validate stream-agent-process-events --strict`.

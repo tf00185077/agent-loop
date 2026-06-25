@@ -1,5 +1,5 @@
 import { existsSync, readdirSync } from "node:fs";
-import { delimiter, posix, win32 } from "node:path";
+import { posix, win32 } from "node:path";
 
 import type { ProviderStatus } from "../domain/index.js";
 
@@ -112,7 +112,7 @@ function findOnPath(options: {
   if (!pathValue) return null;
 
   const pathApi = options.platform === "win32" ? win32 : posix;
-  const separator = options.platform === "win32" ? ";" : delimiter;
+  const separator = options.platform === "win32" ? ";" : ":";
   const commandNames = options.config.commandNames(options.platform);
 
   for (const dir of pathValue.split(separator).map(normalizeCandidate)) {
