@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Goal, Step } from "../domain/index.js";
+import type { Goal, Step } from "../../domain/index.js";
 import { buildPlannerPrompt, createPlanner, parsePlannerOutput } from "./agent-planner.js";
-import type { ModelProvider } from "./model-provider.js";
+import type { ModelProvider } from "../providers/model-provider.js";
 
 const goal = {
   id: "goal-1",

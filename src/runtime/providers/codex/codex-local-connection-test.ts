@@ -1,7 +1,7 @@
-import type { ProviderStatus } from "../domain/index.js";
-import { sanitizeProviderStatus } from "../domain/index.js";
+import type { ProviderStatus } from "../../../domain/index.js";
+import { sanitizeProviderStatus } from "../../../domain/index.js";
 import { createCodexCliProvider } from "./codex-cli-provider.js";
-import type { ModelProviderInput } from "./model-provider.js";
+import type { ModelProviderInput } from "../model-provider.js";
 
 const connectionTestPrompt = "Reply with exactly: codex-local-connection-ok";
 

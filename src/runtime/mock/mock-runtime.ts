@@ -1,10 +1,10 @@
-import type { GoalRepository } from "../persistence/goal-repository.js";
+import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type {
   EventRepository,
   RunRepository,
   StepRepository,
-} from "../persistence/runtime-repositories.js";
-import { createAgentLoopRuntime } from "./agent-loop-runtime.js";
+} from "../../persistence/runtime-repositories.js";
+import { createAgentLoopRuntime } from "../agent-loop/agent-loop-runtime.js";
 
 export interface MockRuntimeDeps {
   goalRepo: GoalRepository;

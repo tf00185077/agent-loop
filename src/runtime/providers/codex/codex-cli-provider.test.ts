@@ -6,7 +6,7 @@ import { argv0 } from "node:process";
 import test from "node:test";
 
 import { createCodexCliProvider } from "./codex-cli-provider.js";
-import type { ModelProviderInput } from "./model-provider.js";
+import type { ModelProviderInput } from "../model-provider.js";
 
 const skipOnWindows = { skip: process.platform === "win32" };
 

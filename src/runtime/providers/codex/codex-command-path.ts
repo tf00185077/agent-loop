@@ -6,7 +6,7 @@ import {
 import {
   resolveCliCommandPath,
   type ResolveCliCommandPathResult,
-} from "./cli-command-path.js";
+} from "../../cli/cli-command-path.js";
 
 export interface ResolveCodexCommandPathOptions {
   /** The currently saved Codex command path, if any. */

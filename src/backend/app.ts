@@ -16,15 +16,15 @@ import {
   createRunRepository,
   createStepRepository,
 } from "../persistence/runtime-repositories.js";
-import { createClaudeCliProvider } from "../runtime/claude-cli-provider.js";
-import { detectClaudeCliCommand } from "../runtime/claude-cli-detection.js";
-import { resolveCliCommandPath } from "../runtime/cli-command-path.js";
-import { createCodexCliProvider } from "../runtime/codex-cli-provider.js";
-import { resolveCodexCommandPath } from "../runtime/codex-command-path.js";
-import { createMockRuntime } from "../runtime/mock-runtime.js";
-import { createOpenAICompatibleProvider } from "../runtime/openai-compatible-provider.js";
-import { loadProviderConfig, type ProviderEnvironment } from "../runtime/provider-config.js";
-import { createProviderRuntime } from "../runtime/provider-runtime.js";
+import { resolveCliCommandPath } from "../runtime/cli/cli-command-path.js";
+import { createMockRuntime } from "../runtime/mock/mock-runtime.js";
+import { createClaudeCliProvider } from "../runtime/providers/claude/claude-cli-provider.js";
+import { detectClaudeCliCommand } from "../runtime/providers/claude/claude-cli-detection.js";
+import { createCodexCliProvider } from "../runtime/providers/codex/codex-cli-provider.js";
+import { resolveCodexCommandPath } from "../runtime/providers/codex/codex-command-path.js";
+import { createOpenAICompatibleProvider } from "../runtime/providers/openai-compatible-provider.js";
+import { loadProviderConfig, type ProviderEnvironment } from "../runtime/providers/provider-config.js";
+import { createProviderRuntime } from "../runtime/providers/provider-runtime.js";
 import { createGoalRouter } from "./routes/goals.js";
 import {
   createProviderSettingsRouter,

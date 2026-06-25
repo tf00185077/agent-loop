@@ -1,12 +1,12 @@
-import type { Goal } from "../domain/index.js";
-import type { GoalRepository } from "../persistence/goal-repository.js";
+import type { Goal } from "../../domain/index.js";
+import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type {
   EventRepository,
   RunRepository,
   StepRepository,
-} from "../persistence/runtime-repositories.js";
+} from "../../persistence/runtime-repositories.js";
 import type { ModelProvider, ModelProviderOutput } from "./model-provider.js";
-import { sanitizeProcessOutput } from "./process-output-sanitizer.js";
+import { sanitizeProcessOutput } from "../safety/process-output-sanitizer.js";
 
 export interface ProviderRuntimeDeps {
   goalRepo: GoalRepository;

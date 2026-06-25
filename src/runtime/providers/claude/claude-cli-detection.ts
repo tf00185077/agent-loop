@@ -7,7 +7,7 @@ import {
   type CliCommandDetectionResult,
   type CliCommandDetectionSource,
   type CliCommonPathContext,
-} from "./cli-command-detection.js";
+} from "../../cli/cli-command-detection.js";
 
 export type ClaudeCliDetectionSource = CliCommandDetectionSource;
 export type ClaudeCliDetectionResult = CliCommandDetectionResult;

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { posix, win32 } from "node:path";
 
-import type { ProviderStatus } from "../domain/index.js";
+import type { ProviderStatus } from "../../domain/index.js";
 
 export type CliCommandDetectionSource = "manual" | "path" | "common" | "none";
 

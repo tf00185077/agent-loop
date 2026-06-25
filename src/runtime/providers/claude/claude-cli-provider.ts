@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-import type { ModelProvider, ModelProviderInput, ModelProviderOutput } from "./model-provider.js";
+import type { ModelProvider, ModelProviderInput, ModelProviderOutput } from "../model-provider.js";
 
 export interface ClaudeCliProviderConfig {
   /** Resolved Claude CLI command path (absolute) used to spawn Claude directly. */

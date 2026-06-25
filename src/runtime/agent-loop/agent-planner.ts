@@ -1,5 +1,5 @@
-import type { Goal, PlannerResult, PlannerScopeAssessment, Step } from "../domain/index.js";
-import type { ModelProvider } from "./model-provider.js";
+import type { Goal, PlannerResult, PlannerScopeAssessment, Step } from "../../domain/index.js";
+import type { ModelProvider } from "../providers/model-provider.js";
 
 export interface PlannerPromptInput {
   goal: Goal;

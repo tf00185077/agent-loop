@@ -5,16 +5,16 @@ import type {
   QuorumVoteResult,
   ScopeVoteResult,
   Step,
-} from "../domain/index.js";
-import type { GoalRepository } from "../persistence/goal-repository.js";
+} from "../../domain/index.js";
+import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type {
   EventRepository,
   RunRepository,
   StepRepository,
-} from "../persistence/runtime-repositories.js";
+} from "../../persistence/runtime-repositories.js";
 import type { Implementer } from "./agent-implementer.js";
 import type { Planner, PlannerScopeRefinementContext } from "./agent-planner.js";
-import type { ModelProviderMetadata } from "./model-provider.js";
+import type { ModelProviderMetadata } from "../providers/model-provider.js";
 import { buildScopeVotedEventData } from "./quorum-voters.js";
 
 export interface CompletionGateInput {

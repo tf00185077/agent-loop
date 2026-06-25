@@ -7,11 +7,11 @@ import assert from "node:assert/strict";
 
 import { openDatabase } from "../persistence/database.js";
 import { createApp } from "./app.js";
-import type { ProviderEnvironment } from "../runtime/provider-config.js";
-import type { CodexLocalConnectionTestOptions } from "../runtime/codex-local-connection-test.js";
-import type { CodexCliDetectionOptions } from "../runtime/codex-cli-detection.js";
-import type { ClaudeCliDetectionOptions } from "../runtime/claude-cli-detection.js";
-import type { CodexModelCatalogOptions } from "../runtime/codex-local-model-catalog.js";
+import type { ClaudeCliDetectionOptions } from "../runtime/providers/claude/claude-cli-detection.js";
+import type { CodexCliDetectionOptions } from "../runtime/providers/codex/codex-cli-detection.js";
+import type { CodexLocalConnectionTestOptions } from "../runtime/providers/codex/codex-local-connection-test.js";
+import type { CodexModelCatalogOptions } from "../runtime/providers/codex/codex-local-model-catalog.js";
+import type { ProviderEnvironment } from "../runtime/providers/provider-config.js";
 
 function startServer(
   env?: ProviderEnvironment,

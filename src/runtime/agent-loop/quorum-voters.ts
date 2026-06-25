@@ -6,7 +6,7 @@ import type {
   ScopeVoteDecision,
   ScopeVoteResult,
   ScopeVoterBallot,
-} from "../domain/index.js";
+} from "../../domain/index.js";
 
 export type QuorumProviderKind = "codex-local" | "claude-local" | "openai-compatible";
 

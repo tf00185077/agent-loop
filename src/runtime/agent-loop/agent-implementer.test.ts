@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Goal } from "../domain/index.js";
+import type { Goal } from "../../domain/index.js";
 import { buildImplementerPrompt, createImplementer } from "./agent-implementer.js";
-import type { ModelProvider } from "./model-provider.js";
+import type { ModelProvider } from "../providers/model-provider.js";
 
 const goal = {
   id: "goal-1",

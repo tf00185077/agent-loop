@@ -1,4 +1,4 @@
-import type { ProviderStatus } from "../domain/index.js";
+import type { ProviderStatus } from "../../domain/index.js";
 import type {
   CliCommandDetectionResult,
   CliCommandDetectionSource,

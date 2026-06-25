@@ -10,21 +10,21 @@ import {
   detectCodexCliCommand,
   type CodexCliDetectionOptions,
   type CodexCliDetectionResult,
-} from "../../runtime/codex-cli-detection.js";
+} from "../../runtime/providers/codex/codex-cli-detection.js";
 import {
   detectClaudeCliCommand,
   type ClaudeCliDetectionOptions,
   type ClaudeCliDetectionResult,
-} from "../../runtime/claude-cli-detection.js";
+} from "../../runtime/providers/claude/claude-cli-detection.js";
 import {
   testCodexLocalConnection,
   type CodexLocalConnectionTestOptions,
   type CodexLocalConnectionTestResult,
-} from "../../runtime/codex-local-connection-test.js";
+} from "../../runtime/providers/codex/codex-local-connection-test.js";
 import {
   loadCodexModelCatalog,
   type CodexModelCatalogOptions,
-} from "../../runtime/codex-local-model-catalog.js";
+} from "../../runtime/providers/codex/codex-local-model-catalog.js";
 
 export interface ProviderSettingsRouterDeps {
   providerSettingsRepo: ProviderSettingsRepository;

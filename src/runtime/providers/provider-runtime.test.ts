@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { openDatabase } from "../persistence/database.js";
-import { createGoalRepository } from "../persistence/goal-repository.js";
+import { openDatabase } from "../../persistence/database.js";
+import { createGoalRepository } from "../../persistence/goal-repository.js";
 import {
   createEventRepository,
   createRunRepository,
   createStepRepository,
-} from "../persistence/runtime-repositories.js";
+} from "../../persistence/runtime-repositories.js";
 import type { ModelProviderInput } from "./model-provider.js";
 import { createProviderRuntime } from "./provider-runtime.js";
 

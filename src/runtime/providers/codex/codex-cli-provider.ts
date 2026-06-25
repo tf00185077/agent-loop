@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describeCodexModelLabel, resolveCodexModelArgument } from "../domain/index.js";
-import type { ModelProvider, ModelProviderInput, ModelProviderOutput } from "./model-provider.js";
+import { describeCodexModelLabel, resolveCodexModelArgument } from "../../../domain/index.js";
+import type { ModelProvider, ModelProviderInput, ModelProviderOutput } from "../model-provider.js";
 
 export interface CodexCliProviderConfig {
   /** Resolved Codex CLI command path (absolute) used to spawn Codex directly. */

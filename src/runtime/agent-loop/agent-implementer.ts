@@ -1,5 +1,5 @@
-import type { Goal, ImplementerResult } from "../domain/index.js";
-import type { ModelProvider } from "./model-provider.js";
+import type { Goal, ImplementerResult } from "../../domain/index.js";
+import type { ModelProvider } from "../providers/model-provider.js";
 
 export interface ImplementerPromptInput {
   goal: Goal;

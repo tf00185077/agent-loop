@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { createClaudeCliProvider } from "./claude-cli-provider.js";
-import type { ModelProviderInput } from "./model-provider.js";
+import type { ModelProviderInput } from "../model-provider.js";
 
 const skipOnWindows = { skip: process.platform === "win32" };
 

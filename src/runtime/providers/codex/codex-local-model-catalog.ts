@@ -4,7 +4,7 @@ import type {
   CodexModelCatalogEntry,
   CodexModelCatalogResult,
   CodexModelCatalogSource,
-} from "../domain/index.js";
+} from "../../../domain/index.js";
 
 /**
  * Visibility values that mark a catalog entry as selectable in a list. Any
