@@ -11,7 +11,7 @@
 - [x] 1.1 Add tests for managed agent session lifecycle states, runtime capabilities, command records, approval requests, and child-session request metadata.
 - [x] 1.2 Define framework-agnostic domain types for agent sessions, runtime events, runtime adapters, approval requests, command records, and child-session requests.
 - [x] 1.3 Export the new control-plane contracts from the domain index and update existing provider/runtime type references where needed.
-- [ ] 1.4 Add sanitizer tests for approval summaries, command metadata, runtime diagnostics, and child-session request summaries.
+- [x] 1.4 Add sanitizer tests for approval summaries, command metadata, runtime diagnostics, and child-session request summaries.
 
 ## 2. Persistence and API Surface
 
