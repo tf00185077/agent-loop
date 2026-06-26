@@ -45,7 +45,7 @@
 
 ## 6. Codex Managed Session Execution
 
-- [ ] 6.1 Add Codex adapter tests proving JSONL/runtime events map to managed session events and durable goal events.
+- [x] 6.1 Add Codex adapter tests proving JSONL/runtime events map to managed session events and durable goal events.
 - [ ] 6.2 Implement Codex managed session startup, event streaming, final completion, failure handling, and process cleanup.
 - [ ] 6.3 Add tests for Codex approval request mapping when supported, or clear unsupported-control failure when approval cannot be resumed by the CLI mode.
 - [ ] 6.4 Implement Codex approval/cancellation handling according to the verified capability result.
