@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { listEvents, openEventStream, GoalEvent } from "./api";
-import { appendEvent, isTerminalEvent } from "./event-timeline-state";
+import { appendEvent, isAgentSessionRefreshEvent, isTerminalEvent } from "./event-timeline-state";
 import { eventRunMetadata } from "./run-metadata";
 
 interface Props {
   goalId: string;
   refreshKey: number;
+  onAgentSessionEvent?: (event: GoalEvent) => void;
 }
 
-export default function EventTimeline({ goalId, refreshKey }: Props) {
+export default function EventTimeline({ goalId, refreshKey, onAgentSessionEvent }: Props) {
   const [events, setEvents] = useState<GoalEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -25,6 +26,7 @@ export default function EventTimeline({ goalId, refreshKey }: Props) {
         setEvents(snapshot);
         unsubscribe = openEventStream(goalId, (event) => {
           setEvents((prev) => appendEvent(prev, event));
+          if (isAgentSessionRefreshEvent(event)) onAgentSessionEvent?.(event);
           if (isTerminalEvent(event)) unsubscribe?.();
         });
       })
@@ -39,7 +41,7 @@ export default function EventTimeline({ goalId, refreshKey }: Props) {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [goalId, refreshKey]);
+  }, [goalId, refreshKey, onAgentSessionEvent]);
 
   if (loading) return <p>Loading events…</p>;
   if (error) return <p style={{ color: "red" }}>{error}</p>;

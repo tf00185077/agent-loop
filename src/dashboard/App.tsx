@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import GoalList from "./GoalList";
 import CreateGoalForm from "./CreateGoalForm";
 import GoalDetail from "./GoalDetail";
@@ -11,6 +11,7 @@ type View = { page: "list" } | { page: "detail"; goalId: string };
 export default function App() {
   const [view, setView] = useState<View>({ page: "list" });
   const [refreshKey, setRefreshKey] = useState(0);
+  const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [providerOverride, setProviderOverride] = useState<StartGoalProviderOverride>({
     provider: "mock",
   });
@@ -19,6 +20,10 @@ export default function App() {
     setView({ page: "list" });
     setRefreshKey((k) => k + 1);
   }
+
+  const refreshSessionSnapshot = useCallback(() => {
+    setSessionRefreshKey((k) => k + 1);
+  }, []);
 
   return (
     <div style={{ fontFamily: "sans-serif", maxWidth: 800, margin: "0 auto", padding: 24 }}>
@@ -43,11 +48,15 @@ export default function App() {
             <button onClick={goList} style={{ marginBottom: 16 }}>← Back</button>
             <GoalDetail
               goalId={view.goalId}
-              refreshKey={refreshKey}
+              refreshKey={refreshKey + sessionRefreshKey}
               providerOverride={providerOverride}
               onStarted={() => setRefreshKey((k) => k + 1)}
             />
-            <EventTimeline goalId={view.goalId} refreshKey={refreshKey} />
+            <EventTimeline
+              goalId={view.goalId}
+              refreshKey={refreshKey}
+              onAgentSessionEvent={refreshSessionSnapshot}
+            />
           </div>
         )}
       </main>
