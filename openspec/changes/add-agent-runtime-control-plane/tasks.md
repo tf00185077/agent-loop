@@ -27,7 +27,7 @@
 - [x] 3.2 Implement the runtime session manager that owns session lifecycle transitions, durable events, approval state, cancellation state, and adapter registration.
 - [x] 3.3 Add tests for backend restart or adapter-loss recovery policy for non-terminal sessions.
 - [x] 3.4 Implement recovery handling for orphaned non-terminal sessions so they become visibly stalled, failed, or cancelled rather than indefinitely running.
-- [ ] 3.5 Wire interactive provider-backed goal starts through the session manager while preserving one-shot provider behavior for mock/OpenAI-compatible completion providers.
+- [x] 3.5 Wire interactive provider-backed goal starts through the session manager while preserving one-shot provider behavior for mock/OpenAI-compatible completion providers.
 
 ## 4. Mock Runtime Adapter
 

@@ -1,6 +1,7 @@
 import express from "express";
 
 import {
+  type AgentRuntimeAdapter,
   type ProviderSettings,
   type StartGoalProviderOverride,
 } from "../domain/index.js";
@@ -26,6 +27,7 @@ import { resolveCodexCommandPath } from "../runtime/providers/codex/codex-comman
 import { createOpenAICompatibleProvider } from "../runtime/providers/openai-compatible-provider.js";
 import { loadProviderConfig, type ProviderEnvironment } from "../runtime/providers/provider-config.js";
 import { createProviderRuntime } from "../runtime/providers/provider-runtime.js";
+import { createAgentSessionManager } from "../runtime/agent-session/agent-session-manager.js";
 import { createAgentSessionRouter } from "./routes/agent-sessions.js";
 import { createGoalRouter } from "./routes/goals.js";
 import {
@@ -47,6 +49,7 @@ export interface CreateAppOptions {
   agentLoopMaxDepth?: number;
   agentLoopMaxScopeAssessmentAttempts?: number;
   agentLoopMaxScopeRefinementRounds?: number;
+  agentRuntimeAdapters?: Partial<Record<"codex-local" | "claude-local", AgentRuntimeAdapter>>;
 }
 
 export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
@@ -77,6 +80,8 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     agentLoopMaxDepth: options.agentLoopMaxDepth,
     agentLoopMaxScopeAssessmentAttempts: options.agentLoopMaxScopeAssessmentAttempts,
     agentLoopMaxScopeRefinementRounds: options.agentLoopMaxScopeRefinementRounds,
+    agentSessionRepo,
+    agentRuntimeAdapters: options.agentRuntimeAdapters,
   });
 
   app.get("/health", (_req, res) => {
@@ -137,6 +142,8 @@ interface CreateRuntimeFromSavedProviderSettingsDeps extends CreateRuntimeFromEn
   agentLoopMaxDepth?: number;
   agentLoopMaxScopeAssessmentAttempts?: number;
   agentLoopMaxScopeRefinementRounds?: number;
+  agentSessionRepo: ReturnType<typeof createAgentSessionRepository>;
+  agentRuntimeAdapters?: CreateAppOptions["agentRuntimeAdapters"];
 }
 
 function createRuntimeFromSavedProviderSettings(
@@ -156,6 +163,13 @@ function selectRuntimeForSettings(
   settings: ProviderSettings | StartGoalProviderOverride,
   deps: CreateRuntimeFromSavedProviderSettingsDeps,
 ) {
+  if (settings.provider === "codex-local" || settings.provider === "claude-local") {
+    const adapter = deps.agentRuntimeAdapters?.[settings.provider];
+    if (adapter) {
+      return createRuntimeFromAgentRuntimeAdapter(settings, adapter, deps);
+    }
+  }
+
   if (settings.provider === "codex-local") {
     return createRuntimeFromCodexLocalSettings(settings, deps);
   }
@@ -175,6 +189,33 @@ function selectRuntimeForSettings(
   }
 
   return createRuntimeFromEnvironment(deps);
+}
+
+function createRuntimeFromAgentRuntimeAdapter(
+  settings:
+    | Extract<ProviderSettings, { provider: "codex-local" | "claude-local" }>
+    | Extract<StartGoalProviderOverride, { provider: "codex-local" | "claude-local" }>,
+  adapter: AgentRuntimeAdapter,
+  deps: CreateRuntimeFromSavedProviderSettingsDeps,
+) {
+  const manager = createAgentSessionManager({
+    goalRepo: deps.goalRepo,
+    runRepo: deps.runRepo,
+    eventRepo: deps.eventRepo,
+    agentSessionRepo: deps.agentSessionRepo,
+  });
+
+  return {
+    async run(goalId: string) {
+      return manager.startManagedSession({
+        goalId,
+        providerId: settings.provider,
+        modelLabel: settings.modelLabel,
+        prompt: "Run this goal through the managed local agent runtime.",
+        adapter,
+      });
+    },
+  };
 }
 
 function createRuntimeFromCodexLocalSettings(

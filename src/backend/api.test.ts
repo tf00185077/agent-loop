@@ -17,6 +17,11 @@ import type { CodexCliDetectionOptions } from "../runtime/providers/codex/codex-
 import type { CodexLocalConnectionTestOptions } from "../runtime/providers/codex/codex-local-connection-test.js";
 import type { CodexModelCatalogOptions } from "../runtime/providers/codex/codex-local-model-catalog.js";
 import type { ProviderEnvironment } from "../runtime/providers/provider-config.js";
+import type {
+  AgentRuntimeAdapter,
+  AgentRuntimeEvent,
+  AgentSessionHandle,
+} from "../domain/index.js";
 
 function startServer(
   env?: ProviderEnvironment,
@@ -1283,6 +1288,52 @@ describe("Backend API", () => {
       }
     });
 
+    it("routes Codex Local starts through a registered managed session adapter", async () => {
+      const providerServer = await startServer(undefined, {
+        agentRuntimeAdapters: {
+          "codex-local": createCompletingRuntimeAdapter("codex-local"),
+        },
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5-codex",
+            codexCommandPath: "C:\\Tools\\codex.cmd",
+          }),
+        });
+
+        const created = await fetch(`${providerServer.url}/api/goals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Managed Codex start",
+            description: "routes through session manager",
+          }),
+        }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${created.id}/start`, {
+          method: "POST",
+        });
+        assert.equal(res.status, 200);
+
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        assert.ok(events.some((event) => event.type === "run.started" && event.message === "Managed agent session started"));
+        assert.ok(events.some((event) => event.type === "agent.progress" && event.message === "Managed adapter progress"));
+
+        const snapshot = (await fetch(`${providerServer.url}/api/goals/${created.id}/agent-session`).then(
+          (r) => r.json(),
+        )) as Record<string, Record<string, unknown>>;
+        assert.equal(snapshot.session?.providerId, "codex-local");
+        assert.equal(snapshot.session?.lifecycleState, "completed");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
     it("completes a direct mock work item within configured step bounds", async () => {
       const providerServer = await startServer(undefined, { agentLoopMaxSteps: 1 });
 
@@ -1551,6 +1602,64 @@ interface SeedManagedSessionOptions {
   approvalSummary?: string;
   safeCommand?: string;
   childPromptSummary?: string;
+}
+
+function createCompletingRuntimeAdapter(providerId: string): AgentRuntimeAdapter {
+  return {
+    providerId,
+    async detectCapabilities() {
+      return {
+        eventStreaming: true,
+        approval: false,
+        cancellation: true,
+        resume: false,
+        childSessions: false,
+      };
+    },
+    async startSession(input) {
+      const events: AgentRuntimeEvent[] = [
+        {
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Managed adapter progress",
+          occurredAt: "2026-06-26T00:00:01.000Z",
+          metadata: { providerId, modelLabel: input.modelLabel },
+        },
+        {
+          type: "session.completed",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Managed adapter completed",
+          occurredAt: "2026-06-26T00:00:02.000Z",
+          metadata: { providerId, modelLabel: input.modelLabel },
+        },
+      ];
+      return createTestSessionHandle(input.sessionId, events);
+    },
+  };
+}
+
+function createTestSessionHandle(sessionId: string, events: AgentRuntimeEvent[]): AgentSessionHandle {
+  return {
+    sessionId,
+    capabilities: {
+      eventStreaming: true,
+      approval: false,
+      cancellation: true,
+      resume: false,
+      childSessions: false,
+    },
+    async *events() {
+      for (const event of events) yield event;
+    },
+    async send() {},
+    async approve() {},
+    async reject() {},
+    async cancel() {},
+  };
 }
 
 function seedManagedSession(
