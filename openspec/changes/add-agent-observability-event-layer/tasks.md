@@ -56,5 +56,5 @@
 
 - [x] 7.1 Run focused domain, provider-runtime, Codex provider, persistence, and dashboard timeline tests.
 - [x] 7.2 Run typecheck and the full test suite, documenting any unrelated pre-existing failures.
-- [ ] 7.3 Run browser verification showing a running Codex Local or fixture-backed provider run appends observation events before final completion.
+- [x] 7.3 Run browser verification showing a running Codex Local or fixture-backed provider run appends observation events before final completion.
 - [x] 7.4 Run `openspec validate add-agent-observability-event-layer --strict`.
