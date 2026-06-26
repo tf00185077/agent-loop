@@ -2,6 +2,7 @@
 
 - [ ] 0.1 Complete `add-agent-observability-event-layer` first; this change depends on durable, sanitized agent observation events.
 - [ ] 0.2 Confirm observation events include enough metadata to derive status: event kind, provider, model, source, agent id or role when present, task id when present, command lifecycle data, heartbeat or last-seen data, and terminal failure data.
+- [ ] 0.3 If `add-agent-runtime-control-plane` has landed, derive lifecycle, approval, cancellation, stalled, and terminal control states from managed session/runtime events before falling back to observation-only inference.
 
 ## 1. Live Status Contract
 
@@ -17,6 +18,7 @@
 - [ ] 2.3 Ensure stale command or task state is cleared when completion, failure, cancellation, or terminal events arrive.
 - [ ] 2.4 Add stalled/no-recent-activity derivation using configurable thresholds without requiring heartbeat spam in the durable timeline.
 - [ ] 2.5 Preserve safe summaries only; do not derive status from raw provider payloads.
+- [ ] 2.6 Add reducer coverage for control-plane runtime events such as `session.started`, `approval.requested`, `session.cancelled`, `session.failed`, and managed-session recovery/stalled events.
 
 ## 3. Backend API Integration
 

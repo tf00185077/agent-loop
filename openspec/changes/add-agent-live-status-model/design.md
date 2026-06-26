@@ -42,6 +42,10 @@
 
    Agent and task metadata should be carried through the status model when present, but single-agent runs must work cleanly without parent or task identifiers.
 
+6. Prefer runtime-control session events for control state.
+
+   When `add-agent-runtime-control-plane` is present, lifecycle state, waiting-for-approval, cancellation, and adapter-loss status should come from managed session/runtime events and session snapshots. Observation events remain the source for current activity summaries such as command progress, task labels, provider/model metadata, and heartbeat-derived liveness. The reducer should not infer approval or cancellation state from free-form provider output when control-plane metadata is available.
+
 ## Risks / Trade-offs
 
 - [Risk] Status can disagree with timeline if reducer rules are ambiguous. -> Mitigation: keep reducer deterministic and test event sequences explicitly.
