@@ -31,8 +31,8 @@
 
 ## 4. Mock Runtime Adapter
 
-- [ ] 4.1 Add tests for a mock runtime adapter that emits progress, command events, approval requests, child-session requests, completion, failure, and cancellation events.
-- [ ] 4.2 Implement the mock runtime adapter behind the `AgentRuntimeAdapter` contract.
+- [x] 4.1 Add tests for a mock runtime adapter that emits progress, command events, approval requests, child-session requests, completion, failure, and cancellation events.
+- [x] 4.2 Implement the mock runtime adapter behind the `AgentRuntimeAdapter` contract.
 - [ ] 4.3 Add tests proving approve, reject, and cancel actions reach the active adapter exactly once.
 - [ ] 4.4 Use the mock adapter in backend/runtime tests to verify control-plane behavior without live provider credentials.
 
