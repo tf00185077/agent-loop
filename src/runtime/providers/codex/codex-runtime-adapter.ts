@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import type {
   AgentRuntimeAdapter,
@@ -8,8 +8,9 @@ import type {
   AgentSessionInput,
   AgentSessionStartInput,
 } from "../../../domain/index.js";
+import { resolveCodexModelArgument } from "../../../domain/index.js";
 import type { AgentObservation } from "../../../domain/index.js";
-import type { CodexJsonlParsedResult } from "./codex-jsonl-parser.js";
+import { createCodexJsonlParser, type CodexJsonlParsedResult } from "./codex-jsonl-parser.js";
 
 export interface CodexRuntimeAdapterOptions {
   commandPath: string;
@@ -56,9 +57,10 @@ async function createCodexSessionHandle(
   input: AgentSessionStartInput,
 ): Promise<AgentSessionHandle> {
   const capabilities = await detectCodexRuntimeCapabilities(options);
-  if (!capabilities.eventStreaming || !options.sessionRunner) {
+  if (!capabilities.eventStreaming) {
     throw new Error("Codex managed session execution requires verified JSONL session support.");
   }
+  const sessionRunner = options.sessionRunner ?? runCodexJsonlSession;
 
   let cancelled = false;
 
@@ -70,7 +72,7 @@ async function createCodexSessionHandle(
       let completed = false;
 
       try {
-        for await (const result of options.sessionRunner!({ ...input, commandPath: options.commandPath })) {
+        for await (const result of sessionRunner({ ...input, commandPath: options.commandPath })) {
           if (cancelled) {
             yield createRuntimeEvent(input, "session.cancelled", "Codex managed session cancelled.");
             return;
@@ -117,6 +119,56 @@ async function createCodexSessionHandle(
       cancelled = true;
     },
   };
+}
+
+async function* runCodexJsonlSession(input: CodexRuntimeSessionRunnerInput): AsyncIterable<CodexJsonlParsedResult> {
+  const request = toSpawnRequest(input.commandPath, buildCodexManagedSessionArgs(input));
+  const child = spawn(request.command, request.args, {
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  const parser = createCodexJsonlParser();
+  let stderr = "";
+
+  const closed = new Promise<{ code: number | null }>((resolve, reject) => {
+    child.on("error", (err) => {
+      reject(new Error(`Codex managed session failed to start: ${sanitizeDiagnostic(err.message)}`));
+    });
+    child.on("close", (code) => resolve({ code }));
+  });
+
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  child.stdin.end(input.prompt);
+
+  child.stdout.setEncoding("utf8");
+  for await (const chunk of child.stdout) {
+    for (const result of parser.push(String(chunk))) {
+      yield result;
+    }
+  }
+
+  for (const result of parser.flush()) {
+    yield result;
+  }
+
+  const { code } = await closed;
+  if (code !== 0) {
+    const detail = stderr.trim() ? `: ${sanitizeDiagnostic(stderr.trim())}` : "";
+    throw new Error(`Codex managed session exited with code ${code ?? "unknown"}${detail}`);
+  }
+}
+
+function buildCodexManagedSessionArgs(input: CodexRuntimeSessionRunnerInput): string[] {
+  const args = ["exec", "--skip-git-repo-check", "--json"];
+  const modelArgument = resolveCodexModelArgument(input.modelLabel);
+  if (modelArgument) {
+    args.push("--model", modelArgument);
+  }
+  args.push("-");
+  return args;
 }
 
 function observationToRuntimeEvent(input: AgentSessionStartInput, observation: AgentObservation): AgentRuntimeEvent {
@@ -252,4 +304,15 @@ function sanitizeDiagnostic(message: string): string {
     .replace(/\s+--(api-key|token|access-token)\s+\S+/gi, " --$1 [redacted]")
     .replace(/sk-[A-Za-z0-9_-]+/g, "[redacted-api-key]")
     .replace(/\bhidden\b/gi, "[redacted]");
+}
+
+function toSpawnRequest(command: string, args: string[]): { command: string; args: string[] } {
+  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
+    return {
+      command: process.env.ComSpec || process.env.COMSPEC || "cmd.exe",
+      args: ["/d", "/c", command, ...args],
+    };
+  }
+
+  return { command, args };
 }
