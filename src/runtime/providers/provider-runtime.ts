@@ -19,6 +19,7 @@ export interface ProviderRuntimeDeps {
   stepRepo: StepRepository;
   eventRepo: EventRepository;
   provider: ModelProvider;
+  heartbeatIntervalMs?: number;
 }
 
 export interface ProviderRunOptions {
@@ -47,6 +48,31 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
         provider: initialMetadata.provider,
         model: initialMetadata.model,
       });
+      let observationsSeen = false;
+
+      const heartbeatTimer =
+        deps.heartbeatIntervalMs && deps.heartbeatIntervalMs > 0
+          ? setInterval(() => {
+              const heartbeat = sanitizeAgentObservation({
+                kind: "heartbeat",
+                message: "Provider is still running",
+                metadata: {
+                  provider: provider.metadata?.provider ?? initialMetadata.provider,
+                  model: provider.metadata?.model ?? initialMetadata.model,
+                  source: "runtime",
+                  rawEventType: "provider.heartbeat",
+                },
+              });
+              observationsSeen = true;
+              eventRepo.create(
+                createAgentObservationEventInput({
+                  goalId,
+                  runId: run.id,
+                  observation: heartbeat,
+                }),
+              );
+            }, deps.heartbeatIntervalMs)
+          : null;
 
       const input = {
         goal: toProviderGoalContext(goal),
@@ -63,6 +89,7 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
               message: sanitized,
               data: { provider: provider.metadata?.provider ?? "unknown" },
             });
+            observationsSeen = true;
             return;
           }
 
@@ -82,26 +109,49 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
               observation: sanitized,
             }),
           );
+          observationsSeen = true;
         },
       };
       let output: ModelProviderOutput;
       try {
         output = await provider.complete(input);
       } catch (err) {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
         const message = errorMessage(err);
         const metadata = provider.metadata ?? initialMetadata;
         const finishedAt = new Date().toISOString();
         runRepo.updateStatus(run.id, "failed", { finishedAt, error: message });
         goalRepo.updateStatus(goalId, "failed", { completedAt: finishedAt });
+        const timeout = isTimeoutError(message);
+        if (timeout && !observationsSeen) {
+          eventRepo.create({
+            goalId,
+            runId: run.id,
+            type: "agent.progress",
+            message: "No provider progress was observed before timeout",
+            data: {
+              provider: metadata.provider,
+              model: metadata.model,
+              source: "runtime",
+              timeout: true,
+            },
+          });
+        }
         eventRepo.create({
           goalId,
           runId: run.id,
           type: "error",
           message,
-          data: { runId: run.id, provider: metadata.provider, model: metadata.model },
+          data: {
+            runId: run.id,
+            provider: metadata.provider,
+            model: metadata.model,
+            ...(timeout ? { timeout: true, observedProgress: observationsSeen } : {}),
+          },
         });
         return undefined;
       }
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       runRepo.updateMetadata(run.id, output.metadata);
 
       eventRepo.create({
@@ -196,4 +246,8 @@ function buildProviderPrompt(goal: Goal): string {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function isTimeoutError(message: string): boolean {
+  return /\btimed out\b|\btimeout\b/i.test(message);
 }

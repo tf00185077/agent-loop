@@ -736,6 +736,119 @@ test("provider runtime redacts Codex JSONL credential-like material before persi
   db.close();
 });
 
+test("provider runtime emits throttled heartbeat observations during quiet long provider runs", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+      async complete() {
+        await sleep(35);
+        return {
+          text: "Final response",
+          metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+        };
+      },
+    },
+    heartbeatIntervalMs: 10,
+  });
+  const goal = goalRepo.create({
+    title: "Heartbeat while quiet",
+    description: "Long quiet provider runs should emit bounded liveness",
+  });
+
+  await runtime.run(goal.id);
+
+  const heartbeats = eventRepo.listForGoal(goal.id).filter((event) => event.type === "agent.heartbeat");
+  assert.ok(heartbeats.length >= 1, "expected at least one heartbeat");
+  assert.ok(heartbeats.length <= 4, "heartbeats should be throttled");
+  assert.deepEqual(heartbeats[0]?.data, {
+    observationKind: "heartbeat",
+    provider: "codex-cli",
+    model: "gpt-5-codex",
+    source: "runtime",
+    rawEventType: "provider.heartbeat",
+  });
+
+  db.close();
+});
+
+test("provider runtime timeout errors include safe context and preserve prior observations", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+      async complete(input: ModelProviderInput) {
+        input.onProgress?.({
+          kind: "command.started",
+          message: "Command started",
+          command: { label: "npm test", status: "started" },
+          metadata: { source: "jsonl", rawEventType: "item.started" },
+        });
+        throw new Error("Codex CLI command timed out after 50ms (model: gpt-5-codex, command: codex.cmd)");
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Timeout after progress",
+    description: "Timeout should preserve prior observations",
+  });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  assert.ok(events.some((event) => event.type === "agent.command.started"));
+  const error = events.find((event) => event.type === "error");
+  assert.ok(error);
+  assert.equal(error.data.timeout, true);
+  assert.equal(error.data.observedProgress, true);
+  assert.equal(error.data.provider, "codex-cli");
+  assert.equal(error.data.model, "gpt-5-codex");
+  assert.equal(JSON.stringify(error).includes("api-key"), false);
+
+  db.close();
+});
+
+test("provider runtime records a no-progress indication when a provider times out without observations", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+      async complete() {
+        throw new Error("Codex CLI command timed out after 50ms (model: gpt-5-codex, command: codex.cmd)");
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Timeout without progress",
+    description: "Timeout should say no progress was observed",
+  });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  const noProgress = events.find((event) => event.type === "agent.progress");
+  assert.equal(noProgress?.message, "No provider progress was observed before timeout");
+  assert.equal(noProgress.data.provider, "codex-cli");
+  assert.equal(noProgress.data.model, "gpt-5-codex");
+  const error = events.find((event) => event.type === "error");
+  assert.equal(error?.data.timeout, true);
+  assert.equal(error?.data.observedProgress, false);
+
+  db.close();
+});
+
 test("provider runtime throws if goal does not exist", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const runtime = createProviderRuntime({
@@ -754,3 +867,7 @@ test("provider runtime throws if goal does not exist", async () => {
 
   db.close();
 });
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

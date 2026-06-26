@@ -33,10 +33,10 @@
 
 ## 4. Liveness and Timeout Diagnostics
 
-- [ ] 4.1 Add tests for throttled heartbeat observations during long provider runs with no emitted activity.
-- [ ] 4.2 Implement heartbeat emission or last-seen tracking without flooding the durable timeline.
-- [ ] 4.3 Add tests proving timeout errors include safe context and preserve prior observations.
-- [ ] 4.4 Record a safe no-progress-before-timeout indication when a provider times out without observations.
+- [x] 4.1 Add tests for throttled heartbeat observations during long provider runs with no emitted activity.
+- [x] 4.2 Implement heartbeat emission or last-seen tracking without flooding the durable timeline.
+- [x] 4.3 Add tests proving timeout errors include safe context and preserve prior observations.
+- [x] 4.4 Record a safe no-progress-before-timeout indication when a provider times out without observations.
 
 ## 5. Dashboard Timeline Rendering
 
