@@ -8,10 +8,10 @@
 
 ## 1. Observation Contracts
 
-- [ ] 1.1 Add domain tests for agent observability event types and safe observation metadata.
+- [x] 1.1 Add domain tests for agent observability event types and safe observation metadata.
 - [x] 1.2 Define provider-agnostic observation input types for heartbeat, progress, command lifecycle, and subtask lifecycle.
-- [ ] 1.3 Extend the model provider progress callback to accept structured observations while keeping a compatibility path for plain output chunks.
-- [ ] 1.4 Add sanitizer tests for structured observation messages, command summaries, stdout/stderr tails, and JSONL-derived fields.
+- [x] 1.3 Extend the model provider progress callback to accept structured observations while keeping a compatibility path for plain output chunks.
+- [x] 1.4 Add sanitizer tests for structured observation messages, command summaries, stdout/stderr tails, and JSONL-derived fields.
 
 ## 2. Runtime Persistence and Streaming
 

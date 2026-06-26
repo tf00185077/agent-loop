@@ -1,4 +1,8 @@
-import type { Goal } from "../../domain/index.js";
+import {
+  createAgentObservationEventInput,
+  type AgentObservation,
+  type Goal,
+} from "../../domain/index.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type {
   EventRepository,
@@ -6,6 +10,7 @@ import type {
   StepRepository,
 } from "../../persistence/runtime-repositories.js";
 import type { ModelProvider, ModelProviderOutput } from "./model-provider.js";
+import { sanitizeAgentObservation } from "../safety/agent-observation-sanitizer.js";
 import { sanitizeProcessOutput } from "../safety/process-output-sanitizer.js";
 
 export interface ProviderRuntimeDeps {
@@ -40,15 +45,34 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
         goal: toProviderGoalContext(goal),
         prompt: buildProviderPrompt(goal),
         conversationState: options?.conversationState,
-        onProgress: (chunk: string) => {
-          const sanitized = sanitizeProcessOutput(chunk).trim();
-          if (!sanitized) return;
-          eventRepo.create({
-            goalId,
-            type: "agent.progress",
-            message: sanitized,
-            data: { provider: provider.metadata?.provider ?? "unknown" },
+        onProgress: (progress: string | AgentObservation) => {
+          if (typeof progress === "string") {
+            const sanitized = sanitizeProcessOutput(progress).trim();
+            if (!sanitized) return;
+            eventRepo.create({
+              goalId,
+              type: "agent.progress",
+              message: sanitized,
+              data: { provider: provider.metadata?.provider ?? "unknown" },
+            });
+            return;
+          }
+
+          const sanitized = sanitizeAgentObservation({
+            ...progress,
+            metadata: {
+              provider: provider.metadata?.provider ?? progress.metadata?.provider,
+              model: provider.metadata?.model ?? progress.metadata?.model,
+              ...progress.metadata,
+            },
           });
+          if (!sanitized.message) return;
+          eventRepo.create(
+            createAgentObservationEventInput({
+              goalId,
+              observation: sanitized,
+            }),
+          );
         },
       };
       let output: ModelProviderOutput;

@@ -362,6 +362,57 @@ test("provider runtime persists sanitized progress chunks as durable agent.progr
   db.close();
 });
 
+test("provider runtime accepts structured observations while keeping plain progress chunks compatible", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+      async complete(input: ModelProviderInput) {
+        input.onProgress?.({
+          kind: "heartbeat",
+          message: "Codex process is still running",
+          metadata: { source: "runtime", rawEventType: "heartbeat" },
+        });
+        input.onProgress?.("Plain compatibility chunk");
+        return {
+          text: "Final response",
+          metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Stream structured progress",
+    description: "Persist provider observations as durable events",
+  });
+
+  await runtime.run(goal.id);
+
+  const observationEvents = eventRepo
+    .listForGoal(goal.id)
+    .filter((event) => event.type === "agent.heartbeat" || event.type === "agent.progress");
+  assert.deepEqual(
+    observationEvents.map((event) => [event.type, event.message]),
+    [
+      ["agent.heartbeat", "Codex process is still running"],
+      ["agent.progress", "Plain compatibility chunk"],
+    ],
+  );
+  assert.deepEqual(observationEvents[0]?.data, {
+    observationKind: "heartbeat",
+    provider: "codex-cli",
+    model: "gpt-5-codex",
+    source: "runtime",
+    rawEventType: "heartbeat",
+  });
+
+  db.close();
+});
+
 test("provider runtime ignores empty or whitespace-only progress chunks", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const runtime = createProviderRuntime({

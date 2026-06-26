@@ -1,3 +1,5 @@
+import type { AgentObservation } from "../../domain/index.js";
+
 export interface ModelProvider {
   /** Display-only provider/model metadata known before execution, if available. */
   metadata?: ModelProviderMetadata;
@@ -14,12 +16,12 @@ export interface ModelProviderInput {
    */
   conversationState?: unknown;
   /**
-   * Optional sink for raw, unsanitized process output chunks observed while
-   * the provider runs. The runtime sanitizes and persists non-empty chunks
-   * as durable progress events; providers that have no streamable output
-   * may simply not call it.
+   * Optional sink for raw, unsanitized process output chunks or structured
+   * observations seen while the provider runs. The runtime sanitizes and
+   * persists non-empty progress; providers that have no streamable output may
+   * simply not call it.
    */
-  onProgress?: (chunk: string) => void;
+  onProgress?: (progress: string | AgentObservation) => void;
 }
 
 export interface ModelProviderGoalContext {
