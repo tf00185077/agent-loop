@@ -14,6 +14,7 @@ import type {
 import {
   sanitizeAgentRuntimeApprovalRequest,
   sanitizeAgentRuntimeChildSessionRequest,
+  sanitizeAgentRuntimeSession,
 } from "../../runtime/safety/agent-runtime-control-plane-sanitizer.js";
 
 const TERMINAL_EVENT_TYPES = new Set<Event["type"]>([
@@ -126,7 +127,7 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
 
       const session = agentSessionRepo.listSessionsForGoal(goal.id).at(-1) ?? null;
       res.json({
-        session,
+        session: session ? sanitizeAgentRuntimeSession(session) : null,
         approvals: session
           ? agentSessionRepo.listApprovalRequests(session.id).map(sanitizeAgentRuntimeApprovalRequest)
           : [],

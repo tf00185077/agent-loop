@@ -1516,10 +1516,47 @@ describe("Backend API", () => {
         await providerServer.close();
       }
     });
+
+    it("omits credential material from session snapshots and control responses", async () => {
+      const providerServer = await startServer();
+      const secrets = ["snapshot-secret", "command-secret", "child-secret", "capability-secret"];
+
+      try {
+        const { goal, session, approval } = seedManagedSession(providerServer.db, {
+          capabilityReason: "Authorization: Bearer capability-secret",
+          approvalSummary: "Run command with token=snapshot-secret",
+          safeCommand: "npm.cmd test --token command-secret",
+          childPromptSummary: "Review with OPENAI_API_KEY=child-secret",
+        });
+
+        const snapshot = await fetch(`${providerServer.url}/api/goals/${goal.id}/agent-session`).then(
+          (res) => res.json(),
+        );
+        assertDoesNotContainValues(snapshot, secrets);
+
+        const approved = await fetch(
+          `${providerServer.url}/api/agent-sessions/${session.id}/approvals/${approval.id}/approve`,
+          { method: "POST" },
+        ).then((res) => res.json());
+        assertDoesNotContainValues(approved, secrets);
+      } finally {
+        await providerServer.close();
+      }
+    });
   });
 });
 
-function seedManagedSession(db: ReturnType<typeof openDatabase>) {
+interface SeedManagedSessionOptions {
+  capabilityReason?: string;
+  approvalSummary?: string;
+  safeCommand?: string;
+  childPromptSummary?: string;
+}
+
+function seedManagedSession(
+  db: ReturnType<typeof openDatabase>,
+  options: SeedManagedSessionOptions = {},
+) {
   const goalRepo = createGoalRepository(db);
   const runRepo = createRunRepository(db);
   const sessions = createAgentSessionRepository(db);
@@ -1540,13 +1577,13 @@ function seedManagedSession(db: ReturnType<typeof openDatabase>) {
       cancellation: true,
       resume: false,
       childSessions: false,
-      unsupportedReasons: { approval: "Codex exec mode cannot resume approvals." },
+      unsupportedReasons: { approval: options.capabilityReason ?? "Codex exec mode cannot resume approvals." },
     },
   });
   const command = sessions.recordCommand({
     sessionId: session.id,
     status: "pending",
-    safeCommand: "npm.cmd test",
+    safeCommand: options.safeCommand ?? "npm.cmd test",
     cwd: null,
     startedAt: null,
     completedAt: null,
@@ -1556,12 +1593,12 @@ function seedManagedSession(db: ReturnType<typeof openDatabase>) {
   const approval = sessions.createApprovalRequest({
     sessionId: session.id,
     commandId: command.id,
-    safeSummary: "Run tests",
+    safeSummary: options.approvalSummary ?? "Run tests",
   });
   const childRequest = sessions.recordChildSessionRequest({
     parentSessionId: session.id,
     childRole: "reviewer",
-    promptSummary: "Review implementation.",
+    promptSummary: options.childPromptSummary ?? "Review implementation.",
     status: "unsupported",
     safeReason: "Child-session scheduling is not enabled.",
   });

@@ -3,6 +3,7 @@ import type {
   AgentRuntimeChildSessionRequest,
   AgentRuntimeCommandDiagnostics,
   AgentRuntimeCommandRecord,
+  AgentRuntimeSession,
 } from "../../domain/index.js";
 import { sanitizeProcessOutput } from "./process-output-sanitizer.js";
 
@@ -17,6 +18,25 @@ export function sanitizeAgentRuntimeApprovalRequest(
     safeSummary: sanitizeControlPlaneText(approval.safeSummary),
     command: approval.command ? sanitizeAgentRuntimeCommandRecord(approval.command) : approval.command,
     resolutionReason: sanitizeNullableText(approval.resolutionReason),
+  };
+}
+
+export function sanitizeAgentRuntimeSession(session: AgentRuntimeSession): AgentRuntimeSession {
+  return {
+    ...session,
+    providerId: sanitizeControlPlaneText(session.providerId),
+    modelLabel: sanitizeNullableText(session.modelLabel),
+    capabilities: {
+      ...session.capabilities,
+      unsupportedReasons: session.capabilities.unsupportedReasons
+        ? Object.fromEntries(
+            Object.entries(session.capabilities.unsupportedReasons).map(([key, value]) => [
+              key,
+              value ? sanitizeControlPlaneText(value) : value,
+            ]),
+          )
+        : undefined,
+    },
   };
 }
 

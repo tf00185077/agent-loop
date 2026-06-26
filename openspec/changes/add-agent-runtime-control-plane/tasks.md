@@ -19,7 +19,7 @@
 - [x] 2.2 Implement SQLite schema/store support for durable agent sessions, approval requests, command records, runtime capabilities, and child-session request records.
 - [x] 2.3 Add backend API tests for session snapshot reads, approve, reject, cancel, and provider capability responses.
 - [x] 2.4 Implement backend routes and service methods for session snapshots and session-control actions.
-- [ ] 2.5 Ensure all API responses omit provider credentials, auth cache material, command secret arguments, cookies, access tokens, API keys, and authorization headers.
+- [x] 2.5 Ensure all API responses omit provider credentials, auth cache material, command secret arguments, cookies, access tokens, API keys, and authorization headers.
 
 ## 3. Runtime Session Manager
 
