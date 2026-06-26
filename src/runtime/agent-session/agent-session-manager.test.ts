@@ -115,6 +115,89 @@ test("starts a managed session consumes adapter events and updates durable sessi
   db.close();
 });
 
+test("recovers orphaned non-terminal sessions as stalled visible state", () => {
+  const publishedEventIds: string[] = [];
+  const eventBus: EventBus = {
+    publish(event) {
+      publishedEventIds.push(event.id);
+    },
+    subscribe() {
+      return () => undefined;
+    },
+  };
+  const db = openDatabase({
+    path: join(mkdtempSync(join(tmpdir(), "auto-agent-session-recovery-")), "runtime.sqlite"),
+  });
+  const goalRepo = createGoalRepository(db);
+  const runRepo = createRunRepository(db);
+  const eventRepo = createEventRepository(db, { eventBus });
+  const agentSessionRepo = createAgentSessionRepository(db, {
+    now: fixedClock([
+      "2026-06-26T00:00:00.000Z",
+      "2026-06-26T00:00:01.000Z",
+      "2026-06-26T00:05:00.000Z",
+      "2026-06-26T00:05:01.000Z",
+    ]),
+  });
+  const goal = goalRepo.create({
+    title: "Recover orphaned session",
+    description: "Backend restarted while adapter was running.",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-06-26T00:00:00.000Z" });
+  const run = runRepo.create({ goalId: goal.id, provider: "codex-local", model: "gpt-5-codex" });
+  const running = agentSessionRepo.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "running",
+    capabilities: {
+      eventStreaming: true,
+      approval: true,
+      cancellation: true,
+      resume: false,
+      childSessions: false,
+    },
+  });
+  const terminalRun = runRepo.create({ goalId: goal.id, provider: "codex-local", model: "gpt-5-codex" });
+  const completed = agentSessionRepo.createSession({
+    goalId: goal.id,
+    runId: terminalRun.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "completed",
+    capabilities: {
+      eventStreaming: true,
+      approval: true,
+      cancellation: true,
+      resume: false,
+      childSessions: false,
+    },
+  });
+  const manager = createAgentSessionManager({
+    goalRepo,
+    runRepo,
+    eventRepo,
+    agentSessionRepo,
+  });
+
+  const recovered = manager.recoverOrphanedSessions();
+
+  assert.deepEqual(recovered.map((session) => session.id), [running.id]);
+  assert.equal(agentSessionRepo.getSession(running.id)?.lifecycleState, "stalled");
+  assert.equal(agentSessionRepo.getSession(completed.id)?.lifecycleState, "completed");
+  const recoveryEvent = eventRepo
+    .listForGoal(goal.id)
+    .find((event) => event.type === "error" && event.data.sessionId === running.id);
+  assert.ok(recoveryEvent);
+  assert.match(recoveryEvent.message, /lost adapter control/i);
+  assert.equal(runRepo.getById(run.id)?.status, "failed");
+  assert.equal(goalRepo.getById(goal.id)?.status, "failed");
+  assert.deepEqual(publishedEventIds, eventRepo.listForGoal(goal.id).map((event) => event.id));
+
+  db.close();
+});
+
 function createHandle(sessionId: string, events: AgentRuntimeEvent[]): AgentSessionHandle {
   return {
     sessionId,
@@ -133,4 +216,9 @@ function createHandle(sessionId: string, events: AgentRuntimeEvent[]): AgentSess
     async reject() {},
     async cancel() {},
   };
+}
+
+function fixedClock(values: string[]): () => string {
+  let index = 0;
+  return () => values[Math.min(index++, values.length - 1)]!;
 }

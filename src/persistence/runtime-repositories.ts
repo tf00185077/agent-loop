@@ -81,6 +81,7 @@ export interface AgentSessionRepository {
   updateLifecycleState(id: string, state: AgentSessionLifecycleState): AgentRuntimeSession;
   getSession(id: string): AgentRuntimeSession | null;
   listSessionsForGoal(goalId: string): AgentRuntimeSession[];
+  listNonTerminalSessions(): AgentRuntimeSession[];
   recordCommand(input: CreateAgentRuntimeCommandInput): AgentRuntimeCommandRecord;
   createApprovalRequest(input: CreateAgentRuntimeApprovalInput): AgentRuntimeApprovalRequest;
   resolveApprovalRequest(
@@ -330,6 +331,18 @@ export function createAgentSessionRepository(
       return db
         .prepare("SELECT * FROM agent_sessions WHERE goal_id = ? ORDER BY created_at ASC, rowid ASC")
         .all(goalId)
+        .map(mapAgentSessionRow);
+    },
+
+    listNonTerminalSessions() {
+      return db
+        .prepare(`
+          SELECT *
+          FROM agent_sessions
+          WHERE lifecycle_state NOT IN ('cancelled', 'failed', 'completed')
+          ORDER BY created_at ASC, rowid ASC
+        `)
+        .all()
         .map(mapAgentSessionRow);
     },
 

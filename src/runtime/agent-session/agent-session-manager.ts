@@ -31,6 +31,7 @@ export interface StartManagedSessionResult {
 
 export interface AgentSessionManager {
   startManagedSession(input: StartManagedSessionInput): Promise<StartManagedSessionResult>;
+  recoverOrphanedSessions(): AgentRuntimeSession[];
 }
 
 export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentSessionManager {
@@ -89,6 +90,34 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
       }
 
       return { session: deps.agentSessionRepo.getSession(session.id)! };
+    },
+
+    recoverOrphanedSessions() {
+      const recovered: AgentRuntimeSession[] = [];
+      for (const session of deps.agentSessionRepo.listNonTerminalSessions()) {
+        const stalled = deps.agentSessionRepo.updateLifecycleState(session.id, "stalled");
+        const finishedAt = new Date().toISOString();
+        deps.runRepo.updateStatus(session.runId, "failed", {
+          finishedAt,
+          error: "Managed agent session lost adapter control.",
+        });
+        deps.goalRepo.updateStatus(session.goalId, "failed", { completedAt: finishedAt });
+        deps.eventRepo.create({
+          goalId: session.goalId,
+          runId: session.runId,
+          type: "error",
+          message: "Managed agent session lost adapter control during backend restart.",
+          data: {
+            sessionId: session.id,
+            provider: session.providerId,
+            model: session.modelLabel,
+            recoveryState: "stalled",
+          },
+        });
+        recovered.push(stalled);
+      }
+
+      return recovered;
     },
   };
 }
