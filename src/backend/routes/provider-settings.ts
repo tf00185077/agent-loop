@@ -162,6 +162,10 @@ export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): 
     try {
       const provider = typeof req.query.provider === "string" ? req.query.provider : deps.providerSettingsRepo.get().provider;
       if (provider === "codex-local") {
+        // Capability spike, 2026-06-26: local `codex` shims can resolve to
+        // legacy/unrelated CLIs, and `exec --json` does not expose a verified
+        // backend-mediated approval/resume protocol. Keep approval disabled
+        // until the managed Codex adapter detects that protocol explicitly.
         res.json({
           provider,
           capabilities: {
@@ -171,7 +175,8 @@ export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): 
             resume: false,
             childSessions: false,
             unsupportedReasons: {
-              approval: "Codex exec JSONL mode does not yet expose backend-mediated approval resume.",
+              approval: "Codex capability spike did not verify a backend-mediated approval resume protocol.",
+              resume: "Codex capability spike did not verify resumable managed sessions.",
               child_sessions: "Child-session scheduling is not enabled.",
             },
           },
