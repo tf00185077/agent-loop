@@ -40,11 +40,11 @@
 
 ## 5. Dashboard Timeline Rendering
 
-- [ ] 5.1 Add dashboard state/rendering tests for command, heartbeat, progress, failure, and subtask observation events.
-- [ ] 5.2 Render observation event kinds with distinct labels while preserving the existing timeline layout.
-- [ ] 5.3 Show provider/model and optional agent/task metadata when present.
-- [ ] 5.4 Ensure unknown observation sources and missing future orchestration metadata render without errors.
-- [ ] 5.5 Verify the dashboard never displays raw provider payloads when safe summaries are available.
+- [x] 5.1 Add dashboard state/rendering tests for command, heartbeat, progress, failure, and subtask observation events.
+- [x] 5.2 Render observation event kinds with distinct labels while preserving the existing timeline layout.
+- [x] 5.3 Show provider/model and optional agent/task metadata when present.
+- [x] 5.4 Ensure unknown observation sources and missing future orchestration metadata render without errors.
+- [x] 5.5 Verify the dashboard never displays raw provider payloads when safe summaries are available.
 
 ## 6. Future Subagent Integration Seam
 

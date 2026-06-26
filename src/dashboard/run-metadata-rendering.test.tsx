@@ -41,6 +41,55 @@ test("timeline shows per-event provider and model metadata and tolerates missing
   assert.match(html, /agent.message/);
 });
 
+test("timeline renders observation event kinds with safe metadata and no raw payload", () => {
+  const html = renderToStaticMarkup(
+    <EventTimelineList
+      events={[
+        event("agent.command.started", {
+          observationKind: "command.started",
+          provider: "codex-cli",
+          model: "gpt-5-codex",
+          source: "jsonl",
+          rawEventType: "item.started",
+          agentRole: "main",
+          agentId: "agent-1",
+          taskId: "task-1",
+          command: { label: "npm test", status: "started" },
+          rawPayload: { token: "secret-raw-payload" },
+        }),
+        event("agent.heartbeat", {
+          observationKind: "heartbeat",
+          provider: "codex-cli",
+          model: "gpt-5-codex",
+          source: "future-source",
+        }),
+        event("agent.subtask.completed", {
+          observationKind: "subtask.completed",
+          provider: "codex-cli",
+          model: "gpt-5-codex",
+          agentId: "child-1",
+          parentAgentId: "agent-1",
+          taskId: "task-2",
+          subtask: { title: "Update docs", status: "completed" },
+        }),
+      ]}
+    />,
+  );
+
+  assert.match(html, /Command started/);
+  assert.match(html, /Heartbeat/);
+  assert.match(html, /Subtask completed/);
+  assert.match(html, /codex-cli/);
+  assert.match(html, /gpt-5-codex/);
+  assert.match(html, /main/);
+  assert.match(html, /agent-1/);
+  assert.match(html, /task-1/);
+  assert.match(html, /future-source/);
+  assert.match(html, /Update docs/);
+  assert.equal(html.includes("secret-raw-payload"), false);
+  assert.equal(html.includes("rawPayload"), false);
+});
+
 function goal(): Goal {
   return {
     id: "goal-1",

@@ -57,6 +57,7 @@ export function EventTimelineList({ events }: { events: GoalEvent[] }) {
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
         {events.map((e) => {
           const metadata = eventRunMetadata(e);
+          const details = observationDetails(e);
 
           return (
             <li
@@ -70,18 +71,81 @@ export function EventTimelineList({ events }: { events: GoalEvent[] }) {
             >
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                 <span style={{ fontWeight: 500 }}>
-                  {e.type}
+                  {eventLabel(e)}
                   {metadata && <RunMetadataBadge provider={metadata.provider} model={metadata.model} />}
                 </span>
                 <span style={{ color: "#888" }}>{fmt(e.createdAt)}</span>
               </div>
               <div style={{ marginTop: 2 }}>{e.message}</div>
+              {details.length > 0 && (
+                <div style={{ color: "#666", fontSize: 12, marginTop: 4 }}>
+                  {details.join(" · ")}
+                </div>
+              )}
             </li>
           );
         })}
       </ul>
     </div>
   );
+}
+
+function eventLabel(event: GoalEvent): string {
+  const observationKind =
+    typeof event.data.observationKind === "string" ? event.data.observationKind : null;
+  switch (observationKind ?? event.type.replace(/^agent\./, "")) {
+    case "heartbeat":
+      return "Heartbeat";
+    case "progress":
+      return "Progress";
+    case "command.started":
+      return "Command started";
+    case "command.completed":
+      return "Command completed";
+    case "command.failed":
+      return "Command failed";
+    case "subtask.started":
+      return "Subtask started";
+    case "subtask.completed":
+      return "Subtask completed";
+    case "subtask.failed":
+      return "Subtask failed";
+    default:
+      return event.type;
+  }
+}
+
+function observationDetails(event: GoalEvent): string[] {
+  if (!event.type.startsWith("agent.")) return [];
+
+  const details = [
+    textValue(event.data.agentRole),
+    textValue(event.data.agentId),
+    textValue(event.data.parentAgentId),
+    textValue(event.data.taskId),
+    textValue(event.data.source),
+    textValue(event.data.rawEventType),
+  ];
+
+  const command = recordValue(event.data.command);
+  if (command) {
+    details.push(textValue(command.label), textValue(command.status));
+  }
+
+  const subtask = recordValue(event.data.subtask);
+  if (subtask) {
+    details.push(textValue(subtask.title), textValue(subtask.status));
+  }
+
+  return details.filter((detail): detail is string => Boolean(detail));
+}
+
+function textValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
 function RunMetadataBadge({ provider, model }: { provider: string; model: string }) {
