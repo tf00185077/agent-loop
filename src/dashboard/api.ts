@@ -222,6 +222,13 @@ export async function rejectAgentSessionApproval(
   if (!res.ok) throw new Error(`rejectAgentSessionApproval: ${res.status}`);
 }
 
+export async function cancelAgentSession(sessionId: string): Promise<void> {
+  const res = await fetch(`${BASE}/agent-sessions/${sessionId}/cancel`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`cancelAgentSession: ${res.status}`);
+}
+
 export function openEventStream(id: string, onEvent: (event: GoalEvent) => void): () => void {
   const source = new EventSource(`${BASE}/goals/${id}/events/stream`);
   source.onmessage = (message) => {

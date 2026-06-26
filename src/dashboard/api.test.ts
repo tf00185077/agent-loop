@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   approveAgentSessionApproval,
+  cancelAgentSession,
   detectCodexCli,
   getAgentSessionSnapshot,
   getProviderSettings,
@@ -167,6 +168,21 @@ test("approves and rejects agent session approvals through dashboard API", async
       ["/api/agent-sessions/session-1/approvals/approval-2/reject", "POST", { reason: "No thanks" }],
     ],
   );
+});
+
+test("cancels an agent session through dashboard API", async () => {
+  let capturedUrl = "";
+  let capturedMethod: string | undefined;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    capturedUrl = String(input);
+    capturedMethod = init?.method;
+    return jsonResponse({ ok: true });
+  };
+
+  await cancelAgentSession("session-1");
+
+  assert.equal(capturedUrl, "/api/agent-sessions/session-1/cancel");
+  assert.equal(capturedMethod, "POST");
 });
 
 test("detects and tests Codex Local connection through dashboard API", async () => {

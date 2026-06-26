@@ -65,6 +65,22 @@ test("goal detail renders approval actions only for pending approvals when appro
   assert.equal((html.match(/Reject/g) ?? []).length, 1);
 });
 
+test("goal detail hides cancel control when cancellation is unsupported", () => {
+  const snapshot = sessionSnapshot();
+  snapshot.session!.capabilities.cancellation = false;
+  const html = renderToStaticMarkup(
+    <GoalDetailPanel
+      goal={goal()}
+      latestMetadata={{ provider: "codex-local", model: "gpt-5-codex" }}
+      agentSessionSnapshot={snapshot}
+      starting={false}
+      onStart={() => undefined}
+    />,
+  );
+
+  assert.equal(html.includes("Cancel session"), false);
+});
+
 function goal(): Goal {
   return {
     id: "goal-1",

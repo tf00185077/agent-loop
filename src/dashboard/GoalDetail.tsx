@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   approveAgentSessionApproval,
+  cancelAgentSession,
   getAgentSessionSnapshot,
   getGoal,
   listEvents,
@@ -85,6 +86,18 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
     }
   }
 
+  async function handleCancelSession() {
+    const sessionId = agentSessionSnapshot?.session?.id;
+    if (!sessionId) return;
+    setError(null);
+    try {
+      await cancelAgentSession(sessionId);
+      await refreshAgentSessionSnapshot();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   if (loading) return <p>Loading...</p>;
   if (error) return <p style={{ color: "red" }}>{error}</p>;
   if (!goal) return null;
@@ -98,6 +111,7 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
       onStart={handleStart}
       onApproveApproval={handleApproveApproval}
       onRejectApproval={handleRejectApproval}
+      onCancelSession={handleCancelSession}
     />
   );
 }
@@ -110,6 +124,7 @@ export function GoalDetailPanel({
   onStart,
   onApproveApproval,
   onRejectApproval,
+  onCancelSession,
 }: {
   goal: Goal;
   latestMetadata: RunDisplayMetadata | null;
@@ -118,6 +133,7 @@ export function GoalDetailPanel({
   onStart: () => void;
   onApproveApproval?: (approvalId: string) => void;
   onRejectApproval?: (approvalId: string) => void;
+  onCancelSession?: () => void;
 }) {
   const session = agentSessionSnapshot?.session ?? null;
   return (
@@ -168,7 +184,11 @@ export function GoalDetailPanel({
           </table>
 
           {session.capabilities.cancellation && (
-            <button style={{ padding: "6px 14px", marginBottom: 12 }} type="button">
+            <button
+              style={{ padding: "6px 14px", marginBottom: 12 }}
+              type="button"
+              onClick={() => onCancelSession?.()}
+            >
               Cancel session
             </button>
           )}
