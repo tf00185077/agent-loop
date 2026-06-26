@@ -95,7 +95,12 @@ test("provider forwards stdout chunks to onProgress while still returning the fi
   });
   const progressChunks: string[] = [];
 
-  const output = await provider.complete({ ...input, onProgress: (chunk) => progressChunks.push(chunk) });
+  const output = await provider.complete({
+    ...input,
+    onProgress: (chunk) => {
+      if (typeof chunk === "string") progressChunks.push(chunk);
+    },
+  });
 
   assert.equal(output.text, "claude direct response");
   assert.ok(progressChunks.join("").includes("claude direct response"));

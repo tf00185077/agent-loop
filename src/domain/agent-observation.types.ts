@@ -92,8 +92,8 @@ export function buildAgentObservationEventData(observation: AgentObservation): E
   });
 }
 
-function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
+function withoutUndefined<T extends object>(value: T): Partial<T> {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined && entry !== ""),
-  ) as T;
+  ) as Partial<T>;
 }

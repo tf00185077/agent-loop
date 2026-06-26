@@ -156,7 +156,12 @@ test("provider forwards stdout chunks to onProgress while still using --output-l
   });
   const progressChunks: string[] = [];
 
-  const output = await provider.complete({ ...input, onProgress: (chunk) => progressChunks.push(chunk) });
+  const output = await provider.complete({
+    ...input,
+    onProgress: (chunk) => {
+      if (typeof chunk === "string") progressChunks.push(chunk);
+    },
+  });
 
   assert.equal(output.text, "final answer");
   assert.ok(progressChunks.join("").includes("reasoning: thinking about it..."));
@@ -173,7 +178,12 @@ test("provider succeeds without progress chunks when codex emits no useful stdou
   });
   const progressChunks: string[] = [];
 
-  const output = await provider.complete({ ...input, onProgress: (chunk) => progressChunks.push(chunk) });
+  const output = await provider.complete({
+    ...input,
+    onProgress: (chunk) => {
+      if (typeof chunk === "string") progressChunks.push(chunk);
+    },
+  });
 
   assert.equal(output.text, "no stdout response");
   assert.equal(progressChunks.length, 0);
