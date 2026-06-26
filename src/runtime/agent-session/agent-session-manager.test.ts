@@ -198,6 +198,109 @@ test("recovers orphaned non-terminal sessions as stalled visible state", () => {
   db.close();
 });
 
+test("forwards approve reject and cancel controls to the active adapter exactly once", async () => {
+  const db = openDatabase({
+    path: join(mkdtempSync(join(tmpdir(), "auto-agent-session-controls-")), "runtime.sqlite"),
+  });
+  const goalRepo = createGoalRepository(db);
+  const runRepo = createRunRepository(db);
+  const eventRepo = createEventRepository(db);
+  const agentSessionRepo = createAgentSessionRepository(db);
+  const goal = goalRepo.create({
+    title: "Control active adapter",
+    description: "Adapter controls should be idempotent.",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-06-26T00:00:00.000Z" });
+  const controls: string[] = [];
+  let startedSessionId = "";
+  let releaseEvents!: () => void;
+  const eventsReleased = new Promise<void>((resolve) => {
+    releaseEvents = resolve;
+  });
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return {
+        eventStreaming: true,
+        approval: true,
+        cancellation: true,
+        resume: false,
+        childSessions: false,
+      };
+    },
+    async startSession(input) {
+      startedSessionId = input.sessionId;
+      return {
+        sessionId: input.sessionId,
+        capabilities: {
+          eventStreaming: true,
+          approval: true,
+          cancellation: true,
+          resume: false,
+          childSessions: false,
+        },
+        async *events() {
+          yield {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Waiting for controls",
+            occurredAt: "2026-06-26T00:00:01.000Z",
+          } satisfies AgentRuntimeEvent;
+          await eventsReleased;
+          yield {
+            type: "session.cancelled",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Cancelled",
+            occurredAt: "2026-06-26T00:00:02.000Z",
+          } satisfies AgentRuntimeEvent;
+        },
+        async send() {},
+        async approve(requestId) {
+          controls.push(`approve:${requestId}`);
+        },
+        async reject(requestId) {
+          controls.push(`reject:${requestId}`);
+        },
+        async cancel() {
+          controls.push("cancel");
+          releaseEvents();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager({
+    goalRepo,
+    runRepo,
+    eventRepo,
+    agentSessionRepo,
+  });
+
+  const running = manager.startManagedSession({
+    goalId: goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Wait for controls",
+    adapter,
+  });
+  await waitFor(() => startedSessionId.length > 0);
+
+  assert.equal(await manager.approve(startedSessionId, "approval-1"), true);
+  assert.equal(await manager.approve(startedSessionId, "approval-1"), false);
+  assert.equal(await manager.reject(startedSessionId, "approval-2", "No"), true);
+  assert.equal(await manager.reject(startedSessionId, "approval-2", "No"), false);
+  assert.equal(await manager.cancel(startedSessionId, "Stop"), true);
+  assert.equal(await manager.cancel(startedSessionId, "Stop"), false);
+  await running;
+
+  assert.deepEqual(controls, ["approve:approval-1", "reject:approval-2", "cancel"]);
+
+  db.close();
+});
+
 function createHandle(sessionId: string, events: AgentRuntimeEvent[]): AgentSessionHandle {
   return {
     sessionId,
@@ -221,4 +324,12 @@ function createHandle(sessionId: string, events: AgentRuntimeEvent[]): AgentSess
 function fixedClock(values: string[]): () => string {
   let index = 0;
   return () => values[Math.min(index++, values.length - 1)]!;
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("Timed out waiting for condition");
 }

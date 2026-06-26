@@ -2,6 +2,7 @@ import type {
   AgentRuntimeAdapter,
   AgentRuntimeEvent,
   AgentRuntimeSession,
+  AgentSessionHandle,
 } from "../../domain/index.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type {
@@ -32,9 +33,15 @@ export interface StartManagedSessionResult {
 export interface AgentSessionManager {
   startManagedSession(input: StartManagedSessionInput): Promise<StartManagedSessionResult>;
   recoverOrphanedSessions(): AgentRuntimeSession[];
+  approve(sessionId: string, requestId: string): Promise<boolean>;
+  reject(sessionId: string, requestId: string, reason?: string): Promise<boolean>;
+  cancel(sessionId: string, reason?: string): Promise<boolean>;
 }
 
 export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentSessionManager {
+  const activeHandles = new Map<string, AgentSessionHandle>();
+  const deliveredControls = new Set<string>();
+
   return {
     async startManagedSession(input) {
       const goal = deps.goalRepo.getById(input.goalId);
@@ -76,17 +83,22 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
         modelLabel: input.modelLabel,
         prompt: input.prompt,
       });
+      activeHandles.set(session.id, handle);
       deps.agentSessionRepo.updateLifecycleState(session.id, "running");
 
-      for await (const event of handle.events()) {
-        persistRuntimeEvent(deps, {
-          event,
-          goalId: goal.id,
-          runId: run.id,
-          sessionId: session.id,
-          providerId: input.providerId,
-          modelLabel: input.modelLabel,
-        });
+      try {
+        for await (const event of handle.events()) {
+          persistRuntimeEvent(deps, {
+            event,
+            goalId: goal.id,
+            runId: run.id,
+            sessionId: session.id,
+            providerId: input.providerId,
+            modelLabel: input.modelLabel,
+          });
+        }
+      } finally {
+        activeHandles.delete(session.id);
       }
 
       return { session: deps.agentSessionRepo.getSession(session.id)! };
@@ -119,7 +131,41 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
 
       return recovered;
     },
+
+    approve(sessionId, requestId) {
+      return deliverControl(activeHandles, deliveredControls, sessionId, `approve:${requestId}`, (handle) =>
+        handle.approve(requestId),
+      );
+    },
+
+    reject(sessionId, requestId, reason) {
+      return deliverControl(activeHandles, deliveredControls, sessionId, `reject:${requestId}`, (handle) =>
+        handle.reject(requestId, reason),
+      );
+    },
+
+    cancel(sessionId, reason) {
+      return deliverControl(activeHandles, deliveredControls, sessionId, "cancel", (handle) => handle.cancel(reason));
+    },
   };
+}
+
+async function deliverControl(
+  activeHandles: Map<string, AgentSessionHandle>,
+  deliveredControls: Set<string>,
+  sessionId: string,
+  controlKey: string,
+  deliver: (handle: AgentSessionHandle) => Promise<void>,
+): Promise<boolean> {
+  const key = `${sessionId}:${controlKey}`;
+  const handle = activeHandles.get(sessionId);
+  if (!handle || deliveredControls.has(key)) {
+    return false;
+  }
+
+  deliveredControls.add(key);
+  await deliver(handle);
+  return true;
 }
 
 interface PersistRuntimeEventInput {
@@ -176,6 +222,21 @@ function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: PersistRuntim
   if (input.event.type === "session.failed") {
     const finishedAt = new Date().toISOString();
     deps.agentSessionRepo.updateLifecycleState(input.sessionId, "failed");
+    deps.runRepo.updateStatus(input.runId, "failed", { finishedAt, error: input.event.message });
+    deps.goalRepo.updateStatus(input.goalId, "failed", { completedAt: finishedAt });
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "error",
+      message: input.event.message,
+      data,
+    });
+    return;
+  }
+
+  if (input.event.type === "session.cancelled") {
+    const finishedAt = new Date().toISOString();
+    deps.agentSessionRepo.updateLifecycleState(input.sessionId, "cancelled");
     deps.runRepo.updateStatus(input.runId, "failed", { finishedAt, error: input.event.message });
     deps.goalRepo.updateStatus(input.goalId, "failed", { completedAt: finishedAt });
     deps.eventRepo.create({
