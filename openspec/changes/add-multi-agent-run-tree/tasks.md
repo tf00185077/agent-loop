@@ -3,6 +3,7 @@
 - [ ] 0.1 Complete `add-agent-observability-event-layer` first; this change depends on durable observation metadata for agent id, parent agent id, task id, role, provider, and model.
 - [ ] 0.2 Complete `add-agent-live-status-model` before implementation when possible; this change should reuse live status derivation instead of deriving current agent/task state ad hoc in the dashboard.
 - [ ] 0.3 Confirm the scheduler/orchestration scope for this change before implementation; this task file defines the run tree visibility layer, not a full distributed worker system.
+- [ ] 0.4 If `add-agent-runtime-control-plane` has landed, use managed session parent metadata and child-session request records as the preferred parent/child and delegated-task source.
 
 ## 1. Multi-Agent Tree Contract
 
@@ -11,6 +12,7 @@
 - [ ] 1.3 Define required correlation fields: agent id, parent agent id, task id, run id, provider, model, role, and status.
 - [ ] 1.4 Define behavior for orphaned, missing, duplicated, or out-of-order parent/child metadata.
 - [ ] 1.5 Keep node summaries sanitized and bounded; do not expose raw provider payloads or raw command output.
+- [ ] 1.6 Define how child-session request status maps into tree nodes, including pending, accepted, rejected, unsupported, completed, and failed request states.
 
 ## 2. Orchestration Event Semantics
 
@@ -18,6 +20,7 @@
 - [ ] 2.2 Extend or document observation event kinds needed by main-agent/subagent orchestration, such as `agent.spawned`, `agent.assigned`, `agent.waiting`, `agent.joined`, and `agent.cancelled`.
 - [ ] 2.3 Ensure parent/child and task correlation metadata round-trips through persistence and API responses.
 - [ ] 2.4 Ensure current single-agent provider observations still render as a one-node tree.
+- [ ] 2.5 Add fixture coverage where a main session records a child-session request before a real scheduler accepts or rejects it.
 
 ## 3. Tree Derivation
 

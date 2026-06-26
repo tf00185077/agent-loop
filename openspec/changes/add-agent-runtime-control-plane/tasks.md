@@ -62,7 +62,7 @@
 ## 8. Follow-up Change Alignment
 
 - [x] 8.1 Update or annotate `add-agent-live-status-model` so live status derives from control-plane session/runtime events where applicable.
-- [ ] 8.2 Update or annotate `add-multi-agent-run-tree` so run-tree parent/child nodes use session and child-session request metadata.
+- [x] 8.2 Update or annotate `add-multi-agent-run-tree` so run-tree parent/child nodes use session and child-session request metadata.
 - [ ] 8.3 Add migration notes explaining how existing observability events coexist with managed session events.
 
 ## 9. Verification

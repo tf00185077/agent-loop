@@ -43,6 +43,10 @@
 
    The dashboard should show a readable tree or grouped list with node status and allow drilling into related timeline events. A visual graph editor would be premature.
 
+6. Use runtime-control parent/child records when available.
+
+   When `add-agent-runtime-control-plane` is present, managed session parent metadata and persisted child-session request records should be the preferred source for parent/child relationships, delegated task ids, child roles, request status, and unsupported/rejected scheduling reasons. Observation metadata can still enrich nodes and support older fixture streams, but the tree builder should not invent scheduler relationships from free-form messages when control-plane records exist.
+
 ## Risks / Trade-offs
 
 - [Risk] Tree semantics can overfit before scheduler implementation exists. -> Mitigation: use fixture events and document scheduler requirements without implementing scheduling here.
