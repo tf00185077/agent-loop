@@ -15,8 +15,8 @@
 
 ## 2. Persistence and API Surface
 
-- [ ] 2.1 Add persistence tests for creating sessions, updating lifecycle state, storing pending approvals, resolving approvals idempotently, and recording child-session requests.
-- [ ] 2.2 Implement SQLite schema/store support for durable agent sessions, approval requests, command records, runtime capabilities, and child-session request records.
+- [x] 2.1 Add persistence tests for creating sessions, updating lifecycle state, storing pending approvals, resolving approvals idempotently, and recording child-session requests.
+- [x] 2.2 Implement SQLite schema/store support for durable agent sessions, approval requests, command records, runtime capabilities, and child-session request records.
 - [ ] 2.3 Add backend API tests for session snapshot reads, approve, reject, cancel, and provider capability responses.
 - [ ] 2.4 Implement backend routes and service methods for session snapshots and session-control actions.
 - [ ] 2.5 Ensure all API responses omit provider credentials, auth cache material, command secret arguments, cookies, access tokens, API keys, and authorization headers.

@@ -7,7 +7,12 @@ import test from "node:test";
 import { openDatabase } from "./database.js";
 import { createGoalRepository } from "./goal-repository.js";
 import { createEventBus } from "./event-bus.js";
-import { createEventRepository, createRunRepository, createStepRepository } from "./runtime-repositories.js";
+import {
+  createAgentSessionRepository,
+  createEventRepository,
+  createRunRepository,
+  createStepRepository,
+} from "./runtime-repositories.js";
 
 test("creates and updates run records for a goal", () => {
   const db = openDatabase({ path: testDatabasePath() });
@@ -164,6 +169,158 @@ test("publishes each event to the event bus after it is durably persisted", () =
   db.close();
 });
 
+test("creates agent sessions and updates lifecycle state", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({
+    title: "Managed session goal",
+    description: "Exercise session persistence.",
+  });
+  const run = createRunRepository(db).create({ goalId: goal.id, provider: "codex-local", model: "gpt-5-codex" });
+  const sessions = createAgentSessionRepository(db, {
+    now: fixedClock(["2026-06-26T00:00:00.000Z", "2026-06-26T00:00:05.000Z"]),
+  });
+
+  const session = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "starting",
+    capabilities: {
+      eventStreaming: true,
+      approval: false,
+      cancellation: true,
+      resume: false,
+      childSessions: false,
+      unsupportedReasons: { approval: "Codex exec mode cannot resume approvals." },
+    },
+    parent: {
+      sessionId: "parent-session",
+      agentId: "agent-parent",
+      taskId: "task-1",
+    },
+  });
+  const running = sessions.updateLifecycleState(session.id, "running");
+
+  assert.equal(session.goalId, goal.id);
+  assert.equal(session.providerId, "codex-local");
+  assert.equal(session.lifecycleState, "starting");
+  assert.equal(session.createdAt, "2026-06-26T00:00:00.000Z");
+  assert.equal(running.lifecycleState, "running");
+  assert.equal(running.createdAt, session.createdAt);
+  assert.equal(running.lastActivityAt, "2026-06-26T00:00:05.000Z");
+  assert.deepEqual(sessions.getSession(session.id), running);
+  assert.deepEqual(sessions.listSessionsForGoal(goal.id), [running]);
+
+  db.close();
+});
+
+test("stores pending approvals and resolves them idempotently", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({
+    title: "Approval goal",
+    description: "Exercise approval persistence.",
+  });
+  const run = createRunRepository(db).create({ goalId: goal.id, provider: "codex-local", model: "gpt-5-codex" });
+  const sessions = createAgentSessionRepository(db, {
+    now: fixedClock([
+      "2026-06-26T00:00:00.000Z",
+      "2026-06-26T00:00:01.000Z",
+      "2026-06-26T00:00:02.000Z",
+      "2026-06-26T00:00:03.000Z",
+    ]),
+  });
+  const session = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "running",
+    capabilities: {
+      eventStreaming: true,
+      approval: true,
+      cancellation: true,
+      resume: false,
+      childSessions: false,
+    },
+  });
+  const command = sessions.recordCommand({
+    sessionId: session.id,
+    status: "pending",
+    safeCommand: "npm.cmd test",
+    cwd: "C:\\Users\\TIM\\Desktop\\self\\auto-agent",
+    startedAt: null,
+    completedAt: null,
+    exitCode: null,
+    diagnostics: null,
+  });
+  const approval = sessions.createApprovalRequest({
+    sessionId: session.id,
+    commandId: command.id,
+    safeSummary: "Run tests",
+  });
+  const approved = sessions.resolveApprovalRequest(approval.id, "approved");
+  const duplicate = sessions.resolveApprovalRequest(approval.id, "rejected", "Too late");
+
+  assert.equal(approval.status, "pending");
+  assert.equal(approval.command?.safeCommand, "npm.cmd test");
+  assert.equal(approved.status, "approved");
+  assert.equal(approved.resolvedAt, "2026-06-26T00:00:03.000Z");
+  assert.equal(duplicate.status, "approved");
+  assert.equal(duplicate.resolutionReason, null);
+  assert.deepEqual(sessions.listApprovalRequests(session.id), [duplicate]);
+
+  db.close();
+});
+
+test("records child-session requests for future orchestration", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({
+    title: "Child session goal",
+    description: "Exercise child request persistence.",
+  });
+  const run = createRunRepository(db).create({ goalId: goal.id, provider: "codex-local", model: "gpt-5-codex" });
+  const sessions = createAgentSessionRepository(db, {
+    now: fixedClock(["2026-06-26T00:00:00.000Z", "2026-06-26T00:00:01.000Z"]),
+  });
+  const session = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "running",
+    capabilities: {
+      eventStreaming: true,
+      approval: false,
+      cancellation: true,
+      resume: false,
+      childSessions: false,
+    },
+  });
+
+  const childRequest = sessions.recordChildSessionRequest({
+    parentSessionId: session.id,
+    parentAgentId: "agent-main",
+    childRole: "reviewer",
+    taskId: "task-12",
+    promptSummary: "Review persistence implementation.",
+    status: "unsupported",
+    resolvedAt: "2026-06-26T00:00:02.000Z",
+    safeReason: "Child-session scheduling is not enabled.",
+  });
+
+  assert.equal(childRequest.parentSessionId, session.id);
+  assert.equal(childRequest.status, "unsupported");
+  assert.deepEqual(sessions.listChildSessionRequests(session.id), [childRequest]);
+
+  db.close();
+});
+
 function testDatabasePath(): string {
   return join(mkdtempSync(join(tmpdir(), "auto-agent-runtime-")), "runtime.sqlite");
+}
+
+function fixedClock(values: string[]): () => string {
+  let index = 0;
+  return () => values[Math.min(index++, values.length - 1)]!;
 }

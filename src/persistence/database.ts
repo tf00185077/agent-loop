@@ -85,6 +85,55 @@ function initializeSchema(db: AppDatabase): void {
       status_message TEXT,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+      id TEXT PRIMARY KEY,
+      goal_id TEXT NOT NULL REFERENCES goals(id),
+      run_id TEXT NOT NULL REFERENCES runs(id),
+      provider_id TEXT NOT NULL,
+      model_label TEXT,
+      lifecycle_state TEXT NOT NULL,
+      capabilities TEXT NOT NULL,
+      parent TEXT,
+      created_at TEXT NOT NULL,
+      last_activity_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_runtime_commands (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+      status TEXT NOT NULL,
+      safe_command TEXT NOT NULL,
+      cwd TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      exit_code INTEGER,
+      diagnostics TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_runtime_approvals (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+      command_id TEXT REFERENCES agent_runtime_commands(id),
+      status TEXT NOT NULL,
+      safe_summary TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      resolution_reason TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_child_session_requests (
+      id TEXT PRIMARY KEY,
+      parent_session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+      parent_agent_id TEXT,
+      child_role TEXT NOT NULL,
+      task_id TEXT,
+      prompt_summary TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      safe_reason TEXT
+    );
   `);
 
   // Additive migration for databases created before claude-local support: the

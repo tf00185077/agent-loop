@@ -26,7 +26,17 @@ test("initializes lifecycle and provider settings tables", () => {
   const dbPath = join(mkdtempSync(join(tmpdir(), "auto-agent-db-")), "schema.sqlite");
   const db = openDatabase({ path: dbPath });
 
-  assert.deepEqual(tableNames(db), ["events", "goals", "provider_settings", "runs", "steps"]);
+  assert.deepEqual(tableNames(db), [
+    "agent_child_session_requests",
+    "agent_runtime_approvals",
+    "agent_runtime_commands",
+    "agent_sessions",
+    "events",
+    "goals",
+    "provider_settings",
+    "runs",
+    "steps",
+  ]);
   assert.deepEqual(columnNames(db, "goals"), [
     "id",
     "title",
@@ -83,6 +93,51 @@ test("initializes lifecycle and provider settings tables", () => {
     "status_message",
     "updated_at",
   ]);
+  assert.deepEqual(columnNames(db, "agent_sessions"), [
+    "id",
+    "goal_id",
+    "run_id",
+    "provider_id",
+    "model_label",
+    "lifecycle_state",
+    "capabilities",
+    "parent",
+    "created_at",
+    "last_activity_at",
+  ]);
+  assert.deepEqual(columnNames(db, "agent_runtime_commands"), [
+    "id",
+    "session_id",
+    "status",
+    "safe_command",
+    "cwd",
+    "started_at",
+    "completed_at",
+    "exit_code",
+    "diagnostics",
+  ]);
+  assert.deepEqual(columnNames(db, "agent_runtime_approvals"), [
+    "id",
+    "session_id",
+    "command_id",
+    "status",
+    "safe_summary",
+    "created_at",
+    "resolved_at",
+    "resolution_reason",
+  ]);
+  assert.deepEqual(columnNames(db, "agent_child_session_requests"), [
+    "id",
+    "parent_session_id",
+    "parent_agent_id",
+    "child_role",
+    "task_id",
+    "prompt_summary",
+    "status",
+    "created_at",
+    "resolved_at",
+    "safe_reason",
+  ]);
   assert.deepEqual(foreignKeys(db, "runs"), [{ from: "goal_id", table: "goals", to: "id" }]);
   assert.deepEqual(foreignKeys(db, "steps"), [
     { from: "run_id", table: "runs", to: "id" },
@@ -92,6 +147,20 @@ test("initializes lifecycle and provider settings tables", () => {
     { from: "step_id", table: "steps", to: "id" },
     { from: "run_id", table: "runs", to: "id" },
     { from: "goal_id", table: "goals", to: "id" },
+  ]);
+  assert.deepEqual(foreignKeys(db, "agent_sessions"), [
+    { from: "run_id", table: "runs", to: "id" },
+    { from: "goal_id", table: "goals", to: "id" },
+  ]);
+  assert.deepEqual(foreignKeys(db, "agent_runtime_commands"), [
+    { from: "session_id", table: "agent_sessions", to: "id" },
+  ]);
+  assert.deepEqual(foreignKeys(db, "agent_runtime_approvals"), [
+    { from: "command_id", table: "agent_runtime_commands", to: "id" },
+    { from: "session_id", table: "agent_sessions", to: "id" },
+  ]);
+  assert.deepEqual(foreignKeys(db, "agent_child_session_requests"), [
+    { from: "parent_session_id", table: "agent_sessions", to: "id" },
   ]);
 
   db.close();
