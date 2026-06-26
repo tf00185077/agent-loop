@@ -70,4 +70,4 @@
 - [x] 9.1 Run focused domain, persistence, API, session-manager, mock-adapter, Codex-adapter, and dashboard tests.
 - [x] 9.2 Run typecheck and the full test suite, documenting any unrelated pre-existing failures.
 - [x] 9.3 Run browser verification showing a managed Codex or fixture-backed agent session reaches running, waiting-for-approval, approval-resolved, and terminal states through dashboard controls.
-- [ ] 9.4 Run `openspec validate add-agent-runtime-control-plane --strict`.
+- [x] 9.4 Run `openspec validate add-agent-runtime-control-plane --strict`.
