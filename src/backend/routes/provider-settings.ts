@@ -158,6 +158,71 @@ export function createProviderSettingsRouter(deps: ProviderSettingsRouterDeps): 
     }
   });
 
+  router.get("/runtime-capabilities", (req, res, next) => {
+    try {
+      const provider = typeof req.query.provider === "string" ? req.query.provider : deps.providerSettingsRepo.get().provider;
+      if (provider === "codex-local") {
+        res.json({
+          provider,
+          capabilities: {
+            eventStreaming: true,
+            approval: false,
+            cancellation: true,
+            resume: false,
+            childSessions: false,
+            unsupportedReasons: {
+              approval: "Codex exec JSONL mode does not yet expose backend-mediated approval resume.",
+              child_sessions: "Child-session scheduling is not enabled.",
+            },
+          },
+        });
+        return;
+      }
+
+      if (provider === "claude-local") {
+        res.json({
+          provider,
+          capabilities: {
+            eventStreaming: false,
+            approval: false,
+            cancellation: true,
+            resume: false,
+            childSessions: false,
+            unsupportedReasons: {
+              event_streaming: "Claude Local currently runs through the one-shot provider path.",
+              approval: "Claude Local approval bridging is not implemented.",
+              child_sessions: "Child-session scheduling is not enabled.",
+            },
+          },
+        });
+        return;
+      }
+
+      if (provider === "mock") {
+        res.json({
+          provider,
+          capabilities: {
+            eventStreaming: true,
+            approval: false,
+            cancellation: false,
+            resume: false,
+            childSessions: false,
+            unsupportedReasons: {
+              approval: "Mock completion provider does not require approval controls.",
+              cancellation: "Mock completion provider runs synchronously in tests.",
+              child_sessions: "Child-session scheduling is not enabled.",
+            },
+          },
+        });
+        return;
+      }
+
+      res.status(400).json({ error: "provider must be mock, codex-local, or claude-local" });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.post("/test", async (_req, res, next) => {
     try {
       const settings = deps.providerSettingsRepo.get();

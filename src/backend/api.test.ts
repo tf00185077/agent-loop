@@ -7,6 +7,11 @@ import assert from "node:assert/strict";
 
 import { openDatabase } from "../persistence/database.js";
 import { createApp } from "./app.js";
+import { createGoalRepository } from "../persistence/goal-repository.js";
+import {
+  createAgentSessionRepository,
+  createRunRepository,
+} from "../persistence/runtime-repositories.js";
 import type { ClaudeCliDetectionOptions } from "../runtime/providers/claude/claude-cli-detection.js";
 import type { CodexCliDetectionOptions } from "../runtime/providers/codex/codex-cli-detection.js";
 import type { CodexLocalConnectionTestOptions } from "../runtime/providers/codex/codex-local-connection-test.js";
@@ -20,15 +25,18 @@ function startServer(
   const db = openDatabase({ path: ":memory:" });
   const app = createApp(db, { ...(appOptions ?? {}), ...(env ? { env } : {}) });
   const server = createServer(app);
-  return new Promise<{ url: string; close: () => Promise<void> }>((resolve) => {
+  return new Promise<{ url: string; db: ReturnType<typeof openDatabase>; close: () => Promise<void> }>((resolve) => {
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address() as { port: number };
       const url = `http://127.0.0.1:${addr.port}`;
       const close = () =>
         new Promise<void>((res, rej) =>
-          server.close((err) => (err ? rej(err) : res())),
+          server.close((err) => {
+            db.close();
+            return err ? rej(err) : res();
+          }),
         );
-      resolve({ url, close });
+      resolve({ url, db, close });
     });
   });
 }
@@ -1430,4 +1438,133 @@ describe("Backend API", () => {
       assert.ok(types.includes("run.started"));
     });
   });
+
+  describe("Agent session control API", () => {
+    it("returns a durable session snapshot for a goal", async () => {
+      const providerServer = await startServer();
+
+      try {
+        const { goal, session, approval, childRequest } = seedManagedSession(providerServer.db);
+
+        const res = await fetch(`${providerServer.url}/api/goals/${goal.id}/agent-session`);
+        assert.equal(res.status, 200);
+        const body = (await json(res)) as Record<string, unknown>;
+
+        assert.equal((body.session as Record<string, unknown>).id, session.id);
+        assert.equal((body.session as Record<string, unknown>).lifecycleState, "waiting_approval");
+        assert.deepEqual(
+          ((body.approvals as Array<Record<string, unknown>>)[0]).id,
+          approval.id,
+        );
+        assert.deepEqual(
+          ((body.childSessionRequests as Array<Record<string, unknown>>)[0]).id,
+          childRequest.id,
+        );
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("approves rejects and cancels managed sessions through backend actions", async () => {
+      const providerServer = await startServer();
+
+      try {
+        const { session, approval } = seedManagedSession(providerServer.db);
+
+        const approved = await fetch(
+          `${providerServer.url}/api/agent-sessions/${session.id}/approvals/${approval.id}/approve`,
+          { method: "POST" },
+        );
+        assert.equal(approved.status, 200);
+        assert.equal(((await json(approved)) as Record<string, unknown>).status, "approved");
+
+        const duplicateReject = await fetch(
+          `${providerServer.url}/api/agent-sessions/${session.id}/approvals/${approval.id}/reject`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason: "too late" }),
+          },
+        );
+        assert.equal(duplicateReject.status, 200);
+        assert.equal(((await json(duplicateReject)) as Record<string, unknown>).status, "approved");
+
+        const cancelled = await fetch(`${providerServer.url}/api/agent-sessions/${session.id}/cancel`, {
+          method: "POST",
+        });
+        assert.equal(cancelled.status, 200);
+        assert.equal(((await json(cancelled)) as Record<string, unknown>).lifecycleState, "cancelled");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("returns provider runtime capabilities without credential material", async () => {
+      const providerServer = await startServer();
+
+      try {
+        const res = await fetch(`${providerServer.url}/api/provider-settings/runtime-capabilities?provider=codex-local`);
+        assert.equal(res.status, 200);
+        const body = (await json(res)) as Record<string, unknown>;
+
+        assert.equal(body.provider, "codex-local");
+        assert.equal((body.capabilities as Record<string, unknown>).eventStreaming, true);
+        assert.equal((body.capabilities as Record<string, unknown>).approval, false);
+        assert.equal(JSON.stringify(body).includes("token"), false);
+        assert.equal(JSON.stringify(body).includes("api-key"), false);
+      } finally {
+        await providerServer.close();
+      }
+    });
+  });
 });
+
+function seedManagedSession(db: ReturnType<typeof openDatabase>) {
+  const goalRepo = createGoalRepository(db);
+  const runRepo = createRunRepository(db);
+  const sessions = createAgentSessionRepository(db);
+  const goal = goalRepo.create({
+    title: "Managed API goal",
+    description: "Exercise session control API.",
+  });
+  const run = runRepo.create({ goalId: goal.id, provider: "codex-local", model: "gpt-5-codex" });
+  const session = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "waiting_approval",
+    capabilities: {
+      eventStreaming: true,
+      approval: false,
+      cancellation: true,
+      resume: false,
+      childSessions: false,
+      unsupportedReasons: { approval: "Codex exec mode cannot resume approvals." },
+    },
+  });
+  const command = sessions.recordCommand({
+    sessionId: session.id,
+    status: "pending",
+    safeCommand: "npm.cmd test",
+    cwd: null,
+    startedAt: null,
+    completedAt: null,
+    exitCode: null,
+    diagnostics: null,
+  });
+  const approval = sessions.createApprovalRequest({
+    sessionId: session.id,
+    commandId: command.id,
+    safeSummary: "Run tests",
+  });
+  const childRequest = sessions.recordChildSessionRequest({
+    parentSessionId: session.id,
+    childRole: "reviewer",
+    promptSummary: "Review implementation.",
+    status: "unsupported",
+    safeReason: "Child-session scheduling is not enabled.",
+  });
+
+  return { goal, run, session, approval, childRequest };
+}

@@ -7,7 +7,14 @@ import {
 } from "../../domain/index.js";
 import type { EventBus } from "../../persistence/event-bus.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
-import type { EventRepository } from "../../persistence/runtime-repositories.js";
+import type {
+  AgentSessionRepository,
+  EventRepository,
+} from "../../persistence/runtime-repositories.js";
+import {
+  sanitizeAgentRuntimeApprovalRequest,
+  sanitizeAgentRuntimeChildSessionRequest,
+} from "../../runtime/safety/agent-runtime-control-plane-sanitizer.js";
 
 const TERMINAL_EVENT_TYPES = new Set<Event["type"]>([
   "goal.completed",
@@ -28,10 +35,11 @@ interface GoalRouterDeps {
   eventRepo: EventRepository;
   eventBus: EventBus;
   runtime: RuntimeRunner;
+  agentSessionRepo: AgentSessionRepository;
 }
 
 export function createGoalRouter(deps: GoalRouterDeps): Router {
-  const { goalRepo, eventRepo, eventBus, runtime } = deps;
+  const { goalRepo, eventRepo, eventBus, runtime, agentSessionRepo } = deps;
   const router = Router();
 
   // POST /api/goals
@@ -102,6 +110,32 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
         return;
       }
       res.json(eventRepo.listForGoal(req.params.id));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // GET /api/goals/:id/agent-session
+  router.get("/:id/agent-session", (req, res, next) => {
+    try {
+      const goal = goalRepo.getById(req.params.id);
+      if (!goal) {
+        res.status(404).json({ error: "Goal not found" });
+        return;
+      }
+
+      const session = agentSessionRepo.listSessionsForGoal(goal.id).at(-1) ?? null;
+      res.json({
+        session,
+        approvals: session
+          ? agentSessionRepo.listApprovalRequests(session.id).map(sanitizeAgentRuntimeApprovalRequest)
+          : [],
+        childSessionRequests: session
+          ? agentSessionRepo
+              .listChildSessionRequests(session.id)
+              .map(sanitizeAgentRuntimeChildSessionRequest)
+          : [],
+      });
     } catch (err) {
       next(err);
     }

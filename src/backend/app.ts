@@ -12,6 +12,7 @@ import {
   type ProviderSettingsRepository,
 } from "../persistence/provider-settings-repository.js";
 import {
+  createAgentSessionRepository,
   createEventRepository,
   createRunRepository,
   createStepRepository,
@@ -25,6 +26,7 @@ import { resolveCodexCommandPath } from "../runtime/providers/codex/codex-comman
 import { createOpenAICompatibleProvider } from "../runtime/providers/openai-compatible-provider.js";
 import { loadProviderConfig, type ProviderEnvironment } from "../runtime/providers/provider-config.js";
 import { createProviderRuntime } from "../runtime/providers/provider-runtime.js";
+import { createAgentSessionRouter } from "./routes/agent-sessions.js";
 import { createGoalRouter } from "./routes/goals.js";
 import {
   createProviderSettingsRouter,
@@ -54,6 +56,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
   const goalRepo = createGoalRepository(db);
   const runRepo = createRunRepository(db);
   const stepRepo = createStepRepository(db);
+  const agentSessionRepo = createAgentSessionRepository(db);
   const eventBus = createEventBus();
   const eventRepo = createEventRepository(db, { eventBus });
   const providerSettingsRepo = createProviderSettingsRepository(db);
@@ -80,7 +83,8 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     res.json({ status: "ok" });
   });
 
-  app.use("/api/goals", createGoalRouter({ goalRepo, eventRepo, eventBus, runtime }));
+  app.use("/api/goals", createGoalRouter({ goalRepo, eventRepo, eventBus, runtime, agentSessionRepo }));
+  app.use("/api/agent-sessions", createAgentSessionRouter({ agentSessionRepo }));
   app.use(
     "/api/provider-settings",
     createProviderSettingsRouter({
