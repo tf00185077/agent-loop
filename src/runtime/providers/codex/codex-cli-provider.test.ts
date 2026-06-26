@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { argv0 } from "node:process";
 import test from "node:test";
 
+import type { AgentObservation } from "../../../domain/index.js";
 import { createCodexCliProvider } from "./codex-cli-provider.js";
 import type { ModelProviderInput } from "../model-provider.js";
 
@@ -60,6 +61,89 @@ process.stdin.on("end", () => {
 
 function readCapture(capturePath: string): { args: string[]; stdin: string } {
   return JSON.parse(readFileSync(capturePath, "utf8"));
+}
+
+function commandPathForScript(scriptPath: string, commandName: string): string {
+  if (process.platform !== "win32") return scriptPath;
+  const commandPath = join(scriptPath, "..", `${commandName}.cmd`);
+  writeFileSync(commandPath, `@echo off\r\n"${argv0}" "${scriptPath}" %*\r\n`);
+  return commandPath;
+}
+
+function fakeCodexWithJsonl(capturePath: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-jsonl-test-"));
+  const scriptPath = join(dir, "fake-codex-jsonl.mjs");
+  writeFileSync(
+    scriptPath,
+    `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+const capturePath = ${JSON.stringify(capturePath)};
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { stdin += chunk; });
+process.stdin.on("end", () => {
+  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
+  process.stdout.write(JSON.stringify({ type: "item.started", item: { type: "command", command: "npm test" } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "command", command: "npm test", exit_code: 0, stdout: "ok" } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "agent_message", message: "json final answer" }) + "\\n");
+});
+`,
+  );
+  chmodSync(scriptPath, 0o755);
+  return commandPathForScript(scriptPath, "fake-codex-jsonl");
+}
+
+function fakeCodexWithJsonlAndLastMessageFallback(capturePath: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-jsonl-last-message-test-"));
+  const scriptPath = join(dir, "fake-codex-jsonl-last-message.mjs");
+  writeFileSync(
+    scriptPath,
+    `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+const capturePath = ${JSON.stringify(capturePath)};
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { stdin += chunk; });
+process.stdin.on("end", () => {
+  const args = process.argv.slice(2);
+  writeFileSync(capturePath, JSON.stringify({ args, stdin }));
+  const outputIndex = args.indexOf("--output-last-message");
+  writeFileSync(args[outputIndex + 1], "last-message fallback answer");
+  process.stdout.write(JSON.stringify({ type: "item.started", item: { type: "command", command: "npm test" } }) + "\\n");
+});
+`,
+  );
+  chmodSync(scriptPath, 0o755);
+  return commandPathForScript(scriptPath, "fake-codex-jsonl-last-message");
+}
+
+function fakeCodexWithoutJsonSupport(capturePath: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-jsonl-fallback-test-"));
+  const scriptPath = join(dir, "fake-codex-jsonl-fallback.mjs");
+  writeFileSync(
+    scriptPath,
+    `#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const capturePath = ${JSON.stringify(capturePath)};
+const args = process.argv.slice(2);
+const attempts = existsSync(capturePath) ? JSON.parse(readFileSync(capturePath, "utf8")) : [];
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { stdin += chunk; });
+process.stdin.on("end", () => {
+  attempts.push({ args, stdin });
+  writeFileSync(capturePath, JSON.stringify(attempts));
+  if (args.includes("--json")) {
+    process.stderr.write("unknown option --json");
+    process.exit(2);
+  }
+  const outputIndex = args.indexOf("--output-last-message");
+  writeFileSync(args[outputIndex + 1], "legacy fallback answer");
+});
+`,
+  );
+  chmodSync(scriptPath, 0o755);
+  return commandPathForScript(scriptPath, "fake-codex-jsonl-fallback");
 }
 
 /** Like fakeCodex, but also writes `progressText` to stdout before the final-message file. */
@@ -187,6 +271,81 @@ test("provider succeeds without progress chunks when codex emits no useful stdou
 
   assert.equal(output.text, "no stdout response");
   assert.equal(progressChunks.length, 0);
+});
+
+test("provider prefers codex exec --json and emits structured observations before final response", async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-jsonl-cap-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodexWithJsonl(capturePath),
+      modelLabel: "gpt-5-codex",
+      timeoutMs: 10_000,
+    },
+  });
+  const observations: AgentObservation[] = [];
+
+  const output = await provider.complete({
+    ...input,
+    onProgress: (progress) => {
+      if (typeof progress !== "string") observations.push(progress);
+    },
+  });
+
+  assert.equal(output.text, "json final answer");
+  assert.ok(readCapture(capturePath).args.includes("--json"));
+  assert.deepEqual(
+    observations.map((observation) => observation.kind),
+    ["command.started", "command.completed", "progress"],
+  );
+});
+
+test("provider uses last-message output when JSONL has no final agent message", async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-jsonl-last-cap-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodexWithJsonlAndLastMessageFallback(capturePath),
+      modelLabel: "gpt-5-codex",
+      timeoutMs: 10_000,
+    },
+  });
+  const observations: AgentObservation[] = [];
+
+  const output = await provider.complete({
+    ...input,
+    onProgress: (progress) => {
+      if (typeof progress !== "string") observations.push(progress);
+    },
+  });
+
+  assert.equal(output.text, "last-message fallback answer");
+  assert.ok(readCapture(capturePath).args.includes("--json"));
+  assert.deepEqual(observations.map((observation) => observation.kind), ["command.started"]);
+});
+
+test("provider falls back to legacy last-message mode when JSONL mode is unavailable", async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-jsonl-fallback-cap-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodexWithoutJsonSupport(capturePath),
+      modelLabel: "gpt-5-codex",
+      timeoutMs: 10_000,
+    },
+  });
+  const observations: AgentObservation[] = [];
+
+  const output = await provider.complete({
+    ...input,
+    onProgress: (progress) => {
+      if (typeof progress !== "string") observations.push(progress);
+    },
+  });
+
+  const attempts = JSON.parse(readFileSync(capturePath, "utf8")) as Array<{ args: string[] }>;
+  assert.equal(output.text, "legacy fallback answer");
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0]?.args.includes("--json"), true);
+  assert.equal(attempts[1]?.args.includes("--json"), false);
+  assert.equal(observations[0]?.message, "Codex JSONL progress unavailable; using last-message fallback");
 });
 
 test("provider maps non-zero exit to a provider error", skipOnWindows, async () => {

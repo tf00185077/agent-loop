@@ -685,6 +685,57 @@ test("provider runtime redacts secret-like progress chunks before persisting and
   db.close();
 });
 
+test("provider runtime redacts Codex JSONL credential-like material before persistence", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+      async complete(input: ModelProviderInput) {
+        input.onProgress?.({
+          kind: "command.completed",
+          message: "Authorization: Bearer sk-jsonlsecret123456",
+          command: {
+            label: "codex exec --api-key jsonl-secret-token",
+            status: "completed",
+            exitCode: 0,
+            stdoutTail: "token=jsonl-stdout-secret",
+            stderrTail: "cookie: jsonl-session-secret",
+          },
+          metadata: { source: "jsonl", rawEventType: "item.completed" },
+        });
+        return {
+          text: "Final response",
+          metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Redact Codex JSONL",
+    description: "Secret-bearing JSONL observations must not persist raw credentials",
+  });
+
+  await runtime.run(goal.id);
+
+  const observation = eventRepo
+    .listForGoal(goal.id)
+    .find((event) => event.type === "agent.command.completed");
+  assert.ok(observation);
+  const serialized = JSON.stringify(observation);
+  assert.equal(serialized.includes("sk-jsonlsecret123456"), false);
+  assert.equal(serialized.includes("jsonl-secret-token"), false);
+  assert.equal(serialized.includes("jsonl-stdout-secret"), false);
+  assert.equal(serialized.includes("jsonl-session-secret"), false);
+  assert.equal(observation.data.source, "jsonl");
+  assert.equal(observation.data.rawEventType, "item.completed");
+
+  db.close();
+});
+
 test("provider runtime throws if goal does not exist", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const runtime = createProviderRuntime({

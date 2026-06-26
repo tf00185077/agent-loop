@@ -25,11 +25,11 @@
 
 - [x] 3.1 Add fixture-driven Codex JSONL parser tests for thread/turn lifecycle, command started, command completed, command failed, agent message, error, and unknown event lines.
 - [x] 3.2 Implement an incremental JSONL parser that tolerates partial lines and ignores malformed or unknown events safely.
-- [ ] 3.3 Add Codex provider tests proving recognized JSONL events emit structured observations before final response.
-- [ ] 3.4 Update Codex provider invocation to prefer `codex exec --json` when supported.
-- [ ] 3.5 Preserve final response behavior by using JSONL final agent message or the existing last-message output fallback.
-- [ ] 3.6 Add fallback tests for Codex CLI versions where JSONL mode is unavailable or incompatible with last-message output.
-- [ ] 3.7 Add tests proving Codex JSONL credential-like material is redacted before persistence and streaming.
+- [x] 3.3 Add Codex provider tests proving recognized JSONL events emit structured observations before final response.
+- [x] 3.4 Update Codex provider invocation to prefer `codex exec --json` when supported.
+- [x] 3.5 Preserve final response behavior by using JSONL final agent message or the existing last-message output fallback.
+- [x] 3.6 Add fallback tests for Codex CLI versions where JSONL mode is unavailable or incompatible with last-message output.
+- [x] 3.7 Add tests proving Codex JSONL credential-like material is redacted before persistence and streaming.
 
 ## 4. Liveness and Timeout Diagnostics
 
