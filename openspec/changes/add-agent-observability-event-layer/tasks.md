@@ -1,7 +1,15 @@
+## Implementation Protocol
+
+- Treat each non-test code-change step as its own commit. Finish the step, run the relevant focused verification, and commit before starting the next code-change step.
+- Treat test-only steps at the same `##` level as one batch. Complete all test-only tasks in that section, run that section's tests once through Codex as the agent, and commit the passing test batch together.
+- After completing every `##` section, run the full project verification suite once, including typecheck, full tests, relevant browser verification when applicable, and OpenSpec strict validation if the CLI is available. Commit any required fixes before moving to the next section.
+- All agent-backed test runs and verification scenarios must use Codex as the agent/provider.
+- Do not commit a task or section checkpoint until its required verification passes, unless the commit explicitly documents an unrelated pre-existing failure.
+
 ## 1. Observation Contracts
 
 - [ ] 1.1 Add domain tests for agent observability event types and safe observation metadata.
-- [ ] 1.2 Define provider-agnostic observation input types for heartbeat, progress, command lifecycle, and subtask lifecycle.
+- [x] 1.2 Define provider-agnostic observation input types for heartbeat, progress, command lifecycle, and subtask lifecycle.
 - [ ] 1.3 Extend the model provider progress callback to accept structured observations while keeping a compatibility path for plain output chunks.
 - [ ] 1.4 Add sanitizer tests for structured observation messages, command summaries, stdout/stderr tails, and JSONL-derived fields.
 

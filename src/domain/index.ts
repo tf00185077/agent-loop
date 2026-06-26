@@ -32,6 +32,22 @@ export type {
   UpdateStepInput,
 } from "./step.types.js";
 export type {
+  AgentCommandObservation,
+  AgentObservation,
+  AgentObservationEventType,
+  AgentObservationKind,
+  AgentObservationMetadata,
+  AgentObservationSource,
+  AgentSubtaskObservation,
+  CreateAgentObservationEventInputOptions,
+} from "./agent-observation.types.js";
+export {
+  agentObservationEventTypes,
+  buildAgentObservationEventData,
+  createAgentObservationEventInput,
+  observationKindToEventType,
+} from "./agent-observation.types.js";
+export type {
   CreateEventInput,
   Event,
   EventData,
