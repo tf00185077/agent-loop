@@ -41,6 +41,7 @@ export interface AgentSessionManager {
 export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentSessionManager {
   const activeHandles = new Map<string, AgentSessionHandle>();
   const deliveredControls = new Set<string>();
+  const runtimeCommandIds = new Map<string, string>();
 
   return {
     async startManagedSession(input) {
@@ -95,10 +96,12 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
             sessionId: session.id,
             providerId: input.providerId,
             modelLabel: input.modelLabel,
+            runtimeCommandIds,
           });
         }
       } finally {
         activeHandles.delete(session.id);
+        clearRuntimeCommandIds(runtimeCommandIds, session.id);
       }
 
       return { session: deps.agentSessionRepo.getSession(session.id)! };
@@ -175,6 +178,7 @@ interface PersistRuntimeEventInput {
   sessionId: string;
   providerId: string;
   modelLabel: string | null;
+  runtimeCommandIds: Map<string, string>;
 }
 
 function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: PersistRuntimeEventInput): void {
@@ -185,14 +189,69 @@ function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: PersistRuntim
     ...input.event.metadata,
   };
 
+  if (input.event.type === "command.started") {
+    const command = deps.agentSessionRepo.recordCommand({
+      sessionId: input.sessionId,
+      status: "running",
+      safeCommand: input.event.message,
+      cwd: null,
+      startedAt: input.event.occurredAt,
+      completedAt: null,
+      exitCode: null,
+      diagnostics: null,
+    });
+    if (input.event.metadata?.commandId) {
+      input.runtimeCommandIds.set(runtimeCommandKey(input.sessionId, input.event.metadata.commandId), command.id);
+    }
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.command.started",
+      message: input.event.message,
+      data: { ...data, commandId: command.id, runtimeEventType: input.event.type },
+    });
+    return;
+  }
+
   if (input.event.type === "approval.requested") {
+    const durableCommandId = input.event.metadata?.commandId
+      ? input.runtimeCommandIds.get(runtimeCommandKey(input.sessionId, input.event.metadata.commandId))
+      : undefined;
+    const approval = deps.agentSessionRepo.createApprovalRequest({
+      sessionId: input.sessionId,
+      commandId: durableCommandId ?? null,
+      safeSummary: input.event.message,
+    });
     deps.agentSessionRepo.updateLifecycleState(input.sessionId, "waiting_approval");
     deps.eventRepo.create({
       goalId: input.goalId,
       runId: input.runId,
       type: "agent.progress",
       message: input.event.message,
-      data: { ...data, runtimeEventType: input.event.type },
+      data: {
+        ...data,
+        commandId: durableCommandId ?? data.commandId,
+        approvalRequestId: approval.id,
+        runtimeEventType: input.event.type,
+      },
+    });
+    return;
+  }
+
+  if (input.event.type === "child_session.requested") {
+    const request = deps.agentSessionRepo.recordChildSessionRequest({
+      parentSessionId: input.sessionId,
+      parentAgentId: input.event.metadata?.parentAgentId ?? null,
+      childRole: input.event.metadata?.agentId ?? "child-agent",
+      taskId: input.event.metadata?.taskId ?? null,
+      promptSummary: input.event.message,
+    });
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: input.event.message,
+      data: { ...data, childSessionRequestId: request.id, runtimeEventType: input.event.type },
     });
     return;
   }
@@ -263,4 +322,16 @@ function runtimeEventTypeToEventType(type: AgentRuntimeEvent["type"]) {
   if (type === "command.completed") return "agent.command.completed";
   if (type === "command.failed") return "agent.command.failed";
   return "agent.progress";
+}
+
+function runtimeCommandKey(sessionId: string, runtimeCommandId: string): string {
+  return `${sessionId}:${runtimeCommandId}`;
+}
+
+function clearRuntimeCommandIds(commandIds: Map<string, string>, sessionId: string): void {
+  for (const key of commandIds.keys()) {
+    if (key.startsWith(`${sessionId}:`)) {
+      commandIds.delete(key);
+    }
+  }
 }

@@ -17,6 +17,7 @@ import type { CodexCliDetectionOptions } from "../runtime/providers/codex/codex-
 import type { CodexLocalConnectionTestOptions } from "../runtime/providers/codex/codex-local-connection-test.js";
 import type { CodexModelCatalogOptions } from "../runtime/providers/codex/codex-local-model-catalog.js";
 import type { ProviderEnvironment } from "../runtime/providers/provider-config.js";
+import { createMockRuntimeAdapter, type MockRuntimeAdapterControl } from "../runtime/mock/mock-runtime-adapter.js";
 import type {
   AgentRuntimeAdapter,
   AgentRuntimeEvent,
@@ -132,6 +133,37 @@ async function waitForEvent(url: string, goalId: unknown, type: string) {
   }
 
   throw new Error(`Timed out waiting for ${type}`);
+}
+
+async function startManagedGoal(url: string, title: string) {
+  const created = await fetch(`${url}/api/goals`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title,
+      description: "Exercise fixture-backed managed controls.",
+    }),
+  }).then((r) => r.json() as Promise<Record<string, unknown>>);
+
+  const started = await fetch(`${url}/api/goals/${created.id}/start`, { method: "POST" });
+  assert.equal(started.status, 200);
+  return created;
+}
+
+async function waitForAgentSessionSnapshot(
+  url: string,
+  goalId: unknown,
+  predicate: (snapshot: Record<string, unknown>) => boolean,
+) {
+  for (let attempt = 0; attempt < 80; attempt++) {
+    const snapshot = await fetch(`${url}/api/goals/${goalId}/agent-session`).then(
+      (r) => r.json() as Promise<Record<string, unknown>>,
+    );
+    if (predicate(snapshot)) return snapshot;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error("Timed out waiting for agent session snapshot");
 }
 
 function assertDoesNotContainValues(value: unknown, forbiddenValues: string[]) {
@@ -1545,6 +1577,84 @@ describe("Backend API", () => {
         });
         assert.equal(cancelled.status, 200);
         assert.equal(((await json(cancelled)) as Record<string, unknown>).lifecycleState, "cancelled");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("forwards fixture-backed approve reject and cancel controls to an active managed adapter once", async () => {
+      const controls: MockRuntimeAdapterControl[] = [];
+      const providerServer = await startServer(undefined, {
+        agentRuntimeAdapters: {
+          "codex-local": createMockRuntimeAdapter({
+            pauseAfterApproval: true,
+            onControl(control) {
+              controls.push(control);
+            },
+          }),
+        },
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5-codex",
+            codexCommandPath: "C:\\Tools\\codex.cmd",
+          }),
+        });
+
+        const approvedGoal = await startManagedGoal(providerServer.url, "Approve through fixture");
+        const approvedSnapshot = await waitForAgentSessionSnapshot(
+          providerServer.url,
+          approvedGoal.id,
+          (snapshot) => Array.isArray(snapshot.approvals) && snapshot.approvals.length > 0,
+        );
+        const approvedSession = approvedSnapshot.session as Record<string, unknown>;
+        const approval = (approvedSnapshot.approvals as Array<Record<string, unknown>>)[0]!;
+
+        const approved = await fetch(
+          `${providerServer.url}/api/agent-sessions/${approvedSession.id}/approvals/${approval.id}/approve`,
+          { method: "POST" },
+        );
+        assert.equal(approved.status, 200);
+        await fetch(`${providerServer.url}/api/agent-sessions/${approvedSession.id}/approvals/${approval.id}/approve`, {
+          method: "POST",
+        });
+        await fetch(`${providerServer.url}/api/agent-sessions/${approvedSession.id}/cancel`, { method: "POST" });
+        await fetch(`${providerServer.url}/api/agent-sessions/${approvedSession.id}/cancel`, { method: "POST" });
+
+        const rejectedGoal = await startManagedGoal(providerServer.url, "Reject through fixture");
+        const rejectedSnapshot = await waitForAgentSessionSnapshot(
+          providerServer.url,
+          rejectedGoal.id,
+          (snapshot) => Array.isArray(snapshot.approvals) && snapshot.approvals.length > 0,
+        );
+        const rejectedSession = rejectedSnapshot.session as Record<string, unknown>;
+        const rejection = (rejectedSnapshot.approvals as Array<Record<string, unknown>>)[0]!;
+
+        const rejected = await fetch(
+          `${providerServer.url}/api/agent-sessions/${rejectedSession.id}/approvals/${rejection.id}/reject`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason: "fixture rejection" }),
+          },
+        );
+        assert.equal(rejected.status, 200);
+        await fetch(`${providerServer.url}/api/agent-sessions/${rejectedSession.id}/approvals/${rejection.id}/reject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: "duplicate" }),
+        });
+        await fetch(`${providerServer.url}/api/agent-sessions/${rejectedSession.id}/cancel`, { method: "POST" });
+
+        assert.deepEqual(
+          controls.map((control) => control.type),
+          ["approve", "cancel", "reject", "cancel"],
+        );
       } finally {
         await providerServer.close();
       }

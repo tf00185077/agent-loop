@@ -11,6 +11,7 @@ import type {
 export interface MockRuntimeAdapterOptions {
   outcome?: "completed" | "failed";
   pauseBeforeTerminal?: boolean;
+  pauseAfterApproval?: boolean;
   onControl?: (control: MockRuntimeAdapterControl) => void;
 }
 
@@ -73,6 +74,13 @@ function createMockSessionHandle(input: AgentSessionStartInput, options: MockRun
         approvalRequestId: "mock-approval-1",
         commandId: "mock-command-1",
       });
+
+      if (options.pauseAfterApproval) {
+        await cancellation;
+        yield createEvent(input, "session.cancelled", `Mock session cancelled: ${cancelReason ?? "Cancelled."}`);
+        return;
+      }
+
       yield createEvent(input, "child_session.requested", "Mock child session requested.", {
         childSessionRequestId: "mock-child-session-1",
         parentAgentId: "mock-parent-agent",

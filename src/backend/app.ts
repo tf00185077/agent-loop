@@ -27,7 +27,10 @@ import { resolveCodexCommandPath } from "../runtime/providers/codex/codex-comman
 import { createOpenAICompatibleProvider } from "../runtime/providers/openai-compatible-provider.js";
 import { loadProviderConfig, type ProviderEnvironment } from "../runtime/providers/provider-config.js";
 import { createProviderRuntime } from "../runtime/providers/provider-runtime.js";
-import { createAgentSessionManager } from "../runtime/agent-session/agent-session-manager.js";
+import {
+  createAgentSessionManager,
+  type AgentSessionManager,
+} from "../runtime/agent-session/agent-session-manager.js";
 import { createAgentSessionRouter } from "./routes/agent-sessions.js";
 import { createGoalRouter } from "./routes/goals.js";
 import {
@@ -63,6 +66,12 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
   const eventBus = createEventBus();
   const eventRepo = createEventRepository(db, { eventBus });
   const providerSettingsRepo = createProviderSettingsRepository(db);
+  const agentSessionManager = createAgentSessionManager({
+    goalRepo,
+    runRepo,
+    eventRepo,
+    agentSessionRepo,
+  });
   const runtime = createRuntimeFromSavedProviderSettings({
     env: options.env ?? process.env,
     providerSettingsRepo,
@@ -81,6 +90,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     agentLoopMaxScopeAssessmentAttempts: options.agentLoopMaxScopeAssessmentAttempts,
     agentLoopMaxScopeRefinementRounds: options.agentLoopMaxScopeRefinementRounds,
     agentSessionRepo,
+    agentSessionManager,
     agentRuntimeAdapters: options.agentRuntimeAdapters,
   });
 
@@ -89,7 +99,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
   });
 
   app.use("/api/goals", createGoalRouter({ goalRepo, eventRepo, eventBus, runtime, agentSessionRepo }));
-  app.use("/api/agent-sessions", createAgentSessionRouter({ agentSessionRepo }));
+  app.use("/api/agent-sessions", createAgentSessionRouter({ agentSessionRepo, agentSessionManager }));
   app.use(
     "/api/provider-settings",
     createProviderSettingsRouter({
@@ -143,6 +153,7 @@ interface CreateRuntimeFromSavedProviderSettingsDeps extends CreateRuntimeFromEn
   agentLoopMaxScopeAssessmentAttempts?: number;
   agentLoopMaxScopeRefinementRounds?: number;
   agentSessionRepo: ReturnType<typeof createAgentSessionRepository>;
+  agentSessionManager: AgentSessionManager;
   agentRuntimeAdapters?: CreateAppOptions["agentRuntimeAdapters"];
 }
 
@@ -198,16 +209,9 @@ function createRuntimeFromAgentRuntimeAdapter(
   adapter: AgentRuntimeAdapter,
   deps: CreateRuntimeFromSavedProviderSettingsDeps,
 ) {
-  const manager = createAgentSessionManager({
-    goalRepo: deps.goalRepo,
-    runRepo: deps.runRepo,
-    eventRepo: deps.eventRepo,
-    agentSessionRepo: deps.agentSessionRepo,
-  });
-
   return {
     async run(goalId: string) {
-      return manager.startManagedSession({
+      return deps.agentSessionManager.startManagedSession({
         goalId,
         providerId: settings.provider,
         modelLabel: settings.modelLabel,

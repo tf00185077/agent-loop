@@ -1,21 +1,27 @@
 import { Router } from "express";
 
 import type { AgentSessionRepository } from "../../persistence/runtime-repositories.js";
+import type { AgentSessionManager } from "../../runtime/agent-session/agent-session-manager.js";
 import { sanitizeAgentRuntimeApprovalRequest } from "../../runtime/safety/agent-runtime-control-plane-sanitizer.js";
 
 interface AgentSessionRouterDeps {
   agentSessionRepo: AgentSessionRepository;
+  agentSessionManager?: AgentSessionManager;
 }
 
 export function createAgentSessionRouter(deps: AgentSessionRouterDeps): Router {
   const router = Router();
 
-  router.post("/:sessionId/approvals/:approvalId/approve", (req, res, next) => {
+  router.post("/:sessionId/approvals/:approvalId/approve", async (req, res, next) => {
     try {
       const approval = findApproval(deps.agentSessionRepo, req.params.sessionId, req.params.approvalId);
       if (!approval) {
         res.status(404).json({ error: "Approval request not found" });
         return;
+      }
+
+      if (approval.status === "pending") {
+        await deps.agentSessionManager?.approve(req.params.sessionId, req.params.approvalId);
       }
 
       res.json(
@@ -28,7 +34,7 @@ export function createAgentSessionRouter(deps: AgentSessionRouterDeps): Router {
     }
   });
 
-  router.post("/:sessionId/approvals/:approvalId/reject", (req, res, next) => {
+  router.post("/:sessionId/approvals/:approvalId/reject", async (req, res, next) => {
     try {
       const approval = findApproval(deps.agentSessionRepo, req.params.sessionId, req.params.approvalId);
       if (!approval) {
@@ -42,6 +48,10 @@ export function createAgentSessionRouter(deps: AgentSessionRouterDeps): Router {
         return;
       }
 
+      if (approval.status === "pending") {
+        await deps.agentSessionManager?.reject(req.params.sessionId, req.params.approvalId, reason.reason ?? undefined);
+      }
+
       res.json(
         sanitizeAgentRuntimeApprovalRequest(
           deps.agentSessionRepo.resolveApprovalRequest(req.params.approvalId, "rejected", reason.reason),
@@ -52,13 +62,15 @@ export function createAgentSessionRouter(deps: AgentSessionRouterDeps): Router {
     }
   });
 
-  router.post("/:sessionId/cancel", (req, res, next) => {
+  router.post("/:sessionId/cancel", async (req, res, next) => {
     try {
       const session = deps.agentSessionRepo.getSession(req.params.sessionId);
       if (!session) {
         res.status(404).json({ error: "Agent session not found" });
         return;
       }
+
+      await deps.agentSessionManager?.cancel(session.id, "Session cancelled.");
 
       for (const approval of deps.agentSessionRepo.listApprovalRequests(session.id)) {
         if (approval.status === "pending") {
