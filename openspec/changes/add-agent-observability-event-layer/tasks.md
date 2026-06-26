@@ -48,9 +48,9 @@
 
 ## 6. Future Subagent Integration Seam
 
-- [ ] 6.1 Add tests for optional `agentRole`, `agentId`, `parentAgentId`, and `taskId` metadata round-tripping through persistence and API responses.
-- [ ] 6.2 Document how a future main-agent/subagent scheduler should populate observation metadata.
-- [ ] 6.3 Keep scheduler creation, subagent process management, and task assignment implementation out of this change.
+- [x] 6.1 Add tests for optional `agentRole`, `agentId`, `parentAgentId`, and `taskId` metadata round-tripping through persistence and API responses.
+- [x] 6.2 Document how a future main-agent/subagent scheduler should populate observation metadata.
+- [x] 6.3 Keep scheduler creation, subagent process management, and task assignment implementation out of this change.
 
 ## 7. Verification
 

@@ -111,6 +111,36 @@ test("creates and lists event records for a goal timeline", () => {
   db.close();
 });
 
+test("round-trips optional agent observation metadata through event persistence", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({
+    title: "Observation metadata goal",
+    description: "Exercise future subagent metadata.",
+  });
+  const events = createEventRepository(db);
+
+  const created = events.create({
+    goalId: goal.id,
+    type: "agent.subtask.completed",
+    message: "Subtask completed.",
+    data: {
+      observationKind: "subtask.completed",
+      provider: "codex-cli",
+      model: "gpt-5-codex",
+      agentRole: "worker",
+      agentId: "agent-child",
+      parentAgentId: "agent-main",
+      taskId: "task-42",
+      source: "jsonl",
+      rawEventType: "item.completed",
+    },
+  });
+
+  assert.deepEqual(events.listForGoal(goal.id)[0], created);
+
+  db.close();
+});
+
 test("publishes each event to the event bus after it is durably persisted", () => {
   const db = openDatabase({ path: testDatabasePath() });
   const goal = createGoalRepository(db).create({

@@ -80,6 +80,17 @@ The longer-term product direction needs stronger observability because the runti
 
 Rollback is straightforward if the provider keeps the existing last-message path: disable JSONL observability and continue to emit only existing lifecycle/final events.
 
+## Future Scheduler Metadata
+
+A later main-agent/subagent scheduler should populate observation metadata at the boundary where it starts or resumes an agent task:
+
+- `agentRole`: stable role label such as `main`, `planner`, `worker`, `reviewer`, or `verifier`.
+- `agentId`: durable id for the emitting agent within a goal run.
+- `parentAgentId`: durable id for the delegating agent when the observation belongs to delegated work.
+- `taskId`: durable id for the scheduler task or work item that the observation describes.
+
+Provider adapters should continue to set `provider`, `model`, `source`, and `rawEventType` from their own execution context. The scheduler should merge its agent/task metadata into the provider observation before the runtime persists it. This change intentionally does not create scheduler queues, subagent processes, task assignment, or parent/child tree projection; it only keeps the durable event shape ready for those later changes.
+
 ## Follow-up Change Order
 
 This change is the foundation for later user-facing agent visibility work. The intended sequence is:
