@@ -48,6 +48,34 @@ export {
   observationKindToEventType,
 } from "./agent-observation.types.js";
 export type {
+  AgentRuntimeAdapter,
+  AgentRuntimeApprovalRequest,
+  AgentRuntimeApprovalStatus,
+  AgentRuntimeCapabilities,
+  AgentRuntimeCapabilityName,
+  AgentRuntimeChildSessionRequest,
+  AgentRuntimeChildSessionRequestStatus,
+  AgentRuntimeCommandDiagnostics,
+  AgentRuntimeCommandRecord,
+  AgentRuntimeCommandStatus,
+  AgentRuntimeEvent,
+  AgentRuntimeEventMetadata,
+  AgentRuntimeEventType,
+  AgentRuntimeSession,
+  AgentRuntimeSessionParent,
+  AgentSessionHandle,
+  AgentSessionInput,
+  AgentSessionLifecycleState,
+  AgentSessionStartInput,
+} from "./agent-runtime-control-plane.types.js";
+export {
+  agentRuntimeCapabilityNames,
+  agentSessionLifecycleStates,
+  approvalRequestStatuses,
+  childSessionRequestStatuses,
+  commandRecordStatuses,
+} from "./agent-runtime-control-plane.types.js";
+export type {
   CreateEventInput,
   Event,
   EventData,

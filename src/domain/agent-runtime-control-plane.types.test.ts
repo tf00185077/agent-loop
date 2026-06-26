@@ -14,6 +14,10 @@ import {
   type AgentRuntimeEvent,
   type AgentRuntimeSession,
 } from "./agent-runtime-control-plane.types.js";
+import {
+  agentRuntimeCapabilityNames as publicAgentRuntimeCapabilityNames,
+  type AgentRuntimeAdapter as PublicAgentRuntimeAdapter,
+} from "./index.js";
 
 test("defines managed session lifecycle states in control-plane order", () => {
   assert.deepEqual(agentSessionLifecycleStates, [
@@ -37,6 +41,25 @@ test("defines runtime capability names for provider-independent controls", () =>
     "resume",
     "child_sessions",
   ]);
+});
+
+test("exports control-plane contracts from the public domain index", () => {
+  const adapter = {
+    providerId: "codex-local",
+    detectCapabilities: async () => ({
+      eventStreaming: true,
+      approval: false,
+      cancellation: true,
+      resume: false,
+      childSessions: false,
+    }),
+    startSession: async () => {
+      throw new Error("not used by this type-level export test");
+    },
+  } satisfies PublicAgentRuntimeAdapter;
+
+  assert.equal(adapter.providerId, "codex-local");
+  assert.deepEqual(publicAgentRuntimeCapabilityNames, agentRuntimeCapabilityNames);
 });
 
 test("represents managed sessions with provider model lifecycle and parent metadata", () => {
