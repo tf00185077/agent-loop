@@ -40,8 +40,8 @@
 
 - [x] 5.1 Run a Codex CLI capability spike for JSONL session events, cancellation behavior, and backend-mediated approval/resume feasibility.
 - [x] 5.2 Document the verified Codex CLI command mode and any unsupported control capabilities in code-facing comments or adapter capability metadata.
-- [ ] 5.3 Add fixture tests for Codex runtime capability detection, approval-supported mode, approval-unsupported mode, cancellation, and startup failures.
-- [ ] 5.4 Implement Codex runtime adapter capability detection without exposing Codex authentication or session material.
+- [x] 5.3 Add fixture tests for Codex runtime capability detection, approval-supported mode, approval-unsupported mode, cancellation, and startup failures.
+- [x] 5.4 Implement Codex runtime adapter capability detection without exposing Codex authentication or session material.
 
 ## 6. Codex Managed Session Execution
 
