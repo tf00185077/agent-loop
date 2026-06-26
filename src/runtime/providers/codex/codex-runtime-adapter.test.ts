@@ -243,6 +243,63 @@ test("maps Codex process startup or non-zero exit into a failed managed session"
   }
 });
 
+test("reports unsupported Codex approval controls when resume is not verified", async () => {
+  const adapter = createCodexRuntimeAdapter({
+    commandPath: "C:\\Tools\\codex.exe",
+    modelLabel: "gpt-5-codex",
+    probe: async () => ({ execJson: true, approvalResume: false }),
+    sessionRunner: async function* (): AsyncIterable<CodexJsonlParsedResult> {
+      yield { observations: [] };
+    },
+  });
+  const handle = await adapter.startSession({
+    sessionId: "session-approval",
+    goalId: "goal-approval",
+    runId: "run-approval",
+    prompt: "Need approval",
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+  });
+
+  await assert.rejects(() => handle.approve("approval-1"), /approval resume is not supported/i);
+  await assert.rejects(() => handle.reject("approval-1", "no"), /approval rejection is not supported/i);
+});
+
+test("cancels an active Codex runner and emits a terminal cancellation event", async () => {
+  const adapter = createCodexRuntimeAdapter({
+    commandPath: "C:\\Tools\\codex.exe",
+    modelLabel: "gpt-5-codex",
+    probe: async () => ({ execJson: true, approvalResume: false }),
+    sessionRunner: async function* (input): AsyncIterable<CodexJsonlParsedResult> {
+      yield {
+        observations: [
+          {
+            kind: "progress",
+            message: "Codex is running",
+            metadata: { source: "jsonl", rawEventType: "turn.started" },
+          },
+        ],
+      };
+      await new Promise<void>((resolve) => input.signal.addEventListener("abort", () => resolve(), { once: true }));
+    },
+  });
+  const handle = await adapter.startSession({
+    sessionId: "session-cancel",
+    goalId: "goal-cancel",
+    runId: "run-cancel",
+    prompt: "Cancel me",
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+  });
+  const iterator = handle.events()[Symbol.asyncIterator]();
+
+  assert.equal((await iterator.next()).value.type, "session.started");
+  assert.equal((await iterator.next()).value.type, "progress");
+  await handle.cancel("stop");
+  assert.equal((await iterator.next()).value.type, "session.cancelled");
+  assert.equal((await iterator.next()).done, true);
+});
+
 function createManagedCodexHarness() {
   const db = openDatabase({
     path: join(mkdtempSync(join(tmpdir(), "auto-agent-codex-runtime-harness-")), "runtime.sqlite"),

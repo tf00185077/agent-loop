@@ -34,6 +34,7 @@ export type CodexRuntimeCapabilityProbe = (commandPath: string) => Promise<Codex
 
 export interface CodexRuntimeSessionRunnerInput extends AgentSessionStartInput {
   commandPath: string;
+  signal: AbortSignal;
 }
 
 export type CodexRuntimeSessionRunner = (
@@ -63,6 +64,7 @@ async function createCodexSessionHandle(
   const sessionRunner = options.sessionRunner ?? runCodexJsonlSession;
 
   let cancelled = false;
+  const controller = new AbortController();
 
   return {
     sessionId: input.sessionId,
@@ -72,7 +74,7 @@ async function createCodexSessionHandle(
       let completed = false;
 
       try {
-        for await (const result of sessionRunner({ ...input, commandPath: options.commandPath })) {
+        for await (const result of sessionRunner({ ...input, commandPath: options.commandPath, signal: controller.signal })) {
           if (cancelled) {
             yield createRuntimeEvent(input, "session.cancelled", "Codex managed session cancelled.");
             return;
@@ -80,6 +82,10 @@ async function createCodexSessionHandle(
 
           for (const observation of result.observations) {
             yield observationToRuntimeEvent(input, observation);
+            if (cancelled) {
+              yield createRuntimeEvent(input, "session.cancelled", "Codex managed session cancelled.");
+              return;
+            }
           }
 
           if (result.errorMessage) {
@@ -117,6 +123,7 @@ async function createCodexSessionHandle(
     },
     async cancel() {
       cancelled = true;
+      controller.abort();
     },
   };
 }
@@ -136,6 +143,7 @@ async function* runCodexJsonlSession(input: CodexRuntimeSessionRunnerInput): Asy
     });
     child.on("close", (code) => resolve({ code }));
   });
+  input.signal.addEventListener("abort", () => child.kill(), { once: true });
 
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
