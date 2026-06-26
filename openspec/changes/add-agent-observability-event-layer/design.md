@@ -80,6 +80,16 @@ The longer-term product direction needs stronger observability because the runti
 
 Rollback is straightforward if the provider keeps the existing last-message path: disable JSONL observability and continue to emit only existing lifecycle/final events.
 
+## Follow-up Change Order
+
+This change is the foundation for later user-facing agent visibility work. The intended sequence is:
+
+1. Complete `add-agent-observability-event-layer` first so provider and runtime activity is represented as durable, sanitized timeline events.
+2. Add a follow-up live status model that derives current state from observation events, such as last activity, current command, stalled or waiting state, and active provider context.
+3. Add a multi-agent run tree after the live status model so main-agent/subagent relationships can show both parent-child structure and each agent or task's current state.
+
+The multi-agent run tree MAY reuse the observability event metadata directly, but it SHOULD depend on the live status model for clear "what is happening now" dashboard behavior rather than deriving status ad hoc in the UI.
+
 ## Open Questions
 
 - Which exact Codex JSONL event types should be promoted to first-class timeline event types versus shown as generic progress?
