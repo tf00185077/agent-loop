@@ -16,6 +16,7 @@ import type { EventBus } from "./event-bus.js";
 
 export interface RunRepository {
   create(input: CreateRunInput): Run;
+  updateMetadata(id: string, metadata: { provider: string; model: string }): Run;
   updateStatus(id: string, status: RunStatus, options?: { finishedAt?: string | null; error?: string | null }): Run;
   getById(id: string): Run | null;
 }
@@ -51,6 +52,17 @@ export function createRunRepository(db: AppDatabase): RunRepository {
       `).run(run);
 
       return run;
+    },
+
+    updateMetadata(id, metadata) {
+      const existing = this.getById(id);
+      if (!existing) {
+        throw new Error(`Run not found: ${id}`);
+      }
+
+      db.prepare("UPDATE runs SET provider = ?, model = ? WHERE id = ?").run(metadata.provider, metadata.model, id);
+
+      return this.getById(id)!;
     },
 
     updateStatus(id, status, options = {}) {

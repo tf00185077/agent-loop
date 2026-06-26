@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { openDatabase } from "../../persistence/database.js";
+import type { EventBus } from "../../persistence/event-bus.js";
 import { createGoalRepository } from "../../persistence/goal-repository.js";
 import {
   createEventRepository,
@@ -14,13 +15,13 @@ import {
 import type { ModelProviderInput } from "./model-provider.js";
 import { createProviderRuntime } from "./provider-runtime.js";
 
-function setup() {
+function setup(options: { eventBus?: EventBus } = {}) {
   const path = join(mkdtempSync(join(tmpdir(), "auto-agent-provider-runtime-")), "runtime.sqlite");
   const db = openDatabase({ path });
   const goalRepo = createGoalRepository(db);
   const runRepo = createRunRepository(db);
   const stepRepo = createStepRepository(db);
-  const eventRepo = createEventRepository(db);
+  const eventRepo = createEventRepository(db, { eventBus: options.eventBus });
   return { db, goalRepo, runRepo, stepRepo, eventRepo };
 }
 
@@ -409,6 +410,211 @@ test("provider runtime accepts structured observations while keeping plain progr
     source: "runtime",
     rawEventType: "heartbeat",
   });
+
+  db.close();
+});
+
+test("provider runtime persists structured observations before provider completion with run metadata", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  let finishProvider!: () => void;
+  const providerFinished = new Promise<void>((resolve) => {
+    finishProvider = resolve;
+  });
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+      async complete(input: ModelProviderInput) {
+        input.onProgress?.({
+          kind: "command.started",
+          message: "Command started",
+          command: { label: "npm test", status: "started" },
+          metadata: { source: "jsonl", rawEventType: "exec_command_begin" },
+        });
+        await providerFinished;
+        return {
+          text: "Final response",
+          metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Observe before completion",
+    description: "Persist observations while provider is still active",
+  });
+
+  const runPromise = runtime.run(goal.id);
+  await Promise.resolve();
+
+  const eventsBeforeCompletion = eventRepo.listForGoal(goal.id);
+  const commandStarted = eventsBeforeCompletion.find(
+    (event) => event.type === "agent.command.started",
+  );
+  assert.ok(commandStarted, "structured observation must be durable before provider completion");
+  assert.ok(commandStarted.runId, "structured observation must be correlated to the active run");
+  assert.deepEqual(commandStarted.data, {
+    observationKind: "command.started",
+    provider: "codex-cli",
+    model: "gpt-5-codex",
+    source: "jsonl",
+    rawEventType: "exec_command_begin",
+    command: { label: "npm test", status: "started" },
+  });
+  assert.equal(
+    eventsBeforeCompletion.some((event) => event.type === "agent.message"),
+    false,
+    "final provider message must not be persisted yet",
+  );
+
+  finishProvider();
+  await runPromise;
+
+  db.close();
+});
+
+test("provider runtime publishes structured observations through the event bus after persistence", async () => {
+  const published: unknown[] = [];
+  const eventBus: EventBus = {
+    publish(event) {
+      published.push(event);
+    },
+    subscribe() {
+      return () => undefined;
+    },
+  };
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup({ eventBus });
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+      async complete(input: ModelProviderInput) {
+        input.onProgress?.({
+          kind: "progress",
+          message: "Parsed Codex JSONL progress",
+          metadata: { source: "jsonl", rawEventType: "agent_message_delta" },
+        });
+        return {
+          text: "Final response",
+          metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Publish observations",
+    description: "Send persisted observations to subscribers",
+  });
+
+  await runtime.run(goal.id);
+
+  const persistedObservation = eventRepo
+    .listForGoal(goal.id)
+    .find((event) => event.type === "agent.progress" && event.message === "Parsed Codex JSONL progress");
+  assert.ok(persistedObservation);
+  assert.deepEqual(
+    published.find(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "id" in event &&
+        event.id === persistedObservation.id,
+    ),
+    persistedObservation,
+    "published observation must match the durable event shape",
+  );
+
+  db.close();
+});
+
+test("provider runtime snapshots previously emitted structured observations in timeline order", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+      async complete(input: ModelProviderInput) {
+        input.onProgress?.({
+          kind: "heartbeat",
+          message: "Codex still running",
+          metadata: { source: "runtime" },
+        });
+        input.onProgress?.({
+          kind: "command.completed",
+          message: "Command completed",
+          command: { label: "npm test", status: "completed", exitCode: 0 },
+          metadata: { source: "jsonl", rawEventType: "exec_command_end" },
+        });
+        return {
+          text: "Final response",
+          metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Reconnect snapshot",
+    description: "Load prior observations after reconnect",
+  });
+
+  await runtime.run(goal.id);
+
+  assert.deepEqual(
+    eventRepo
+      .listForGoal(goal.id)
+      .filter((event) => event.type.startsWith("agent."))
+      .map((event) => [event.type, event.message]),
+    [
+      ["agent.heartbeat", "Codex still running"],
+      ["agent.command.completed", "Command completed"],
+      ["agent.message", "Final response"],
+    ],
+  );
+
+  db.close();
+});
+
+test("provider runtime succeeds when a provider emits no structured observations", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+      async complete() {
+        return {
+          text: "Final response without observations",
+          metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "No observations",
+    description: "Provider can complete silently",
+  });
+
+  const output = await runtime.run(goal.id);
+
+  assert.equal(output?.text, "Final response without observations");
+  assert.equal(goalRepo.getById(goal.id)?.status, "completed");
+  assert.equal(
+    eventRepo
+      .listForGoal(goal.id)
+      .filter((event) => event.data.observationKind !== undefined).length,
+    0,
+  );
 
   db.close();
 });

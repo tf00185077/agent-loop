@@ -15,11 +15,11 @@
 
 ## 2. Runtime Persistence and Streaming
 
-- [ ] 2.1 Add provider-runtime tests proving structured observations are persisted before provider completion.
-- [ ] 2.2 Map structured observations to durable goal events with provider/model/source/raw-event metadata.
-- [ ] 2.3 Ensure persisted observation events are published through the existing event bus/SSE stream.
-- [ ] 2.4 Add tests proving refresh/reconnect snapshots include previously emitted observations in order.
-- [ ] 2.5 Add tests proving provider runs still succeed when a provider emits no structured observations.
+- [x] 2.1 Add provider-runtime tests proving structured observations are persisted before provider completion.
+- [x] 2.2 Map structured observations to durable goal events with provider/model/source/raw-event metadata.
+- [x] 2.3 Ensure persisted observation events are published through the existing event bus/SSE stream.
+- [x] 2.4 Add tests proving refresh/reconnect snapshots include previously emitted observations in order.
+- [x] 2.5 Add tests proving provider runs still succeed when a provider emits no structured observations.
 
 ## 3. Codex JSONL Ingestion
 

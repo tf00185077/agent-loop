@@ -41,6 +41,13 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
       const goal = goalRepo.getById(goalId);
       if (!goal) throw new Error(`Goal not found: ${goalId}`);
 
+      const initialMetadata = provider.metadata ?? { provider: "unknown", model: "unknown" };
+      const run = runRepo.create({
+        goalId,
+        provider: initialMetadata.provider,
+        model: initialMetadata.model,
+      });
+
       const input = {
         goal: toProviderGoalContext(goal),
         prompt: buildProviderPrompt(goal),
@@ -51,6 +58,7 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
             if (!sanitized) return;
             eventRepo.create({
               goalId,
+              runId: run.id,
               type: "agent.progress",
               message: sanitized,
               data: { provider: provider.metadata?.provider ?? "unknown" },
@@ -70,6 +78,7 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
           eventRepo.create(
             createAgentObservationEventInput({
               goalId,
+              runId: run.id,
               observation: sanitized,
             }),
           );
@@ -80,12 +89,7 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
         output = await provider.complete(input);
       } catch (err) {
         const message = errorMessage(err);
-        const metadata = provider.metadata ?? { provider: "unknown", model: "unknown" };
-        const run = runRepo.create({
-          goalId,
-          provider: metadata.provider,
-          model: metadata.model,
-        });
+        const metadata = provider.metadata ?? initialMetadata;
         const finishedAt = new Date().toISOString();
         runRepo.updateStatus(run.id, "failed", { finishedAt, error: message });
         goalRepo.updateStatus(goalId, "failed", { completedAt: finishedAt });
@@ -98,11 +102,7 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
         });
         return undefined;
       }
-      const run = runRepo.create({
-        goalId,
-        provider: output.metadata.provider,
-        model: output.metadata.model,
-      });
+      runRepo.updateMetadata(run.id, output.metadata);
 
       eventRepo.create({
         goalId,
