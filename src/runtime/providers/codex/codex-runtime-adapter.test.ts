@@ -243,6 +243,41 @@ test("maps Codex process startup or non-zero exit into a failed managed session"
   }
 });
 
+test("adds safe Windows retry guidance for blocked PowerShell npm shims", async () => {
+  const commandPath = fakeCodexRuntimeProcess(
+    join(mkdtempSync(join(tmpdir(), "auto-agent-codex-runtime-ps1-fail-")), "capture.json"),
+    [],
+    {
+      exitCode: 1,
+      stderr:
+        "npm.ps1 cannot be loaded because running scripts is disabled on this system. --token command-secret",
+    },
+  );
+  const { eventRepo, manager, goal, close } = createManagedCodexHarness();
+  const adapter = createCodexRuntimeAdapter({
+    commandPath,
+    modelLabel: "gpt-5-codex",
+    probe: async () => ({ execJson: true, approvalResume: false }),
+  });
+
+  try {
+    await manager.startManagedSession({
+      goalId: goal.id,
+      providerId: "codex-local",
+      modelLabel: "gpt-5-codex",
+      prompt: "Fail on npm.ps1",
+      adapter,
+    });
+
+    const failureMessage = eventRepo.listForGoal(goal.id).find((event) => event.type === "error")?.message ?? "";
+    assert.match(failureMessage, /npm\.ps1/i);
+    assert.match(failureMessage, /npm\.cmd/i);
+    assert.equal(failureMessage.includes("command-secret"), false);
+  } finally {
+    close();
+  }
+});
+
 test("reports unsupported Codex approval controls when resume is not verified", async () => {
   const adapter = createCodexRuntimeAdapter({
     commandPath: "C:\\Tools\\codex.exe",

@@ -308,10 +308,22 @@ function unsupportedReasonsForSupportedJsonMode(
 }
 
 function sanitizeDiagnostic(message: string): string {
-  return message
+  return addWindowsShimRetryGuidance(message)
     .replace(/\s+--(api-key|token|access-token)\s+\S+/gi, " --$1 [redacted]")
     .replace(/sk-[A-Za-z0-9_-]+/g, "[redacted-api-key]")
     .replace(/\bhidden\b/gi, "[redacted]");
+}
+
+function addWindowsShimRetryGuidance(message: string): string {
+  if (
+    /npm\.ps1/i.test(message) &&
+    /(running scripts is disabled|PSSecurityException|cannot be loaded|not digitally signed)/i.test(message) &&
+    !/npm\.cmd/i.test(message)
+  ) {
+    return `${message} Retry with the Windows executable shim npm.cmd.`;
+  }
+
+  return message;
 }
 
 function toSpawnRequest(command: string, args: string[]): { command: string; args: string[] } {

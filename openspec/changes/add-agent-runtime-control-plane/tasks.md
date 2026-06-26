@@ -49,7 +49,7 @@
 - [x] 6.2 Implement Codex managed session startup, event streaming, final completion, failure handling, and process cleanup.
 - [x] 6.3 Add tests for Codex approval request mapping when supported, or clear unsupported-control failure when approval cannot be resumed by the CLI mode.
 - [x] 6.4 Implement Codex approval/cancellation handling according to the verified capability result.
-- [ ] 6.5 Add Windows command-diagnostic tests for blocked PowerShell `.ps1` shims and safe retry guidance such as `npm.cmd`.
+- [x] 6.5 Add Windows command-diagnostic tests for blocked PowerShell `.ps1` shims and safe retry guidance such as `npm.cmd`.
 
 ## 7. Dashboard Session Controls
 
