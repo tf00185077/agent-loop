@@ -202,6 +202,26 @@ export async function getAgentSessionSnapshot(id: string): Promise<AgentSessionS
   return res.json();
 }
 
+export async function approveAgentSessionApproval(sessionId: string, approvalId: string): Promise<void> {
+  const res = await fetch(`${BASE}/agent-sessions/${sessionId}/approvals/${approvalId}/approve`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`approveAgentSessionApproval: ${res.status}`);
+}
+
+export async function rejectAgentSessionApproval(
+  sessionId: string,
+  approvalId: string,
+  reason?: string,
+): Promise<void> {
+  const res = await fetch(`${BASE}/agent-sessions/${sessionId}/approvals/${approvalId}/reject`, {
+    method: "POST",
+    headers: reason ? { "Content-Type": "application/json" } : undefined,
+    body: reason ? JSON.stringify({ reason }) : undefined,
+  });
+  if (!res.ok) throw new Error(`rejectAgentSessionApproval: ${res.status}`);
+}
+
 export function openEventStream(id: string, onEvent: (event: GoalEvent) => void): () => void {
   const source = new EventSource(`${BASE}/goals/${id}/events/stream`);
   source.onmessage = (message) => {

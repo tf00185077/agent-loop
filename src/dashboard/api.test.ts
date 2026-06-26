@@ -2,9 +2,11 @@ import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  approveAgentSessionApproval,
   detectCodexCli,
   getAgentSessionSnapshot,
   getProviderSettings,
+  rejectAgentSessionApproval,
   saveProviderSettings,
   startGoal,
   testCodexLocalConnection,
@@ -146,6 +148,25 @@ test("reads an agent session snapshot for a goal", async () => {
   assert.equal(capturedUrl, "/api/goals/goal-1/agent-session");
   assert.equal(snapshot.session?.providerId, "codex-local");
   assert.equal(snapshot.session?.modelLabel, "gpt-5-codex");
+});
+
+test("approves and rejects agent session approvals through dashboard API", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return jsonResponse({ ok: true });
+  };
+
+  await approveAgentSessionApproval("session-1", "approval-1");
+  await rejectAgentSessionApproval("session-1", "approval-2", "No thanks");
+
+  assert.deepEqual(
+    calls.map((call) => [call.url, call.init?.method, call.init?.body ? JSON.parse(String(call.init.body)) : null]),
+    [
+      ["/api/agent-sessions/session-1/approvals/approval-1/approve", "POST", null],
+      ["/api/agent-sessions/session-1/approvals/approval-2/reject", "POST", { reason: "No thanks" }],
+    ],
+  );
 });
 
 test("detects and tests Codex Local connection through dashboard API", async () => {

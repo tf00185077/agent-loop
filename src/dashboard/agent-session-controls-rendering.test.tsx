@@ -45,6 +45,26 @@ test("goal detail tolerates historical goals without managed session metadata", 
   assert.equal(html.includes("Cancel session"), false);
 });
 
+test("goal detail renders approval actions only for pending approvals when approval is supported", () => {
+  const snapshot = sessionSnapshot();
+  snapshot.session!.capabilities.approval = true;
+  snapshot.session!.capabilities.unsupportedReasons = {};
+  const html = renderToStaticMarkup(
+    <GoalDetailPanel
+      goal={goal()}
+      latestMetadata={{ provider: "codex-local", model: "gpt-5-codex" }}
+      agentSessionSnapshot={snapshot}
+      starting={false}
+      onStart={() => undefined}
+    />,
+  );
+
+  assert.match(html, /Approve/);
+  assert.match(html, /Reject/);
+  assert.equal((html.match(/Approve/g) ?? []).length, 1);
+  assert.equal((html.match(/Reject/g) ?? []).length, 1);
+});
+
 function goal(): Goal {
   return {
     id: "goal-1",

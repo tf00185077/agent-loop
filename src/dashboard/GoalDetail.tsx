@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from "react";
 import {
+  approveAgentSessionApproval,
   getAgentSessionSnapshot,
   getGoal,
   listEvents,
+  rejectAgentSessionApproval,
   startGoal,
   Goal,
   type AgentSessionSnapshot,
@@ -55,6 +57,34 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
     }
   }
 
+  async function refreshAgentSessionSnapshot() {
+    setAgentSessionSnapshot(await getAgentSessionSnapshot(goalId));
+  }
+
+  async function handleApproveApproval(approvalId: string) {
+    const sessionId = agentSessionSnapshot?.session?.id;
+    if (!sessionId) return;
+    setError(null);
+    try {
+      await approveAgentSessionApproval(sessionId, approvalId);
+      await refreshAgentSessionSnapshot();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleRejectApproval(approvalId: string) {
+    const sessionId = agentSessionSnapshot?.session?.id;
+    if (!sessionId) return;
+    setError(null);
+    try {
+      await rejectAgentSessionApproval(sessionId, approvalId);
+      await refreshAgentSessionSnapshot();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   if (loading) return <p>Loading...</p>;
   if (error) return <p style={{ color: "red" }}>{error}</p>;
   if (!goal) return null;
@@ -66,6 +96,8 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
       agentSessionSnapshot={agentSessionSnapshot}
       starting={starting}
       onStart={handleStart}
+      onApproveApproval={handleApproveApproval}
+      onRejectApproval={handleRejectApproval}
     />
   );
 }
@@ -76,12 +108,16 @@ export function GoalDetailPanel({
   agentSessionSnapshot,
   starting,
   onStart,
+  onApproveApproval,
+  onRejectApproval,
 }: {
   goal: Goal;
   latestMetadata: RunDisplayMetadata | null;
   agentSessionSnapshot?: AgentSessionSnapshot | null;
   starting: boolean;
   onStart: () => void;
+  onApproveApproval?: (approvalId: string) => void;
+  onRejectApproval?: (approvalId: string) => void;
 }) {
   const session = agentSessionSnapshot?.session ?? null;
   return (
@@ -150,6 +186,24 @@ export function GoalDetailPanel({
                   <tr key={approval.id}>
                     <td style={{ paddingRight: 24, paddingBottom: 4 }}>{approval.safeSummary}</td>
                     <td style={{ paddingBottom: 4 }}>{approval.status}</td>
+                    {session.capabilities.approval && approval.status === "pending" && (
+                      <td style={{ paddingLeft: 16, paddingBottom: 4 }}>
+                        <button
+                          type="button"
+                          onClick={() => onApproveApproval?.(approval.id)}
+                          style={{ marginRight: 8, padding: "4px 10px" }}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onRejectApproval?.(approval.id)}
+                          style={{ padding: "4px 10px" }}
+                        >
+                          Reject
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
