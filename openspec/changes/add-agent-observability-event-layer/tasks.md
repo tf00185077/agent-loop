@@ -23,8 +23,8 @@
 
 ## 3. Codex JSONL Ingestion
 
-- [ ] 3.1 Add fixture-driven Codex JSONL parser tests for thread/turn lifecycle, command started, command completed, command failed, agent message, error, and unknown event lines.
-- [ ] 3.2 Implement an incremental JSONL parser that tolerates partial lines and ignores malformed or unknown events safely.
+- [x] 3.1 Add fixture-driven Codex JSONL parser tests for thread/turn lifecycle, command started, command completed, command failed, agent message, error, and unknown event lines.
+- [x] 3.2 Implement an incremental JSONL parser that tolerates partial lines and ignores malformed or unknown events safely.
 - [ ] 3.3 Add Codex provider tests proving recognized JSONL events emit structured observations before final response.
 - [ ] 3.4 Update Codex provider invocation to prefer `codex exec --json` when supported.
 - [ ] 3.5 Preserve final response behavior by using JSONL final agent message or the existing last-message output fallback.
