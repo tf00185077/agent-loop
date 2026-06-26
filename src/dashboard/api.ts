@@ -1,3 +1,9 @@
+import type {
+  AgentRuntimeApprovalRequest,
+  AgentRuntimeChildSessionRequest,
+  AgentRuntimeSession,
+} from "../domain/index.js";
+
 const BASE = "/api";
 
 export interface Goal {
@@ -22,6 +28,12 @@ export interface GoalEvent {
   message: string;
   data: Record<string, unknown>;
   createdAt: string;
+}
+
+export interface AgentSessionSnapshot {
+  session: AgentRuntimeSession | null;
+  approvals: AgentRuntimeApprovalRequest[];
+  childSessionRequests: AgentRuntimeChildSessionRequest[];
 }
 
 export type ProviderConnectionState =

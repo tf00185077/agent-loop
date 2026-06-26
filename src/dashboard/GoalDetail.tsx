@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { getGoal, listEvents, startGoal, Goal, type StartGoalProviderOverride } from "./api";
+import { getGoal, listEvents, startGoal, Goal, type AgentSessionSnapshot, type StartGoalProviderOverride } from "./api";
 import {
   latestRunMetadata,
   type RunDisplayMetadata,
@@ -53,6 +53,7 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
     <GoalDetailPanel
       goal={goal}
       latestMetadata={latestMetadata}
+      agentSessionSnapshot={null}
       starting={starting}
       onStart={handleStart}
     />
@@ -62,14 +63,17 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
 export function GoalDetailPanel({
   goal,
   latestMetadata,
+  agentSessionSnapshot,
   starting,
   onStart,
 }: {
   goal: Goal;
   latestMetadata: RunDisplayMetadata | null;
+  agentSessionSnapshot?: AgentSessionSnapshot | null;
   starting: boolean;
   onStart: () => void;
 }) {
+  const session = agentSessionSnapshot?.session ?? null;
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
@@ -105,6 +109,44 @@ export function GoalDetailPanel({
           )}
         </tbody>
       </table>
+      {session && (
+        <section style={{ marginTop: 12, marginBottom: 20 }}>
+          <h3 style={{ fontSize: 16, margin: "0 0 8px" }}>Managed session</h3>
+          <table style={{ borderCollapse: "collapse", fontSize: 14, marginBottom: 12 }}>
+            <tbody>
+              <Row label="Session state" value={session.lifecycleState} />
+              <Row label="Session provider" value={session.providerId} />
+              <Row label="Session model" value={session.modelLabel ?? "default"} />
+              <Row label="Last activity" value={fmt(session.lastActivityAt)} />
+            </tbody>
+          </table>
+
+          {session.capabilities.cancellation && (
+            <button style={{ padding: "6px 14px", marginBottom: 12 }} type="button">
+              Cancel session
+            </button>
+          )}
+
+          {Object.values(session.capabilities.unsupportedReasons ?? {}).map((reason) => (
+            <p key={reason} style={{ color: "#8a5a00", margin: "0 0 8px" }}>
+              {reason}
+            </p>
+          ))}
+
+          {(agentSessionSnapshot?.approvals.length ?? 0) > 0 && (
+            <table style={{ borderCollapse: "collapse", fontSize: 14, marginTop: 8 }}>
+              <tbody>
+                {agentSessionSnapshot?.approvals.map((approval) => (
+                  <tr key={approval.id}>
+                    <td style={{ paddingRight: 24, paddingBottom: 4 }}>{approval.safeSummary}</td>
+                    <td style={{ paddingBottom: 4 }}>{approval.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
     </div>
   );
 }
