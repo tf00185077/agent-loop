@@ -96,6 +96,15 @@ The intended product is an agent control shell: the dashboard and backend own go
 
 Rollback is possible by keeping the existing one-shot provider path available behind provider settings. If session-mode Codex is disabled, Codex Local can fall back to the current direct-spawn completion behavior with reduced control features and explicit dashboard messaging.
 
+## Observability Coexistence Notes
+
+- Existing observability events remain the durable timeline for what happened: provider progress, command lifecycle, heartbeat, subtask metadata, and safe summaries.
+- Managed session records are the durable current/control state for interactive runtimes: lifecycle state, runtime capabilities, approval requests, command records, cancellation state, and child-session request records.
+- Runtime adapter events are mapped into durable goal events before streaming, so the dashboard can keep using the timeline stream while session-control APIs own approve, reject, cancel, and recovery actions.
+- Follow-up live-status reducers should prefer managed session/runtime events for lifecycle, waiting-for-approval, cancellation, stalled/recovery, and terminal control states, then use observability events for activity summaries and liveness.
+- Follow-up run-tree builders should prefer managed session parent metadata and child-session request records for parent/child relationships, then use observation metadata to enrich node activity and support older fixture streams.
+- Neither layer should consume raw provider stdout/stderr, raw JSONL payloads, provider credentials, auth cache material, access tokens, cookies, API keys, or authorization headers.
+
 ## Open Questions
 
 - Which Codex CLI mode can reliably support pausing for dashboard-mediated approval and then resuming the same session?
