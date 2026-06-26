@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   detectCodexCli,
+  getAgentSessionSnapshot,
   getProviderSettings,
   saveProviderSettings,
   startGoal,
@@ -111,6 +112,40 @@ test("starts a goal without a body when no provider override is supplied", async
 
   assert.equal(capturedInit?.method, "POST");
   assert.equal(capturedInit?.body, undefined);
+});
+
+test("reads an agent session snapshot for a goal", async () => {
+  let capturedUrl = "";
+  globalThis.fetch = async (input: string | URL | Request) => {
+    capturedUrl = String(input);
+    return jsonResponse({
+      session: {
+        id: "session-1",
+        goalId: "goal-1",
+        runId: "run-1",
+        providerId: "codex-local",
+        modelLabel: "gpt-5-codex",
+        lifecycleState: "running",
+        capabilities: {
+          eventStreaming: true,
+          approval: false,
+          cancellation: true,
+          resume: false,
+          childSessions: false,
+        },
+        createdAt: "2026-06-22T01:01:00.000Z",
+        lastActivityAt: "2026-06-22T01:02:00.000Z",
+      },
+      approvals: [],
+      childSessionRequests: [],
+    });
+  };
+
+  const snapshot = await getAgentSessionSnapshot("goal-1");
+
+  assert.equal(capturedUrl, "/api/goals/goal-1/agent-session");
+  assert.equal(snapshot.session?.providerId, "codex-local");
+  assert.equal(snapshot.session?.modelLabel, "gpt-5-codex");
 });
 
 test("detects and tests Codex Local connection through dashboard API", async () => {

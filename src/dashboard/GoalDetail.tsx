@@ -1,5 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { getGoal, listEvents, startGoal, Goal, type AgentSessionSnapshot, type StartGoalProviderOverride } from "./api";
+import {
+  getAgentSessionSnapshot,
+  getGoal,
+  listEvents,
+  startGoal,
+  Goal,
+  type AgentSessionSnapshot,
+  type StartGoalProviderOverride,
+} from "./api";
 import {
   latestRunMetadata,
   type RunDisplayMetadata,
@@ -15,6 +23,7 @@ interface Props {
 export default function GoalDetail({ goalId, refreshKey, providerOverride, onStarted }: Props) {
   const [goal, setGoal] = useState<Goal | null>(null);
   const [latestMetadata, setLatestMetadata] = useState<RunDisplayMetadata | null>(null);
+  const [agentSessionSnapshot, setAgentSessionSnapshot] = useState<AgentSessionSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -22,10 +31,11 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([getGoal(goalId), listEvents(goalId)])
-      .then(([nextGoal, events]) => {
+    Promise.all([getGoal(goalId), listEvents(goalId), getAgentSessionSnapshot(goalId)])
+      .then(([nextGoal, events, nextAgentSessionSnapshot]) => {
         setGoal(nextGoal);
         setLatestMetadata(latestRunMetadata(events));
+        setAgentSessionSnapshot(nextAgentSessionSnapshot);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -53,7 +63,7 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
     <GoalDetailPanel
       goal={goal}
       latestMetadata={latestMetadata}
-      agentSessionSnapshot={null}
+      agentSessionSnapshot={agentSessionSnapshot}
       starting={starting}
       onStart={handleStart}
     />

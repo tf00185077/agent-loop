@@ -54,7 +54,7 @@
 ## 7. Dashboard Session Controls
 
 - [x] 7.1 Add dashboard state/rendering tests for managed session state, runtime capabilities, pending approval requests, resolved approvals, cancellation support, and unsupported-control messaging.
-- [ ] 7.2 Render session state and provider/model metadata on the goal detail view without breaking one-shot provider or historical goals.
+- [x] 7.2 Render session state and provider/model metadata on the goal detail view without breaking one-shot provider or historical goals.
 - [ ] 7.3 Add approve/reject controls for pending approval requests and wire them to backend session-control APIs.
 - [ ] 7.4 Add cancel controls when cancellation is supported and hide or disable them when unsupported.
 - [ ] 7.5 Verify dashboard updates session and approval state from durable snapshots plus streamed events without direct provider output access.

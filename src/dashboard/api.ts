@@ -196,6 +196,12 @@ export async function listEvents(id: string): Promise<GoalEvent[]> {
   return res.json();
 }
 
+export async function getAgentSessionSnapshot(id: string): Promise<AgentSessionSnapshot> {
+  const res = await fetch(`${BASE}/goals/${id}/agent-session`);
+  if (!res.ok) throw new Error(`getAgentSessionSnapshot: ${res.status}`);
+  return res.json();
+}
+
 export function openEventStream(id: string, onEvent: (event: GoalEvent) => void): () => void {
   const source = new EventSource(`${BASE}/goals/${id}/events/stream`);
   source.onmessage = (message) => {
