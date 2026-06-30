@@ -198,6 +198,28 @@ process.stdin.on("end", () => {
   return commandPathForScript(scriptPath, "fake-codex-resume");
 }
 
+function fakeFailingCodex(capturePath: string, stderr: string, exitCode = 3): string {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-diagnostic-test-"));
+  const scriptPath = join(dir, "fake-codex-diagnostic.mjs");
+  writeFileSync(
+    scriptPath,
+    `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+const capturePath = ${JSON.stringify(capturePath)};
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { stdin += chunk; });
+process.stdin.on("end", () => {
+  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
+  process.stderr.write(${JSON.stringify(stderr)});
+  process.exit(${JSON.stringify(exitCode)});
+});
+`,
+  );
+  chmodSync(scriptPath, 0o755);
+  return commandPathForScript(scriptPath, "fake-codex-diagnostic");
+}
+
 /** Like fakeCodex, but also writes `progressText` to stdout before the final-message file. */
 function fakeCodexWithStdoutProgress(progressText: string, response: string): string {
   const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-progress-test-"));
@@ -586,6 +608,63 @@ process.stdin.on("end", () => { process.stderr.write("boom"); process.exit(3); }
   });
 
   await assert.rejects(() => provider.complete(input), /Codex CLI exited with code 3: boom/);
+});
+
+test("provider classifies missing Codex command startup failures", async () => {
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath:
+        process.platform === "win32"
+          ? "C:\\missing\\definitely-not-codex.exe"
+          : "/missing/definitely-not-codex",
+      modelLabel: null,
+      timeoutMs: 10_000,
+    },
+  });
+
+  await assert.rejects(() => provider.complete(input), /Codex command is missing or unavailable/i);
+});
+
+test("provider classifies Codex authentication failures separately from generic exits", async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-auth-fail-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeFailingCodex(capturePath, "Codex authentication required. Run codex login. --token hidden"),
+      modelLabel: null,
+      timeoutMs: 10_000,
+    },
+  });
+
+  await assert.rejects(
+    () => provider.complete(input),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /Codex authentication failed/i);
+      assert.equal(err.message.includes("hidden"), false);
+      return true;
+    },
+  );
+});
+
+test("provider includes exit code and sanitized stderr for unknown Codex failures", async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-unknown-fail-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeFailingCodex(capturePath, "boom --api-key sk-secret", 7),
+      modelLabel: null,
+      timeoutMs: 10_000,
+    },
+  });
+
+  await assert.rejects(
+    () => provider.complete(input),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /Codex CLI exited with code 7: boom/);
+      assert.equal(err.message.includes("sk-secret"), false);
+      return true;
+    },
+  );
 });
 
 test("provider timeout error includes safe diagnostic context", async () => {

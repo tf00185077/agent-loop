@@ -137,9 +137,7 @@ async function runCodexExec(
     }
 
     if (!isJsonModeUnavailable(successfulJsonResult.stderr)) {
-      throw new CodexCliProviderError(
-        `Codex CLI exited with code ${successfulJsonResult.code}: ${successfulJsonResult.stderr.trim() || "no stderr"}`,
-      );
+      throw new CodexCliProviderError(classifyCodexFailure(successfulJsonResult.code, successfulJsonResult.stderr));
     }
 
     input.onProgress?.({
@@ -159,9 +157,7 @@ async function runCodexExec(
       { onProgress: input.onProgress, parseJsonl: false },
     );
     if (legacyResult.code !== 0) {
-      throw new CodexCliProviderError(
-        `Codex CLI exited with code ${legacyResult.code}: ${legacyResult.stderr.trim() || "no stderr"}`,
-      );
+      throw new CodexCliProviderError(classifyCodexFailure(legacyResult.code, legacyResult.stderr));
     }
 
     const text = await readLastMessage(outputPath);
@@ -264,7 +260,7 @@ function spawnCodex(
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      reject(new CodexCliProviderError(`Codex CLI failed to start: ${err.message}`));
+      reject(new CodexCliProviderError(classifyCodexStartupFailure(err)));
     });
     child.on("close", (code) => {
       if (settled) return;
@@ -292,6 +288,28 @@ function isJsonModeUnavailable(stderr: string): boolean {
 
 function isResumeUnavailable(stderr: string): boolean {
   return /unknown session|session .*not found|resume .*unsupported|unknown (?:subcommand|command).*resume|unrecognized (?:subcommand|command).*resume/i.test(
+    stderr,
+  );
+}
+
+function classifyCodexStartupFailure(err: Error & Partial<NodeJS.ErrnoException>): string {
+  const message = err.message || "unknown startup error";
+  if (err.code === "ENOENT" || /ENOENT|not found|cannot find/i.test(message)) {
+    return `Codex command is missing or unavailable: ${sanitizeDiagnostic(message)}`;
+  }
+  return `Codex CLI failed to start: ${sanitizeDiagnostic(message)}`;
+}
+
+function classifyCodexFailure(code: number | null, stderr: string): string {
+  const safeStderr = sanitizeDiagnostic(stderr.trim() || "no stderr");
+  if (isCodexAuthFailure(stderr)) {
+    return `Codex authentication failed: ${safeStderr}`;
+  }
+  return `Codex CLI exited with code ${code ?? "unknown"}: ${safeStderr}`;
+}
+
+function isCodexAuthFailure(stderr: string): boolean {
+  return /auth(?:entication)?|not logged in|login required|codex login|invalid api key|unauthorized|permission denied/i.test(
     stderr,
   );
 }
@@ -363,6 +381,13 @@ function formatTimeoutMessage(
 function safeCommandName(command: string): string {
   const leaf = command.trim().replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? "codex";
   return leaf.replace(/\s+--(?:api-key|token|access-token)\s+\S+/gi, "");
+}
+
+function sanitizeDiagnostic(message: string): string {
+  return message
+    .replace(/\s+--(api-key|token|access-token)\s+\S+/gi, " --$1 [redacted]")
+    .replace(/sk-[A-Za-z0-9_-]+/g, "[redacted-api-key]")
+    .replace(/\bhidden\b/gi, "[redacted]");
 }
 
 function toSpawnRequest(

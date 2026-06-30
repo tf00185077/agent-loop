@@ -20,9 +20,9 @@
 
 ## 4. Runtime Diagnostics
 
-- [ ] 4.1 Detect missing Codex command separately from command execution failure.
-- [ ] 4.2 Classify Codex authentication failures separately from generic failures.
-- [ ] 4.3 Add tests for missing command, auth failure, and unknown failure diagnostics.
+- [x] 4.1 Detect missing Codex command separately from command execution failure.
+- [x] 4.2 Classify Codex authentication failures separately from generic failures.
+- [x] 4.3 Add tests for missing command, auth failure, and unknown failure diagnostics.
 
 ## 5. Control Plane Integration
 
