@@ -33,7 +33,7 @@
 
 ## 6. Verification and Documentation
 
-- [ ] 6.1 Document that Codex is the first reference adapter, not the permanent provider boundary.
-- [ ] 6.2 Run `npm run typecheck`.
-- [ ] 6.3 Run `npm test`.
-- [ ] 6.4 Run `openspec validate harden-codex-managed-runtime --strict`.
+- [x] 6.1 Document that Codex is the first reference adapter, not the permanent provider boundary.
+- [x] 6.2 Run `npm run typecheck`.
+- [x] 6.3 Run `npm test`.
+- [x] 6.4 Run `openspec validate harden-codex-managed-runtime --strict`.
