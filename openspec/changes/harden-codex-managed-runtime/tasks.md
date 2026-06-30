@@ -13,10 +13,10 @@
 
 ## 3. MVP JSONL Parser
 
-- [ ] 3.1 Add parser fixtures for session/thread start, assistant message, error, unknown JSON, and malformed line cases.
-- [ ] 3.2 Emit typed provider observations for assistant messages, errors, and diagnostics.
-- [ ] 3.3 Preserve unknown and malformed output as diagnostic records without crashing the run.
-- [ ] 3.4 Add parser tests covering the MVP JSONL cases.
+- [x] 3.1 Add parser fixtures for session/thread start, assistant message, error, unknown JSON, and malformed line cases.
+- [x] 3.2 Emit typed provider observations for assistant messages, errors, and diagnostics.
+- [x] 3.3 Preserve unknown and malformed output as diagnostic records without crashing the run.
+- [x] 3.4 Add parser tests covering the MVP JSONL cases.
 
 ## 4. Runtime Diagnostics
 

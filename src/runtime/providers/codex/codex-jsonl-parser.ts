@@ -46,15 +46,19 @@ function parseLine(line: string): CodexJsonlParsedResult[] {
   try {
     value = JSON.parse(line);
   } catch {
-    return [];
+    return [diagnosticResult("malformed", `Codex emitted malformed JSONL: ${tail(line) ?? ""}`)];
   }
-  if (!isRecord(value)) return [];
+  if (!isRecord(value)) {
+    return [diagnosticResult("unknown", `Codex emitted non-object JSONL: ${tail(line) ?? ""}`)];
+  }
 
   const rawEventType = stringValue(value.type) ?? stringValue(value.event);
-  if (!rawEventType) return [];
+  if (!rawEventType) {
+    return [diagnosticResult("unknown", "Codex emitted JSONL without an event type")];
+  }
 
   const observation = observationFromEvent(rawEventType, value);
-  if (!observation) return [];
+  if (!observation) return [diagnosticResult(rawEventType, `Codex emitted unrecognized JSONL event: ${rawEventType}`)];
   return [observation];
 }
 
@@ -176,6 +180,18 @@ function observationFromEvent(
 
 function jsonlMetadata(rawEventType: string): AgentObservation["metadata"] {
   return { source: "jsonl", rawEventType };
+}
+
+function diagnosticResult(rawEventType: string, message: string): CodexJsonlParsedResult {
+  return {
+    observations: [
+      {
+        kind: "progress",
+        message,
+        metadata: jsonlMetadata(rawEventType),
+      },
+    ],
+  };
 }
 
 function commandLabel(item: Record<string, unknown>): string | undefined {

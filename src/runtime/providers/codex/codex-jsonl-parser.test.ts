@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { createCodexJsonlParser } from "./codex-jsonl-parser.js";
 
-test("parses Codex JSONL lifecycle command message error and unknown lines from fixtures", () => {
+test("parses Codex JSONL lifecycle command message error and diagnostics from fixtures", () => {
   const parser = createCodexJsonlParser();
 
   const results = parser.push(
@@ -32,6 +32,7 @@ test("parses Codex JSONL lifecycle command message error and unknown lines from 
       JSON.stringify({ type: "agent_message", message: "Final answer" }),
       JSON.stringify({ type: "error", message: "Codex failed" }),
       JSON.stringify({ type: "future.event", payload: { raw: "ignored" } }),
+      "not-json",
       "",
     ].join("\n"),
   );
@@ -46,6 +47,8 @@ test("parses Codex JSONL lifecycle command message error and unknown lines from 
       "command.failed",
       "progress",
       "command.failed",
+      "progress",
+      "progress",
     ],
   );
   assert.deepEqual(results[0]?.observations[0]?.metadata, {
@@ -65,9 +68,14 @@ test("parses Codex JSONL lifecycle command message error and unknown lines from 
   });
   assert.equal(results.find((result) => result.finalMessage)?.finalMessage, "Final answer");
   assert.equal(results.find((result) => result.errorMessage)?.errorMessage, "Codex failed");
+  assert.match(results.at(-2)?.observations[0]?.message ?? "", /unrecognized JSONL event/);
+  assert.deepEqual(results.at(-1)?.observations[0]?.metadata, {
+    source: "jsonl",
+    rawEventType: "malformed",
+  });
 });
 
-test("parses partial JSONL chunks incrementally and ignores malformed lines safely", () => {
+test("parses partial JSONL chunks incrementally and preserves malformed lines safely", () => {
   const parser = createCodexJsonlParser();
 
   assert.deepEqual(parser.push('{"type":"agent_message","message":"hel'), []);
@@ -81,6 +89,15 @@ test("parses partial JSONL chunks incrementally and ignores malformed lines safe
         },
       ],
       finalMessage: "hello",
+    },
+    {
+      observations: [
+        {
+          kind: "progress",
+          message: "Codex emitted malformed JSONL: not-json",
+          metadata: { source: "jsonl", rawEventType: "malformed" },
+        },
+      ],
     },
   ]);
   assert.deepEqual(parser.flush(), []);
