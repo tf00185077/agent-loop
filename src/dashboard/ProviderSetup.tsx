@@ -5,7 +5,6 @@ import {
   loadCodexModelCatalog,
   saveProviderSettings,
   testCodexLocalConnection,
-  type CodexLocalConnectionTestResult,
   type CodexModelCatalogResult,
   type ProviderSettings,
   type SaveProviderSettingsInput,
@@ -13,7 +12,7 @@ import {
 } from "./api";
 
 type LocalProvider = ProviderSettings["provider"];
-type BusyAction = "save" | "auto-test" | "detect" | "test" | null;
+type BusyAction = "save" | "detect" | "test" | null;
 
 interface ProviderSetupPanelProps {
   settings: ProviderSettings;
@@ -133,17 +132,12 @@ export default function ProviderSetup({ onProviderOverrideChange }: ProviderSetu
     setBusy("save");
     setError(null);
     try {
-      await saveProviderSettingsWithOptionalCodexTest(toSaveProviderSettingsInput({
+      applySettings(await saveProviderSettings(toSaveProviderSettingsInput({
         draftProvider,
         modelLabel,
         codexCommandPath,
         claudeCommandPath,
-      }), {
-        save: saveProviderSettings,
-        testConnection: testCodexLocalConnection,
-        onSaved: applySettings,
-        onBeforeTest: () => setBusy("auto-test"),
-      });
+      })));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -282,31 +276,6 @@ function toSaveProviderSettingsInput(draft: SaveProviderSettingsDraft): SaveProv
   };
 }
 
-interface SaveProviderSettingsWithOptionalCodexTestDeps {
-  save: (input: SaveProviderSettingsInput) => Promise<ProviderSettings>;
-  testConnection: () => Promise<CodexLocalConnectionTestResult>;
-  onSaved?: (settings: ProviderSettings) => void;
-  onBeforeTest?: () => void;
-}
-
-export async function saveProviderSettingsWithOptionalCodexTest(
-  input: SaveProviderSettingsInput,
-  deps: SaveProviderSettingsWithOptionalCodexTestDeps,
-): Promise<ProviderSettings> {
-  const saved = await deps.save(input);
-  deps.onSaved?.(saved);
-
-  if (saved.provider === "codex-local" && saved.codexCommandPath) {
-    deps.onBeforeTest?.();
-    const tested = await deps.testConnection();
-    const testedSettings = { ...saved, status: tested.status };
-    deps.onSaved?.(testedSettings);
-    return testedSettings;
-  }
-
-  return saved;
-}
-
 export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
   const {
     settings,
@@ -356,10 +325,6 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
           {busy === "save" ? "Saving..." : "Save"}
         </button>
       </div>
-
-      {busy === "auto-test" && (
-        <div style={autoTestNoticeStyle}>Testing saved model connection...</div>
-      )}
 
       <div style={segmentedStyle} role="group" aria-label="Provider">
         <button
@@ -416,14 +381,6 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
         <div style={{ marginTop: 14 }}>
           <div style={labelRowStyle}>
             <span style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>Model</span>
-            <button
-              type="button"
-              onClick={onReloadCatalog}
-              disabled={busy !== null || catalogBusy}
-              style={buttonStyle}
-            >
-              {catalogBusy ? "Loading..." : "Refresh models"}
-            </button>
           </div>
 
           {catalogBusy && <div style={catalogNoteStyle}>Loading models from Codex CLI...</div>}
@@ -438,18 +395,18 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
                 <pre style={catalogDetailStyle}>{modelCatalog.status.detail}</pre>
               )}
               <div style={{ marginTop: 6 }}>
-                Fix the Codex command path or run Detect, then Refresh models.
+                You can still enter a model manually. Open Troubleshooting if you need to reload the CLI catalog.
               </div>
             </div>
           )}
 
           {catalogEmpty && (
             <div style={catalogNoteStyle}>
-              No selectable models were returned by Codex CLI. Run Detect or Refresh models.
+              No selectable models were returned by Codex CLI. You can still enter a model manually.
             </div>
           )}
 
-          {!catalogBusy && !catalogFailed && !catalogEmpty && (
+          {!catalogBusy && !catalogFailed && !catalogEmpty ? (
             <>
               <label style={labelStyle}>
                 <select
@@ -473,6 +430,15 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
                 CLI.
               </div>
             </>
+          ) : (
+            <label style={labelStyle}>
+              <input
+                value={modelLabel}
+                onChange={(event) => onModelLabelChange(event.target.value)}
+                placeholder="Codex CLI default or model slug"
+                style={inputStyle}
+              />
+            </label>
           )}
 
           <label style={labelStyle}>
@@ -483,24 +449,39 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
               style={inputStyle}
             />
           </label>
-          <div style={actionRowStyle}>
-            <button
-              type="button"
-              onClick={onDetect}
-              disabled={busy !== null}
-              style={buttonStyle}
-            >
-              {busy === "detect" ? "Detecting..." : "Detect"}
-            </button>
-            <button
-              type="button"
-              onClick={onTestConnection}
-              disabled={busy !== null}
-              style={buttonStyle}
-            >
-              {busy === "test" ? "Testing..." : "Test connection"}
-            </button>
-          </div>
+          <details style={troubleshootingStyle}>
+            <summary style={troubleshootingSummaryStyle}>Troubleshooting</summary>
+            <p style={troubleshootingTextStyle}>
+              Use these checks only when a Codex run cannot start, the CLI path is wrong, or the model
+              catalog looks stale.
+            </p>
+            <div style={actionRowStyle}>
+              <button
+                type="button"
+                onClick={onDetect}
+                disabled={busy !== null}
+                style={secondaryButtonStyle}
+              >
+                {busy === "detect" ? "Detecting..." : "Detect"}
+              </button>
+              <button
+                type="button"
+                onClick={onTestConnection}
+                disabled={busy !== null}
+                style={secondaryButtonStyle}
+              >
+                {busy === "test" ? "Testing..." : "Test connection"}
+              </button>
+              <button
+                type="button"
+                onClick={onReloadCatalog}
+                disabled={busy !== null || catalogBusy}
+                style={secondaryButtonStyle}
+              >
+                {catalogBusy ? "Loading..." : "Refresh models"}
+              </button>
+            </div>
+          </details>
         </div>
       )}
 
@@ -597,15 +578,6 @@ const labelRowStyle: React.CSSProperties = {
   marginBottom: 12,
 };
 
-const autoTestNoticeStyle: React.CSSProperties = {
-  marginTop: 12,
-  padding: "8px 10px",
-  background: "#eef6ff",
-  borderLeft: "3px solid #1976d2",
-  color: "#24415f",
-  fontSize: 13,
-};
-
 const catalogNoteStyle: React.CSSProperties = {
   fontSize: 12,
   color: "#777",
@@ -632,6 +604,35 @@ const catalogDetailStyle: React.CSSProperties = {
   overflowX: "auto",
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
+};
+
+const troubleshootingStyle: React.CSSProperties = {
+  borderTop: "1px solid #e5e5e5",
+  marginTop: 14,
+  paddingTop: 10,
+};
+
+const troubleshootingSummaryStyle: React.CSSProperties = {
+  cursor: "pointer",
+  color: "#555",
+  fontSize: 13,
+  fontWeight: 500,
+};
+
+const troubleshootingTextStyle: React.CSSProperties = {
+  color: "#666",
+  fontSize: 12,
+  lineHeight: 1.45,
+  margin: "8px 0",
+};
+
+const secondaryButtonStyle: React.CSSProperties = {
+  padding: "6px 10px",
+  cursor: "pointer",
+  background: "#fff",
+  border: "1px solid #ccc",
+  borderRadius: 4,
+  color: "#333",
 };
 
 const inputStyle: React.CSSProperties = {

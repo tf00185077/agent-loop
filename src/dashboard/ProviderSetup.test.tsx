@@ -5,7 +5,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   ProviderSetupPanel,
-  saveProviderSettingsWithOptionalCodexTest,
   toStartGoalProviderOverride,
 } from "./ProviderSetup.js";
 import type {
@@ -14,7 +13,7 @@ import type {
   ProviderSettings,
 } from "./api.js";
 
-test("provider setup panel renders Codex Local controls", () => {
+test("provider setup panel renders Codex Local controls with troubleshooting actions de-emphasized", () => {
   const html = renderToStaticMarkup(
     <ProviderSetupPanel
       settings={{
@@ -35,9 +34,11 @@ test("provider setup panel renders Codex Local controls", () => {
       draftProvider="codex-local"
       modelLabel="gpt-5-codex-subscription"
       codexCommandPath="C:\\Tools\\codex.cmd"
+      claudeCommandPath=""
       onProviderChange={() => undefined}
       onModelLabelChange={() => undefined}
       onCodexCommandPathChange={() => undefined}
+      onClaudeCommandPathChange={() => undefined}
       onSave={() => undefined}
       onDetect={() => undefined}
       onTestConnection={() => undefined}
@@ -49,8 +50,12 @@ test("provider setup panel renders Codex Local controls", () => {
   assert.match(html, /Codex Local/);
   assert.match(html, /Model/);
   assert.match(html, /Command path/);
+  assert.match(html, /Troubleshooting/);
+  assert.match(html, /Use these checks only when a Codex run cannot start/);
+  assert.match(html, /<details[^>]*>/);
   assert.match(html, /Detect/);
   assert.match(html, /Test connection/);
+  assert.match(html, /Refresh models/);
 });
 
 test("builds a start override from unsaved Codex Local draft settings", () => {
@@ -193,7 +198,7 @@ test("provider setup panel renders catalog models as picker options", () => {
   assert.match(html, /<option value="gpt-5-codex" selected="">/);
 });
 
-test("provider setup panel shows the failure error and raw CLI detail without a manual fallback", () => {
+test("provider setup panel shows catalog failure detail while still allowing manual model entry", () => {
   const html = renderCatalogPanel({
     models: [],
     defaultModelSlug: null,
@@ -210,19 +215,18 @@ test("provider setup panel shows the failure error and raw CLI detail without a 
   assert.match(html, /Codex CLI returned malformed model catalog output/);
   // The raw CLI output is shown for debugging.
   assert.match(html, /RAW-CODEX-DEBUG-OUTPUT exit code 1/);
-  // No manual entry / Codex default fallback is offered on failure.
-  assert.doesNotMatch(html, /placeholder="Codex CLI default"/);
-  assert.doesNotMatch(html, /Enter model manually/);
+  assert.match(html, /placeholder="Codex CLI default or model slug"/);
+  assert.match(html, /You can still enter a model manually/);
 });
 
-test("provider setup panel surfaces a fetch failure as an error with no fallback", () => {
+test("provider setup panel surfaces a fetch failure with manual model entry", () => {
   const html = renderCatalogPanel(null, { modelLabel: "" });
 
   assert.match(html, /Model catalog lookup failed/);
-  assert.doesNotMatch(html, /placeholder="Codex CLI default"/);
+  assert.match(html, /placeholder="Codex CLI default or model slug"/);
 });
 
-test("provider setup panel shows an empty-state message without a manual fallback", () => {
+test("provider setup panel shows an empty-state message with manual model entry", () => {
   const html = renderCatalogPanel({
     models: [],
     defaultModelSlug: null,
@@ -231,7 +235,7 @@ test("provider setup panel shows an empty-state message without a manual fallbac
   });
 
   assert.match(html, /No selectable models were returned/);
-  assert.doesNotMatch(html, /placeholder="Codex CLI default"/);
+  assert.match(html, /placeholder="Codex CLI default or model slug"/);
 });
 
 test("provider setup panel does not display raw catalog metadata or status messages", () => {
@@ -334,43 +338,7 @@ test("provider setup panel renders Claude Local controls without a model catalog
   assert.doesNotMatch(html, /Refresh models/);
 });
 
-test("saving Codex Local settings triggers a connection test after save succeeds", async () => {
-  const calls: string[] = [];
-
-  await saveProviderSettingsWithOptionalCodexTest(
-    {
-      provider: "codex-local",
-      modelLabel: "gpt-5-codex",
-      codexCommandPath: "C:\\Tools\\codex.cmd",
-    },
-    {
-      save: async () => {
-        calls.push("save");
-        return {
-          provider: "codex-local",
-          modelLabel: "gpt-5-codex",
-          codexCommandPath: "C:\\Tools\\codex.cmd",
-          status: { state: "not_checked", detected: false, checkedAt: null, message: null },
-        };
-      },
-      testConnection: async () => {
-        calls.push("test");
-        return {
-          status: {
-            state: "connected",
-            detected: true,
-            checkedAt: "2026-06-22T01:52:33.000Z",
-            message: "Codex Local connection test succeeded.",
-          },
-        };
-      },
-    },
-  );
-
-  assert.deepEqual(calls, ["save", "test"]);
-});
-
-test("auto-testing saved Codex settings has a distinct visible state and keeps retry visible", () => {
+test("Codex troubleshooting keeps manual checks available without making them primary", () => {
   const html = renderToStaticMarkup(
     <ProviderSetupPanel
       settings={{
@@ -379,7 +347,7 @@ test("auto-testing saved Codex settings has a distinct visible state and keeps r
         codexCommandPath: "C:\\Tools\\codex.cmd",
         status: { state: "not_checked", detected: false, checkedAt: null, message: null },
       }}
-      busy="auto-test"
+      busy={null}
       error={null}
       modelCatalog={{
         models: [
@@ -405,143 +373,8 @@ test("auto-testing saved Codex settings has a distinct visible state and keeps r
     />,
   );
 
-  assert.match(html, /Testing saved model/);
+  assert.match(html, /Troubleshooting/);
+  assert.match(html, /Use these checks only when a Codex run cannot start/);
   assert.match(html, /Test connection/);
-  assert.doesNotMatch(html, /Saving\.\.\./);
-});
-
-test("auto-test result updates the rendered provider status", async () => {
-  const applied: ProviderSettings[] = [];
-
-  await saveProviderSettingsWithOptionalCodexTest(
-    {
-      provider: "codex-local",
-      modelLabel: "gpt-5-codex",
-      codexCommandPath: "C:\\Tools\\codex.cmd",
-    },
-    {
-      save: async () => ({
-        provider: "codex-local",
-        modelLabel: "gpt-5-codex",
-        codexCommandPath: "C:\\Tools\\codex.cmd",
-        status: { state: "not_checked", detected: false, checkedAt: null, message: null },
-      }),
-      testConnection: async () => ({
-        status: {
-          state: "connected",
-          detected: true,
-          checkedAt: "2026-06-22T01:52:33.000Z",
-          message: "Codex Local connection test succeeded.",
-        },
-      }),
-      onSaved: (settings) => applied.push(settings),
-    },
-  );
-
-  assert.deepEqual(
-    applied.map((settings) => settings.status.state),
-    ["not_checked", "connected"],
-  );
-});
-
-test("auto-test failure result updates the rendered provider status", async () => {
-  const applied: ProviderSettings[] = [];
-
-  await saveProviderSettingsWithOptionalCodexTest(
-    {
-      provider: "codex-local",
-      modelLabel: "gpt-5-codex",
-      codexCommandPath: "C:\\Tools\\codex.cmd",
-    },
-    {
-      save: async () => ({
-        provider: "codex-local",
-        modelLabel: "gpt-5-codex",
-        codexCommandPath: "C:\\Tools\\codex.cmd",
-        status: { state: "not_checked", detected: false, checkedAt: null, message: null },
-      }),
-      testConnection: async () => ({
-        status: {
-          state: "command_failure",
-          detected: true,
-          checkedAt: "2026-06-22T02:05:00.000Z",
-          message: "Codex Local connection test failed: timed out",
-        },
-      }),
-      onSaved: (settings) => applied.push(settings),
-    },
-  );
-
-  assert.deepEqual(
-    applied.map((settings) => settings.status.state),
-    ["not_checked", "command_failure"],
-  );
-});
-
-test("saving mock settings does not trigger a Codex connection test", async () => {
-  const calls: string[] = [];
-
-  await saveProviderSettingsWithOptionalCodexTest(
-    { provider: "mock" },
-    {
-      save: async () => {
-        calls.push("save");
-        return {
-          provider: "mock",
-          modelLabel: "mock-v1",
-          codexCommandPath: null,
-          status: { state: "not_checked", detected: false, checkedAt: null, message: null },
-        };
-      },
-      testConnection: async () => {
-        calls.push("test");
-        return {
-          status: {
-            state: "connected",
-            detected: true,
-            checkedAt: "2026-06-22T01:52:33.000Z",
-            message: "Codex Local connection test succeeded.",
-          },
-        };
-      },
-    },
-  );
-
-  assert.deepEqual(calls, ["save"]);
-});
-
-test("saving Claude Local settings does not trigger a Codex connection test", async () => {
-  const calls: string[] = [];
-
-  await saveProviderSettingsWithOptionalCodexTest(
-    {
-      provider: "claude-local",
-      modelLabel: "claude-sonnet-4-6",
-      claudeCommandPath: "/home/u/.local/bin/claude",
-    },
-    {
-      save: async () => {
-        calls.push("save");
-        return {
-          provider: "claude-local",
-          modelLabel: "claude-sonnet-4-6",
-          claudeCommandPath: "/home/u/.local/bin/claude",
-          status: { state: "not_checked", detected: false, checkedAt: null, message: null },
-        };
-      },
-      testConnection: async () => {
-        calls.push("test");
-        return {
-          status: {
-            state: "connected",
-            detected: true,
-            checkedAt: "2026-06-22T01:52:33.000Z",
-            message: "Codex Local connection test succeeded.",
-          },
-        };
-      },
-    },
-  );
-
-  assert.deepEqual(calls, ["save"]);
+  assert.match(html, /Refresh models/);
 });
