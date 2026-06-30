@@ -1,7 +1,7 @@
 ## 1. MVP Codex Invocation
 
-- [ ] 1.1 Keep the base invocation on `codex exec --json -` with prompt content on stdin.
-- [ ] 1.2 Add tests for command argument construction with Codex CLI default and configured model paths already supported by provider setup.
+- [x] 1.1 Keep the base invocation on `codex exec --json -` with prompt content on stdin.
+- [x] 1.2 Add tests for command argument construction with Codex CLI default and configured model paths already supported by provider setup.
 
 ## 2. Session Identity and Resume
 

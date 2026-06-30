@@ -299,6 +299,40 @@ test("provider prefers codex exec --json and emits structured observations befor
   );
 });
 
+test("provider builds Codex JSONL exec args with stdin prompt and optional configured model", async () => {
+  for (const [modelLabel, expectedModelArg] of [
+    [null, null],
+    ["gpt-5-codex", "gpt-5-codex"],
+  ] as const) {
+    const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-jsonl-args-")), "cap.json");
+    const provider = createCodexCliProvider({
+      config: {
+        commandPath: fakeCodexWithJsonl(capturePath),
+        modelLabel,
+        timeoutMs: 10_000,
+      },
+    });
+
+    await provider.complete(input);
+
+    const captured = readCapture(capturePath);
+    assert.equal(captured.stdin, input.prompt);
+    assert.equal(captured.args[0], "exec");
+    assert.ok(captured.args.includes("--json"));
+    assert.ok(captured.args.includes("--skip-git-repo-check"));
+    assert.ok(captured.args.includes("--output-last-message"));
+    assert.equal(captured.args.at(-1), "-");
+
+    const modelIndex = captured.args.indexOf("--model");
+    if (expectedModelArg) {
+      assert.notEqual(modelIndex, -1);
+      assert.equal(captured.args[modelIndex + 1], expectedModelArg);
+    } else {
+      assert.equal(modelIndex, -1);
+    }
+  }
+});
+
 test("provider uses last-message output when JSONL has no final agent message", async () => {
   const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-jsonl-last-cap-")), "cap.json");
   const provider = createCodexCliProvider({
