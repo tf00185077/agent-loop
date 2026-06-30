@@ -3,6 +3,8 @@ import type { AgentObservation } from "../../domain/index.js";
 export interface ModelProvider {
   /** Display-only provider/model metadata known before execution, if available. */
   metadata?: ModelProviderMetadata;
+  /** Provider-owned runtime features used by higher-level code for continuation decisions. */
+  capabilities?: ModelProviderCapabilities;
   complete(input: ModelProviderInput): Promise<ModelProviderOutput>;
 }
 
@@ -15,6 +17,8 @@ export interface ModelProviderInput {
    * provider can resume a session. Undefined starts a fresh interaction.
    */
   conversationState?: unknown;
+  /** Provider-neutral continuation intent chosen by the runtime. */
+  continuation?: ModelProviderContinuation;
   /**
    * Optional sink for raw, unsanitized process output chunks or structured
    * observations seen while the provider runs. The runtime sanitizes and
@@ -43,4 +47,16 @@ export interface ModelProviderOutput {
 export interface ModelProviderMetadata {
   provider: string;
   model: string;
+}
+
+export interface ModelProviderCapabilities {
+  trueResume: boolean;
+  continuationFallback: boolean;
+  managedHome: boolean;
+  jsonlEvents: boolean;
+}
+
+export interface ModelProviderContinuation {
+  mode: "resume" | "fresh";
+  reason?: string;
 }

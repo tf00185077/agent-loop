@@ -9,7 +9,7 @@ import type {
   RunRepository,
   StepRepository,
 } from "../../persistence/runtime-repositories.js";
-import type { ModelProvider, ModelProviderOutput } from "./model-provider.js";
+import type { ModelProvider, ModelProviderInput, ModelProviderOutput } from "./model-provider.js";
 import { sanitizeAgentObservation } from "../safety/agent-observation-sanitizer.js";
 import { sanitizeProcessOutput } from "../safety/process-output-sanitizer.js";
 
@@ -78,6 +78,7 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
         goal: toProviderGoalContext(goal),
         prompt: buildProviderPrompt(goal),
         conversationState: options?.conversationState,
+        continuation: selectContinuation(provider, options?.conversationState),
         onProgress: (progress: string | AgentObservation) => {
           if (typeof progress === "string") {
             const sanitized = sanitizeProcessOutput(progress).trim();
@@ -229,6 +230,22 @@ export function createProviderRuntime(deps: ProviderRuntimeDeps): ProviderRuntim
 
       return output;
     },
+  };
+}
+
+function selectContinuation(
+  provider: ModelProvider,
+  conversationState: unknown,
+): ModelProviderInput["continuation"] {
+  if (conversationState === undefined) return undefined;
+  if (provider.capabilities?.trueResume) {
+    return { mode: "resume" };
+  }
+  return {
+    mode: "fresh",
+    reason: provider.capabilities?.continuationFallback
+      ? "Provider true resume is unavailable; using fresh continuation."
+      : "Provider capabilities do not advertise true resume.",
   };
 }
 

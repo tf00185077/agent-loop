@@ -56,9 +56,11 @@ export function createCodexCliProvider(deps: CodexCliProviderDeps): ModelProvide
     provider: PROVIDER_NAME,
     model: describeCodexModelLabel(config.modelLabel),
   };
+  const capabilities = codexCapabilities(config);
 
   return {
     metadata,
+    capabilities,
     async complete(input) {
       if (!config.commandPath?.trim()) {
         throw new CodexCliProviderError("Codex command path is required");
@@ -83,7 +85,12 @@ async function runCodexExec(
   const outputPath = join(tempDir, "last-message.txt");
   const priorState = parseCodexConversationState(input.conversationState);
   const resumeEnabled = config.resumeEnabled !== false;
-  const shouldResume = Boolean(resumeEnabled && priorState?.sessionId && priorState.capabilities.trueResume);
+  const shouldResume = Boolean(
+    input.continuation?.mode !== "fresh" &&
+      resumeEnabled &&
+      priorState?.sessionId &&
+      priorState.capabilities.trueResume,
+  );
   let fallbackReason: string | undefined;
 
   try {
@@ -359,12 +366,21 @@ function buildConversationState(
       resumeUsed: invocation.resumeUsed,
       fallbackReason: invocation.fallbackReason,
     },
-    capabilities: {
+      capabilities: {
       trueResume: config.resumeEnabled !== false,
       continuationFallback: true,
       managedHome: false,
       jsonlEvents: true,
     },
+  };
+}
+
+function codexCapabilities(config: CodexCliProviderConfig): ModelProvider["capabilities"] {
+  return {
+    trueResume: config.resumeEnabled !== false,
+    continuationFallback: true,
+    managedHome: false,
+    jsonlEvents: true,
   };
 }
 

@@ -29,6 +29,12 @@ test("provider exposes display metadata before execution without command details
   assert.equal(serializedMetadata.includes("commandPath"), false);
   assert.equal(serializedMetadata.includes("secret"), false);
   assert.equal(serializedMetadata.includes("token"), false);
+  assert.deepEqual(provider.capabilities, {
+    trueResume: true,
+    continuationFallback: true,
+    managedHome: false,
+    jsonlEvents: true,
+  });
 });
 
 /**
@@ -531,6 +537,39 @@ test("provider skips resume when capability metadata says true resume is unavail
       invocation: { json: true, resumeUsed: false },
       capabilities: {
         trueResume: false,
+        continuationFallback: true,
+        managedHome: false,
+        jsonlEvents: true,
+      },
+    },
+  });
+
+  const attempts = JSON.parse(readFileSync(capturePath, "utf8")) as Array<{ args: string[] }>;
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0]?.args.includes("resume"), false);
+});
+
+test("provider honors provider-neutral fresh continuation input without exposing Codex command syntax upstream", async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-neutral-continuation-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodexWithResume(capturePath),
+      modelLabel: "gpt-5-codex",
+      timeoutMs: 10_000,
+    },
+  });
+
+  await provider.complete({
+    ...input,
+    continuation: { mode: "fresh", reason: "Provider true resume is unavailable; using fresh continuation." },
+    conversationState: {
+      provider: "codex-cli",
+      sessionId: "codex-session-1",
+      cwd: "C:/work",
+      modelLabel: "gpt-5-codex",
+      invocation: { json: true, resumeUsed: false },
+      capabilities: {
+        trueResume: true,
         continuationFallback: true,
         managedHome: false,
         jsonlEvents: true,

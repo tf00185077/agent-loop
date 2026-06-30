@@ -289,6 +289,82 @@ test("provider runtime forwards conversation state verbatim and surfaces the ret
   db.close();
 });
 
+test("provider runtime requests true resume when provider capabilities allow it", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const incomingState = { sessionId: "codex-session-1" };
+  let received: ModelProviderInput | undefined;
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      capabilities: {
+        trueResume: true,
+        continuationFallback: true,
+        managedHome: false,
+        jsonlEvents: true,
+      },
+      async complete(input: ModelProviderInput) {
+        received = input;
+        return {
+          text: "Resumed response",
+          metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Resume provider state",
+    description: "Choose true resume from capabilities",
+  });
+
+  await runtime.run(goal.id, { conversationState: incomingState });
+
+  assert.strictEqual(received?.conversationState, incomingState);
+  assert.deepEqual(received?.continuation, { mode: "resume" });
+
+  db.close();
+});
+
+test("provider runtime requests fresh continuation when true resume is unavailable", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  let received: ModelProviderInput | undefined;
+  const runtime = createProviderRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    provider: {
+      capabilities: {
+        trueResume: false,
+        continuationFallback: true,
+        managedHome: false,
+        jsonlEvents: true,
+      },
+      async complete(input: ModelProviderInput) {
+        received = input;
+        return {
+          text: "Fresh continuation response",
+          metadata: { provider: "codex-cli", model: "gpt-5-codex" },
+        };
+      },
+    },
+  });
+  const goal = goalRepo.create({
+    title: "Fallback provider state",
+    description: "Choose fresh continuation from capabilities",
+  });
+
+  await runtime.run(goal.id, { conversationState: { sessionId: "codex-session-1" } });
+
+  assert.equal(received?.continuation?.mode, "fresh");
+  assert.match(received?.continuation?.reason ?? "", /true resume is unavailable/i);
+  assert.equal(JSON.stringify(received?.continuation).includes("codex exec"), false);
+
+  db.close();
+});
+
 test("provider runtime tolerates absent conversation state", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   let received: ModelProviderInput | undefined;

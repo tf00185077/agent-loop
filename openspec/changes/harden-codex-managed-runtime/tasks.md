@@ -26,10 +26,10 @@
 
 ## 5. Control Plane Integration
 
-- [ ] 5.1 Expose Codex managed runtime capabilities through the provider interface.
-- [ ] 5.2 Update runtime continuation flow to choose true resume or fresh continuation from provider capabilities.
-- [ ] 5.3 Ensure higher-level runtime code uses transport-independent continuation input rather than Codex command syntax.
-- [ ] 5.4 Add runtime tests for provider capability-driven continuation behavior.
+- [x] 5.1 Expose Codex managed runtime capabilities through the provider interface.
+- [x] 5.2 Update runtime continuation flow to choose true resume or fresh continuation from provider capabilities.
+- [x] 5.3 Ensure higher-level runtime code uses transport-independent continuation input rather than Codex command syntax.
+- [x] 5.4 Add runtime tests for provider capability-driven continuation behavior.
 
 ## 6. Verification and Documentation
 
