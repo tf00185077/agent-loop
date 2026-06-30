@@ -321,9 +321,6 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
             <span>{statusView.label}</span>
           </div>
         </div>
-        <button type="button" onClick={onSave} disabled={busy !== null} style={buttonStyle}>
-          {busy === "save" ? "Saving..." : "Save"}
-        </button>
       </div>
 
       <div style={segmentedStyle} role="group" aria-label="Provider">
@@ -441,21 +438,29 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
             </label>
           )}
 
-          <label style={labelStyle}>
-            Command path
-            <input
-              value={codexCommandPath}
-              onChange={(event) => onCodexCommandPathChange(event.target.value)}
-              style={inputStyle}
-            />
-          </label>
           <details style={troubleshootingStyle}>
             <summary style={troubleshootingSummaryStyle}>Troubleshooting</summary>
             <p style={troubleshootingTextStyle}>
               Use these checks only when a Codex run cannot start, the CLI path is wrong, or the model
               catalog looks stale.
             </p>
+            <label style={troubleshootingLabelStyle}>
+              Command path
+              <input
+                value={codexCommandPath}
+                onChange={(event) => onCodexCommandPathChange(event.target.value)}
+                style={inputStyle}
+              />
+            </label>
             <div style={actionRowStyle}>
+              <button
+                type="button"
+                onClick={onSave}
+                disabled={busy !== null}
+                style={secondaryButtonStyle}
+              >
+                {busy === "save" ? "Saving..." : "Save as default"}
+              </button>
               <button
                 type="button"
                 onClick={onDetect}
@@ -626,6 +631,11 @@ const troubleshootingTextStyle: React.CSSProperties = {
   margin: "8px 0",
 };
 
+const troubleshootingLabelStyle: React.CSSProperties = {
+  ...labelStyle,
+  marginBottom: 10,
+};
+
 const secondaryButtonStyle: React.CSSProperties = {
   padding: "6px 10px",
   cursor: "pointer",
@@ -694,13 +704,13 @@ function providerStatusView(
     case "detected":
       return {
         label: `${cli} CLI detected`,
-        guidance: "Save this path before starting provider-backed goals.",
+        guidance: "Current task starts can use the selected provider and model; save only if you want these as defaults.",
         color: "#1976d2",
       };
     case "not_found":
       return {
         label: `${cli} CLI not found`,
-        guidance: `Enter a ${cli} command path manually or install ${cli} CLI, then detect again.`,
+        guidance: `New runs will try the current ${cli} command settings. Open Troubleshooting to set a custom path.`,
         color: "#d97706",
       };
     case "connected":
@@ -730,7 +740,7 @@ function providerStatusView(
     case "not_checked":
       return {
         label: "Not checked",
-        guidance: `Detect ${cli} CLI or save mock provider settings.`,
+        guidance: `You can start with the current ${localLabel} draft; open Troubleshooting only if startup fails.`,
         color: "#777",
       };
   }

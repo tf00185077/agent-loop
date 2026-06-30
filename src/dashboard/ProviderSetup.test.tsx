@@ -49,13 +49,23 @@ test("provider setup panel renders Codex Local controls with troubleshooting act
   assert.match(html, /Provider setup/);
   assert.match(html, /Codex Local/);
   assert.match(html, /Model/);
-  assert.match(html, /Command path/);
   assert.match(html, /Troubleshooting/);
   assert.match(html, /Use these checks only when a Codex run cannot start/);
   assert.match(html, /<details[^>]*>/);
+  assert.match(html, /Command path/);
+  assert.match(html, /Save as default/);
   assert.match(html, /Detect/);
   assert.match(html, /Test connection/);
   assert.match(html, /Refresh models/);
+  assert.equal(html.includes(">Save</button>"), false);
+  assert.ok(
+    html.indexOf("Troubleshooting") < html.indexOf("Command path"),
+    "Command path should be inside the troubleshooting area, after its summary",
+  );
+  assert.ok(
+    html.indexOf("Troubleshooting") < html.indexOf("Save as default"),
+    "Save as default should be inside the troubleshooting area, after its summary",
+  );
 });
 
 test("builds a start override from unsaved Codex Local draft settings", () => {
@@ -377,4 +387,5 @@ test("Codex troubleshooting keeps manual checks available without making them pr
   assert.match(html, /Use these checks only when a Codex run cannot start/);
   assert.match(html, /Test connection/);
   assert.match(html, /Refresh models/);
+  assert.match(html, /Save as default/);
 });
