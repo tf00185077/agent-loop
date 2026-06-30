@@ -58,7 +58,10 @@ function parseLine(line: string): CodexJsonlParsedResult[] {
   }
 
   const observation = observationFromEvent(rawEventType, value);
-  if (!observation) return [diagnosticResult(rawEventType, `Codex emitted unrecognized JSONL event: ${rawEventType}`)];
+  if (!observation) {
+    if (isItemEvent(rawEventType)) return [];
+    return [diagnosticResult(rawEventType, `Codex emitted unrecognized JSONL event: ${rawEventType}`)];
+  }
   return [observation];
 }
 
@@ -96,7 +99,7 @@ function observationFromEvent(
 
   if (rawEventType === "item.started") {
     const item = recordValue(value.item);
-    if (item?.type !== "command") return null;
+    if (!isCommandItem(item)) return itemObservation(rawEventType, item);
     return {
       observations: [
         {
@@ -111,7 +114,7 @@ function observationFromEvent(
 
   if (rawEventType === "item.completed") {
     const item = recordValue(value.item);
-    if (item?.type !== "command") return null;
+    if (!isCommandItem(item)) return itemObservation(rawEventType, item);
     return {
       observations: [
         {
@@ -121,7 +124,7 @@ function observationFromEvent(
             label: commandLabel(item),
             status: "completed" as const,
             exitCode: numberValue(item.exit_code ?? item.exitCode),
-            stdoutTail: tail(stringValue(item.stdout)),
+            stdoutTail: tail(stringValue(item.stdout ?? item.aggregated_output ?? item.output)),
             stderrTail: tail(stringValue(item.stderr)),
           }),
           metadata: jsonlMetadata(rawEventType),
@@ -132,8 +135,8 @@ function observationFromEvent(
 
   if (rawEventType === "item.failed") {
     const item = recordValue(value.item);
-    if (item?.type !== "command") return null;
-    const message = stringValue(item.error) ?? "Command failed";
+    if (!isCommandItem(item)) return itemObservation(rawEventType, item);
+    const message = stringValue(item.error ?? item.message ?? item.stderr) ?? "Command failed";
     return {
       observations: [
         {
@@ -143,7 +146,7 @@ function observationFromEvent(
             label: commandLabel(item),
             status: "failed" as const,
             exitCode: numberValue(item.exit_code ?? item.exitCode),
-            stderrTail: tail(stringValue(item.stderr) ?? message),
+            stderrTail: tail(stringValue(item.stderr ?? item.aggregated_output ?? item.output) ?? message),
           }),
           metadata: jsonlMetadata(rawEventType),
         },
@@ -176,6 +179,100 @@ function observationFromEvent(
   }
 
   return null;
+}
+
+function itemObservation(
+  rawEventType: string,
+  item: Record<string, unknown> | null,
+): CodexJsonlParsedResult | null {
+  const itemType = stringValue(item?.type);
+  if (!itemType) return null;
+
+  if (itemType === "agent_message" && rawEventType === "item.completed") {
+    const message = stringValue(item?.message ?? item?.text ?? item?.content);
+    if (!message) return null;
+    return {
+      observations: [{ kind: "progress", message, metadata: jsonlMetadata(rawEventType) }],
+      finalMessage: message,
+    };
+  }
+
+  if (itemType === "reasoning") {
+    const message = stringValue(item?.text ?? item?.message ?? item?.summary);
+    if (!message) return null;
+    return {
+      observations: [{ kind: "progress", message: `reasoning: ${message}`, metadata: jsonlMetadata(rawEventType) }],
+    };
+  }
+
+  if (itemType === "tool_use" && rawEventType === "item.started") {
+    const name = stringValue(item?.name ?? item?.tool_name ?? item?.toolName);
+    return {
+      observations: [{
+        kind: "progress",
+        message: name ? `tool started: ${name}` : "tool started",
+        metadata: jsonlMetadata(rawEventType),
+      }],
+    };
+  }
+
+  if (itemType === "tool_use" && rawEventType === "item.completed") {
+    const name = stringValue(item?.name ?? item?.tool_name ?? item?.toolName);
+    const output = tail(stringValue(item?.output ?? item?.result ?? item?.content));
+    const label = name ? `tool completed: ${name}` : "tool completed";
+    return {
+      observations: [{
+        kind: "progress",
+        message: output ? `${label}: ${output}` : label,
+        metadata: jsonlMetadata(rawEventType),
+      }],
+    };
+  }
+
+  if (itemType === "tool_result" && rawEventType === "item.completed") {
+    const content = stringValue(item?.content ?? item?.output ?? item?.result);
+    if (!content) return null;
+    return {
+      observations: [{ kind: "progress", message: `tool result: ${tail(content)}`, metadata: jsonlMetadata(rawEventType) }],
+    };
+  }
+
+  if (itemType === "file_change" && rawEventType === "item.completed") {
+    const summary = stringValue(item?.summary ?? item?.path ?? item?.file);
+    return {
+      observations: [{
+        kind: "progress",
+        message: summary ? `file change: ${summary}` : "file change completed",
+        metadata: jsonlMetadata(rawEventType),
+      }],
+    };
+  }
+
+  if (itemType === "error") {
+    const message = stringValue(item?.message ?? item?.error) ?? "Codex emitted an error";
+    return {
+      observations: [
+        {
+          kind: "command.failed",
+          message,
+          command: { status: "failed", stderrTail: message },
+          metadata: jsonlMetadata(rawEventType),
+        },
+      ],
+      errorMessage: message,
+    };
+  }
+
+  return null;
+}
+
+function isItemEvent(rawEventType: string): boolean {
+  return rawEventType === "item.started" || rawEventType === "item.completed" || rawEventType === "item.failed";
+}
+
+function isCommandItem(item: Record<string, unknown> | null): item is Record<string, unknown> {
+  const itemType = stringValue(item?.type);
+  return itemType === "command" || itemType === "command_execution";
 }
 
 function jsonlMetadata(rawEventType: string): AgentObservation["metadata"] {
