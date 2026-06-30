@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describeCodexModelLabel, resolveCodexModelArgument } from "../../../domain/index.js";
 import type { ModelProvider, ModelProviderInput, ModelProviderOutput } from "../model-provider.js";
-import { createCodexJsonlParser } from "./codex-jsonl-parser.js";
+import { createCodexJsonlParser, type CodexJsonlParsedResult } from "./codex-jsonl-parser.js";
 
 export interface CodexCliProviderConfig {
   /** Resolved Codex CLI command path (absolute) used to spawn Codex directly. */
@@ -14,6 +14,8 @@ export interface CodexCliProviderConfig {
   modelLabel: string | null;
   /** Hard timeout for a single Codex invocation. Defaults to 120s. */
   timeoutMs?: number;
+  /** Enables true Codex resume when a prior Codex session id is available. */
+  resumeEnabled?: boolean;
 }
 
 export interface CodexCliProviderDeps {
@@ -22,6 +24,24 @@ export interface CodexCliProviderDeps {
 
 const PROVIDER_NAME = "codex-cli";
 const DEFAULT_TIMEOUT_MS = 120_000;
+
+export interface CodexConversationState {
+  provider: typeof PROVIDER_NAME;
+  sessionId: string;
+  cwd: string;
+  modelLabel: string;
+  invocation: {
+    json: true;
+    resumeUsed: boolean;
+    fallbackReason?: string;
+  };
+  capabilities: {
+    trueResume: boolean;
+    continuationFallback: boolean;
+    managedHome: false;
+    jsonlEvents: true;
+  };
+}
 
 export class CodexCliProviderError extends Error {
   constructor(message: string) {
@@ -44,12 +64,12 @@ export function createCodexCliProvider(deps: CodexCliProviderDeps): ModelProvide
         throw new CodexCliProviderError("Codex command path is required");
       }
 
-      const text = await runCodexExec(config, input);
+      const result = await runCodexExec(config, input);
 
       return {
-        text,
+        text: result.text,
         metadata,
-        conversationState: undefined,
+        conversationState: result.conversationState,
       } satisfies ModelProviderOutput;
     },
   };
@@ -58,14 +78,21 @@ export function createCodexCliProvider(deps: CodexCliProviderDeps): ModelProvide
 async function runCodexExec(
   config: CodexCliProviderConfig,
   input: ModelProviderInput,
-): Promise<string> {
+): Promise<{ text: string; conversationState?: CodexConversationState }> {
   const tempDir = await mkdtemp(join(tmpdir(), "auto-agent-codex-provider-"));
   const outputPath = join(tempDir, "last-message.txt");
+  const priorState = parseCodexConversationState(input.conversationState);
+  const resumeEnabled = config.resumeEnabled !== false;
+  const shouldResume = Boolean(resumeEnabled && priorState?.sessionId && priorState.capabilities.trueResume);
+  let fallbackReason: string | undefined;
 
   try {
     const jsonResult = await spawnCodex(
       config.commandPath,
-      buildCodexExecArgs(config, outputPath, { json: true }),
+      buildCodexExecArgs(config, outputPath, {
+        json: true,
+        resumeSessionId: shouldResume ? priorState?.sessionId : undefined,
+      }),
       input.prompt,
       config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       {
@@ -74,17 +101,44 @@ async function runCodexExec(
       },
       { onProgress: input.onProgress, parseJsonl: true },
     );
-    if (jsonResult.code === 0) {
-      const text = jsonResult.finalMessage ?? (await readLastMessage(outputPath));
+    let successfulJsonResult = jsonResult;
+    if (jsonResult.code !== 0 && shouldResume && isResumeUnavailable(jsonResult.stderr)) {
+      fallbackReason = "Codex resume was unavailable for the stored session; started a fresh continuation.";
+      input.onProgress?.({
+        kind: "progress",
+        message: fallbackReason,
+        metadata: { source: "provider", rawEventType: "resume-fallback" },
+      });
+      successfulJsonResult = await spawnCodex(
+        config.commandPath,
+        buildCodexExecArgs(config, outputPath, { json: true }),
+        input.prompt,
+        config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        {
+          commandName: safeCommandName(config.commandPath),
+          model: describeCodexModelLabel(config.modelLabel),
+        },
+        { onProgress: input.onProgress, parseJsonl: true },
+      );
+    }
+
+    if (successfulJsonResult.code === 0) {
+      const text = successfulJsonResult.finalMessage ?? (await readLastMessage(outputPath));
       if (!text) {
         throw new CodexCliProviderError("Codex CLI returned an empty response");
       }
-      return text;
+      return {
+        text,
+        conversationState: buildConversationState(config, successfulJsonResult.session, priorState, {
+          resumeUsed: shouldResume && !fallbackReason,
+          fallbackReason,
+        }),
+      };
     }
 
-    if (!isJsonModeUnavailable(jsonResult.stderr)) {
+    if (!isJsonModeUnavailable(successfulJsonResult.stderr)) {
       throw new CodexCliProviderError(
-        `Codex CLI exited with code ${jsonResult.code}: ${jsonResult.stderr.trim() || "no stderr"}`,
+        `Codex CLI exited with code ${successfulJsonResult.code}: ${successfulJsonResult.stderr.trim() || "no stderr"}`,
       );
     }
 
@@ -114,7 +168,7 @@ async function runCodexExec(
     if (!text) {
       throw new CodexCliProviderError("Codex CLI returned an empty response");
     }
-    return text;
+    return { text };
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -123,7 +177,7 @@ async function runCodexExec(
 function buildCodexExecArgs(
   config: CodexCliProviderConfig,
   outputPath: string,
-  options: { json: boolean },
+  options: { json: boolean; resumeSessionId?: string },
 ): string[] {
   const args = ["exec", "--skip-git-repo-check"];
   if (options.json) args.push("--json");
@@ -132,6 +186,7 @@ function buildCodexExecArgs(
   if (modelArgument) {
     args.push("--model", modelArgument);
   }
+  if (options.resumeSessionId) args.push("resume", options.resumeSessionId);
   args.push("-");
   return args;
 }
@@ -158,7 +213,13 @@ function spawnCodex(
     onProgress?: ModelProviderInput["onProgress"];
     parseJsonl: boolean;
   },
-): Promise<{ code: number | null; stderr: string; finalMessage?: string; errorMessage?: string }> {
+): Promise<{
+  code: number | null;
+  stderr: string;
+  finalMessage?: string;
+  errorMessage?: string;
+  session?: CodexJsonlParsedResult["session"];
+}> {
   return new Promise((resolve, reject) => {
     const request = toSpawnRequest(command, args);
     const child = spawn(request.command, request.args, {
@@ -168,6 +229,7 @@ function spawnCodex(
     let stderr = "";
     let finalMessage: string | undefined;
     let errorMessage: string | undefined;
+    let session: CodexJsonlParsedResult["session"];
     const parser = options.parseJsonl ? createCodexJsonlParser() : null;
     let settled = false;
 
@@ -191,6 +253,7 @@ function spawnCodex(
         for (const observation of result.observations) options.onProgress?.(observation);
         finalMessage = result.finalMessage ?? finalMessage;
         errorMessage = result.errorMessage ?? errorMessage;
+        session = result.session ?? session;
       }
     });
     child.stderr.setEncoding("utf8");
@@ -212,9 +275,10 @@ function spawnCodex(
           for (const observation of result.observations) options.onProgress?.(observation);
           finalMessage = result.finalMessage ?? finalMessage;
           errorMessage = result.errorMessage ?? errorMessage;
+          session = result.session ?? session;
         }
       }
-      resolve({ code, stderr, finalMessage, errorMessage });
+      resolve({ code, stderr, finalMessage, errorMessage, session });
     });
     child.stdin.end(stdin);
   });
@@ -224,6 +288,66 @@ function isJsonModeUnavailable(stderr: string): boolean {
   return /unknown (?:option|flag).*--json|unexpected (?:argument|option).*--json|unrecognized (?:option|flag).*--json|cannot be used with --output-last-message/i.test(
     stderr,
   );
+}
+
+function isResumeUnavailable(stderr: string): boolean {
+  return /unknown session|session .*not found|resume .*unsupported|unknown (?:subcommand|command).*resume|unrecognized (?:subcommand|command).*resume/i.test(
+    stderr,
+  );
+}
+
+function parseCodexConversationState(value: unknown): CodexConversationState | null {
+  if (!isRecord(value)) return null;
+  if (value.provider !== PROVIDER_NAME) return null;
+  if (typeof value.sessionId !== "string" || !value.sessionId.trim()) return null;
+  const capabilities = isRecord(value.capabilities) ? value.capabilities : {};
+  return {
+    provider: PROVIDER_NAME,
+    sessionId: value.sessionId.trim(),
+    cwd: typeof value.cwd === "string" && value.cwd.trim() ? value.cwd.trim() : process.cwd(),
+    modelLabel: typeof value.modelLabel === "string" ? value.modelLabel : describeCodexModelLabel(null),
+    invocation: {
+      json: true,
+      resumeUsed: isRecord(value.invocation) && value.invocation.resumeUsed === true,
+      fallbackReason:
+        isRecord(value.invocation) && typeof value.invocation.fallbackReason === "string"
+          ? value.invocation.fallbackReason
+          : undefined,
+    },
+    capabilities: {
+      trueResume: capabilities.trueResume === true,
+      continuationFallback: capabilities.continuationFallback !== false,
+      managedHome: false,
+      jsonlEvents: true,
+    },
+  };
+}
+
+function buildConversationState(
+  config: CodexCliProviderConfig,
+  session: CodexJsonlParsedResult["session"],
+  priorState: CodexConversationState | null,
+  invocation: { resumeUsed: boolean; fallbackReason?: string },
+): CodexConversationState | undefined {
+  const sessionId = session?.sessionId ?? priorState?.sessionId;
+  if (!sessionId) return undefined;
+  return {
+    provider: PROVIDER_NAME,
+    sessionId,
+    cwd: session?.cwd ?? priorState?.cwd ?? process.cwd(),
+    modelLabel: describeCodexModelLabel(config.modelLabel),
+    invocation: {
+      json: true,
+      resumeUsed: invocation.resumeUsed,
+      fallbackReason: invocation.fallbackReason,
+    },
+    capabilities: {
+      trueResume: config.resumeEnabled !== false,
+      continuationFallback: true,
+      managedHome: false,
+      jsonlEvents: true,
+    },
+  };
 }
 
 function formatTimeoutMessage(
@@ -253,4 +377,8 @@ function toSpawnRequest(
   }
 
   return { command, args };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

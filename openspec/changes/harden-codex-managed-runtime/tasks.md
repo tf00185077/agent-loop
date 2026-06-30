@@ -5,11 +5,11 @@
 
 ## 2. Session Identity and Resume
 
-- [ ] 2.1 Extend Codex session params to store session id, cwd, known model/options, and capability metadata.
-- [ ] 2.2 Parse Codex session/thread start JSONL events and persist session identity.
-- [ ] 2.3 Implement true resume invocation through `codex exec --json resume <sessionId> -` when enabled and supported.
-- [ ] 2.4 Implement fallback to fresh continuation when resume is unsupported or the session is unknown.
-- [ ] 2.5 Add tests for resume success, unknown-session fallback, and no-resume capability fallback.
+- [x] 2.1 Extend Codex session params to store session id, cwd, known model/options, and capability metadata.
+- [x] 2.2 Parse Codex session/thread start JSONL events and persist session identity.
+- [x] 2.3 Implement true resume invocation through `codex exec --json resume <sessionId> -` when enabled and supported.
+- [x] 2.4 Implement fallback to fresh continuation when resume is unsupported or the session is unknown.
+- [x] 2.5 Add tests for resume success, unknown-session fallback, and no-resume capability fallback.
 
 ## 3. MVP JSONL Parser
 

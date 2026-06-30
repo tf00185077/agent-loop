@@ -146,6 +146,58 @@ process.stdin.on("end", () => {
   return commandPathForScript(scriptPath, "fake-codex-jsonl-fallback");
 }
 
+function fakeCodexWithSessionState(capturePath: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-session-state-test-"));
+  const scriptPath = join(dir, "fake-codex-session-state.mjs");
+  writeFileSync(
+    scriptPath,
+    `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+const capturePath = ${JSON.stringify(capturePath)};
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { stdin += chunk; });
+process.stdin.on("end", () => {
+  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
+  process.stdout.write(JSON.stringify({ type: "session.started", session_id: "codex-session-1", cwd: "C:/work" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "agent_message", message: "session answer" }) + "\\n");
+});
+`,
+  );
+  chmodSync(scriptPath, 0o755);
+  return commandPathForScript(scriptPath, "fake-codex-session-state");
+}
+
+function fakeCodexWithResume(capturePath: string, options: { failResume?: boolean } = {}): string {
+  const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-resume-test-"));
+  const scriptPath = join(dir, "fake-codex-resume.mjs");
+  writeFileSync(
+    scriptPath,
+    `#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const capturePath = ${JSON.stringify(capturePath)};
+const failResume = ${JSON.stringify(options.failResume === true)};
+const args = process.argv.slice(2);
+const attempts = existsSync(capturePath) ? JSON.parse(readFileSync(capturePath, "utf8")) : [];
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { stdin += chunk; });
+process.stdin.on("end", () => {
+  attempts.push({ args, stdin });
+  writeFileSync(capturePath, JSON.stringify(attempts));
+  if (failResume && args.includes("resume")) {
+    process.stderr.write("unknown session codex-session-1");
+    process.exit(2);
+  }
+  process.stdout.write(JSON.stringify({ type: "session.started", session_id: "codex-session-1", cwd: "C:/work" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "agent_message", message: args.includes("resume") ? "resumed answer" : "fallback answer" }) + "\\n");
+});
+`,
+  );
+  chmodSync(scriptPath, 0o755);
+  return commandPathForScript(scriptPath, "fake-codex-resume");
+}
+
 /** Like fakeCodex, but also writes `progressText` to stdout before the final-message file. */
 function fakeCodexWithStdoutProgress(progressText: string, response: string): string {
   const dir = mkdtempSync(join(tmpdir(), "auto-agent-codex-progress-test-"));
@@ -331,6 +383,142 @@ test("provider builds Codex JSONL exec args with stdin prompt and optional confi
       assert.equal(modelIndex, -1);
     }
   }
+});
+
+test("provider returns Codex session params from session start JSONL", async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-session-state-cap-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodexWithSessionState(capturePath),
+      modelLabel: "gpt-5-codex",
+      timeoutMs: 10_000,
+    },
+  });
+
+  const output = await provider.complete(input);
+
+  assert.equal(output.text, "session answer");
+  assert.deepEqual(output.conversationState, {
+    provider: "codex-cli",
+    sessionId: "codex-session-1",
+    cwd: "C:/work",
+    modelLabel: "gpt-5-codex",
+    invocation: { json: true, resumeUsed: false, fallbackReason: undefined },
+    capabilities: {
+      trueResume: true,
+      continuationFallback: true,
+      managedHome: false,
+      jsonlEvents: true,
+    },
+  });
+});
+
+test("provider resumes a known Codex session when capability metadata permits it", async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-resume-cap-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodexWithResume(capturePath),
+      modelLabel: "gpt-5-codex",
+      timeoutMs: 10_000,
+    },
+  });
+
+  const output = await provider.complete({
+    ...input,
+    conversationState: {
+      provider: "codex-cli",
+      sessionId: "codex-session-1",
+      cwd: "C:/work",
+      modelLabel: "gpt-5-codex",
+      invocation: { json: true, resumeUsed: false },
+      capabilities: {
+        trueResume: true,
+        continuationFallback: true,
+        managedHome: false,
+        jsonlEvents: true,
+      },
+    },
+  });
+
+  const attempts = JSON.parse(readFileSync(capturePath, "utf8")) as Array<{ args: string[]; stdin: string }>;
+  assert.equal(output.text, "resumed answer");
+  assert.deepEqual(attempts.map((attempt) => attempt.args.slice(-3)), [["resume", "codex-session-1", "-"]]);
+  assert.equal((output.conversationState as { invocation?: { resumeUsed?: boolean } }).invocation?.resumeUsed, true);
+});
+
+test("provider falls back to fresh continuation when resume is unsupported or unknown", async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-resume-fallback-cap-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodexWithResume(capturePath, { failResume: true }),
+      modelLabel: "gpt-5-codex",
+      timeoutMs: 10_000,
+    },
+  });
+  const observations: AgentObservation[] = [];
+
+  const output = await provider.complete({
+    ...input,
+    conversationState: {
+      provider: "codex-cli",
+      sessionId: "codex-session-1",
+      cwd: "C:/work",
+      modelLabel: "gpt-5-codex",
+      invocation: { json: true, resumeUsed: false },
+      capabilities: {
+        trueResume: true,
+        continuationFallback: true,
+        managedHome: false,
+        jsonlEvents: true,
+      },
+    },
+    onProgress: (progress) => {
+      if (typeof progress !== "string") observations.push(progress);
+    },
+  });
+
+  const attempts = JSON.parse(readFileSync(capturePath, "utf8")) as Array<{ args: string[]; stdin: string }>;
+  assert.equal(output.text, "fallback answer");
+  assert.equal(attempts.length, 2);
+  assert.ok(attempts[0]?.args.includes("resume"));
+  assert.equal(attempts[1]?.args.includes("resume"), false);
+  assert.match(
+    (output.conversationState as { invocation?: { fallbackReason?: string } }).invocation?.fallbackReason ?? "",
+    /resume was unavailable/i,
+  );
+  assert.match(observations[0]?.message ?? "", /fresh continuation/i);
+});
+
+test("provider skips resume when capability metadata says true resume is unavailable", async () => {
+  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-no-resume-cap-")), "cap.json");
+  const provider = createCodexCliProvider({
+    config: {
+      commandPath: fakeCodexWithResume(capturePath),
+      modelLabel: "gpt-5-codex",
+      timeoutMs: 10_000,
+    },
+  });
+
+  await provider.complete({
+    ...input,
+    conversationState: {
+      provider: "codex-cli",
+      sessionId: "codex-session-1",
+      cwd: "C:/work",
+      modelLabel: "gpt-5-codex",
+      invocation: { json: true, resumeUsed: false },
+      capabilities: {
+        trueResume: false,
+        continuationFallback: true,
+        managedHome: false,
+        jsonlEvents: true,
+      },
+    },
+  });
+
+  const attempts = JSON.parse(readFileSync(capturePath, "utf8")) as Array<{ args: string[] }>;
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0]?.args.includes("resume"), false);
 });
 
 test("provider uses last-message output when JSONL has no final agent message", async () => {

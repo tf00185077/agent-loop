@@ -52,6 +52,7 @@ test("parses Codex JSONL lifecycle command message error and unknown lines from 
     source: "jsonl",
     rawEventType: "thread.started",
   });
+  assert.deepEqual(results[0]?.session, { sessionId: "thread-1" });
   assert.deepEqual(results[2]?.observations[0]?.command, {
     label: "npm test",
     status: "started",

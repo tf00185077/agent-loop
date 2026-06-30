@@ -4,6 +4,12 @@ export interface CodexJsonlParsedResult {
   observations: AgentObservation[];
   finalMessage?: string;
   errorMessage?: string;
+  session?: CodexJsonlSessionIdentity;
+}
+
+export interface CodexJsonlSessionIdentity {
+  sessionId: string;
+  cwd?: string;
 }
 
 export interface CodexJsonlParser {
@@ -57,6 +63,7 @@ function observationFromEvent(
   value: Record<string, unknown>,
 ): CodexJsonlParsedResult | null {
   if (rawEventType === "thread.started" || rawEventType === "turn.started") {
+    const session = sessionIdentityFromEvent(value);
     return {
       observations: [
         {
@@ -65,6 +72,21 @@ function observationFromEvent(
           metadata: jsonlMetadata(rawEventType),
         },
       ],
+      session,
+    };
+  }
+
+  if (rawEventType === "session.started") {
+    const session = sessionIdentityFromEvent(value);
+    return {
+      observations: [
+        {
+          kind: "progress",
+          message: "Codex session started",
+          metadata: jsonlMetadata(rawEventType),
+        },
+      ],
+      session,
     };
   }
 
@@ -158,6 +180,17 @@ function jsonlMetadata(rawEventType: string): AgentObservation["metadata"] {
 
 function commandLabel(item: Record<string, unknown>): string | undefined {
   return stringValue(item.command ?? item.cmd ?? item.label);
+}
+
+function sessionIdentityFromEvent(value: Record<string, unknown>): CodexJsonlSessionIdentity | undefined {
+  const sessionId = stringValue(
+    value.session_id ?? value.sessionId ?? value.thread_id ?? value.threadId ?? value.id,
+  );
+  if (!sessionId) return undefined;
+  return pruneUndefined({
+    sessionId,
+    cwd: stringValue(value.cwd),
+  });
 }
 
 function tail(value: string | undefined, maxLength = 500): string | undefined {
