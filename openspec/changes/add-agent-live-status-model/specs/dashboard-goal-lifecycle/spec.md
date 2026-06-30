@@ -1,22 +1,22 @@
 ## ADDED Requirements
 
-### Requirement: Dashboard shows compact live status
+### Requirement: Dashboard shows minimal live status
 The dashboard SHALL show a compact current activity status for a goal in addition to the durable event timeline.
 
 #### Scenario: Active run has current activity
-- **WHEN** a goal detail view is open for a running goal with observation activity
+- **WHEN** a goal detail view is open for a running goal with runtime activity
 - **THEN** the dashboard displays the current state, last activity, provider/model when known, and safe activity summary
 
-#### Scenario: Active run is stalled
-- **WHEN** the derived live status indicates no recent activity or stalled work
-- **THEN** the dashboard displays a visible stalled or quiet-running indication without requiring the user to inspect raw timeline events
+#### Scenario: Supervisor waits on child
+- **WHEN** the derived live status indicates `waiting_child`
+- **THEN** the dashboard displays that the supervisor is waiting for child work instead of requiring the user to infer it from raw timeline events
 
 #### Scenario: Goal reaches terminal state
-- **WHEN** a streamed or snapshot event indicates completion, failure, or blocked state
+- **WHEN** a snapshot or event indicates completion, failure, blocked, or cancellation state
 - **THEN** the dashboard updates the compact live status to the terminal state
 
 ### Requirement: Dashboard status tolerates partial metadata
-The dashboard SHALL render live status when optional future orchestration metadata is absent or incomplete.
+The dashboard SHALL render minimal live status when optional orchestration metadata is absent or incomplete.
 
 #### Scenario: Single-agent status has no parent
 - **WHEN** live status includes provider/model but no agent id, parent agent id, or task id

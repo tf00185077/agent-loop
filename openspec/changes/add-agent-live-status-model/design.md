@@ -1,24 +1,24 @@
 ## Context
 
-`add-agent-observability-event-layer` creates durable, sanitized observation events for provider progress, command lifecycle, liveness, failures, and future agent/task metadata. That gives the system facts, but the dashboard still needs a compact derived view so users can tell whether work is active, quiet, waiting, stalled, or terminal without reading every event.
+Durable events give auto-agent an audit trail, but the MVP delegation loop also needs a small derived status so the dashboard can show whether the supervisor is running, waiting on a child, continuing, completed, failed, or blocked. The goal is a simple status summary, not a full live-operations dashboard.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Derive a stable live status view from durable events in timeline order.
+- Derive a stable minimal live status view from durable events in timeline order.
 - Make status reconstructable after refresh, reconnect, or backend restart.
-- Provide enough state for a dashboard summary: current state, safe summary, last activity, current command, current task, provider/model, and optional agent/task identifiers.
-- Represent waiting and blocked causes when safe observation metadata is available.
-- Keep the model useful for both current single-agent runs and future subagent runs.
+- Provide enough state for a dashboard summary: current state, safe summary, last activity, provider/model, and optional agent/task identifiers.
+- Represent the MVP delegation states introduced by managed child sessions.
 
 **Non-Goals:**
 
 - Do not add a multi-agent tree UI in this change.
 - Do not implement a main-agent/subagent scheduler.
+- Do not add rich stalled/no-recent-activity policy in the MVP.
 - Do not attach the dashboard directly to provider stdout/stderr.
 - Do not persist raw provider payloads or derive status from unsanitized output.
-- Do not require every provider to emit identical rich observations.
+- Do not require SSE-specific behavior to prove the status model.
 
 ## Decisions
 
@@ -26,37 +26,28 @@
 
    The status reducer will consume the same persisted events used by the timeline. This keeps refresh/reconnect behavior deterministic and avoids separate live-only semantics.
 
-2. Treat live status as a view model.
+2. Treat live status as a minimal view model.
 
-   The reducer should not replace event history. It creates a compact view with fields such as `state`, `lastActivityAt`, `currentCommand`, `currentTask`, `summary`, `provider`, `model`, `agentId`, `agentRole`, `parentAgentId`, and `taskId`.
+   The reducer should not replace event history. It creates a compact view with fields such as `state`, `lastActivityAt`, `summary`, `provider`, `model`, `agentId`, `agentRole`, `parentAgentId`, and `taskId`.
 
-3. Use configurable stale thresholds.
+3. Prefer control-plane states over free-form parsing.
 
-   A run can become `stalled` when no recent activity has been observed for a configured interval and no terminal event has arrived. This avoids filling the durable timeline with repetitive heartbeat events just to keep the UI fresh.
+   Managed-session and delegation events should drive states such as waiting on child, continuing, cancelled, failed, and completed. Plain progress messages can update last activity and summary, but should not require brittle string parsing.
 
-4. Prefer semantic states over message parsing.
-
-   Command, heartbeat, waiting, failure, and timeout observations should drive status directly. Plain progress messages can update last activity and summary, but should not require brittle string parsing.
-
-5. Keep multi-agent support optional.
+4. Keep future orchestration metadata optional.
 
    Agent and task metadata should be carried through the status model when present, but single-agent runs must work cleanly without parent or task identifiers.
 
-6. Prefer runtime-control session events for control state.
-
-   When `add-agent-runtime-control-plane` is present, lifecycle state, waiting-for-approval, cancellation, and adapter-loss status should come from managed session/runtime events and session snapshots. Observation events remain the source for current activity summaries such as command progress, task labels, provider/model metadata, and heartbeat-derived liveness. The reducer should not infer approval or cancellation state from free-form provider output when control-plane metadata is available.
-
 ## Risks / Trade-offs
 
-- [Risk] Status can disagree with timeline if reducer rules are ambiguous. -> Mitigation: keep reducer deterministic and test event sequences explicitly.
-- [Risk] Stalled detection can be noisy. -> Mitigation: make thresholds configurable and only mark stalled for active non-terminal runs.
-- [Risk] Providers emit partial metadata. -> Mitigation: tolerate missing optional fields and fall back to goal/run-level status.
-- [Risk] Safe summaries can leak if derived from raw output. -> Mitigation: only consume sanitized event messages/data.
+- [Status can disagree with timeline if reducer rules are ambiguous] -> Keep reducer deterministic and test event sequences explicitly.
+- [Minimal status may not explain every stall] -> Defer rich stalled diagnostics until the MVP loop is working.
+- [Providers emit partial metadata] -> Tolerate missing optional fields and fall back to goal/run-level status.
+- [Safe summaries can leak if derived from raw output] -> Only consume sanitized event messages/data.
 
 ## Migration Plan
 
-1. Complete `add-agent-observability-event-layer`.
-2. Define the live status view model and reducer tests.
-3. Expose derived status through backend goal detail or a goal-scoped status endpoint.
-4. Render compact status in the dashboard and update it from streamed events.
-5. Keep multi-agent tree rendering for the later `add-multi-agent-run-tree` change.
+1. Define the minimal live status view model and reducer tests.
+2. Expose derived status through backend goal detail or a goal-scoped status endpoint.
+3. Render compact status in the dashboard.
+4. Keep multi-agent tree rendering and rich live telemetry for future changes.

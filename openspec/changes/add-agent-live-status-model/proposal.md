@@ -1,27 +1,26 @@
 ## Why
 
-After agent observation events exist, users still need a compact answer to "what is happening right now?" A raw event timeline can prove activity, but it forces users to infer whether a Codex or Claude-backed run is running, waiting, stalled, failed, or simply quiet.
+The MVP delegation loop needs a compact answer to "what is happening right now?" without requiring users to infer supervisor, child, and review/merge state from raw events. This change keeps the status model minimal so it supports the MVP without becoming a full multi-agent dashboard project.
 
 ## What Changes
 
-- Add a live status model derived from durable goal events and agent observation events.
-- Derive current state such as running, idle, waiting, stalled, completed, failed, blocked, and unknown.
-- Track safe current activity fields including last activity time, current command, current task, provider/model, agent role/id, parent agent id, task id, and status summary.
+- Add a minimal live status model derived from durable goal, run, and agent events.
+- Derive current state such as running, waiting on child, continuing, completed, failed, blocked, and unknown.
+- Track safe current activity fields including last activity time, provider/model, agent role/id, parent agent id, task id, and status summary when available.
 - Expose the derived status through the backend so refresh/reconnect uses durable history as the source of truth.
-- Render compact live status in the dashboard above or near the event timeline.
-- Keep heartbeat noise out of the primary user experience by deriving liveness from events instead of requiring every heartbeat to be shown as a major timeline item.
-- Do not implement multi-agent tree rendering or subagent scheduling in this change.
+- Render a compact status in the dashboard near the event timeline.
+- Defer rich stalled detection, SSE-specific live updates, full command/task activity modeling, browser-only verification, and multi-agent tree rendering to future work.
 
 ## Capabilities
 
 ### New Capabilities
-- `agent-live-status`: Defines how durable agent observations are reduced into current agent/run status for backend APIs and dashboard display.
+- `agent-live-status`: Defines how durable agent events are reduced into a minimal current status for backend APIs and dashboard display.
 
 ### Modified Capabilities
-- `dashboard-goal-lifecycle`: The dashboard SHALL show derived current activity for a goal in addition to the durable event timeline.
+- `dashboard-goal-lifecycle`: The dashboard SHALL show minimal derived current activity for a goal in addition to the durable event timeline.
 
 ## Impact
 
-- Affects domain/view-model code for event-to-status reduction, backend goal status APIs or response shapes, dashboard goal detail rendering, and tests.
-- Depends on `add-agent-observability-event-layer` being complete so structured observation events are available.
-- Adds no new provider execution path, credential storage, scheduler, distributed worker pool, or multi-agent orchestration.
+- Affects domain/view-model code for event-to-status reduction, backend goal response shape or status endpoint, dashboard goal detail rendering, and focused tests.
+- Depends on durable, sanitized events being available.
+- Adds no provider execution path, scheduler, distributed worker pool, multi-agent run tree, or rich live telemetry.

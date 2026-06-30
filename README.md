@@ -141,6 +141,66 @@ shows one of the provider states (`Codex CLI detected`, `Codex CLI not found`,
 `Codex Local connected`, `Codex login required`, `Network failure`, or
 `Command failed`) with short guidance for the next action.
 
+## Direction: Managed Agent Control Plane
+
+Codex is the first reference adapter for early development because it is the
+most concrete local provider available right now. This is a convergence choice,
+not the final product boundary: auto-agent should keep a provider adapter model
+so other commercial model adapters can be added after the core workflow is
+stable.
+
+The current direction is split across two OpenSpec changes:
+
+- `add-managed-delegation-continuations` defines the product/control-plane
+  behavior for supervised child agents.
+- `harden-codex-managed-runtime` strengthens the Codex adapter using lessons
+  from Paperclip-style Codex execution.
+
+Direction anchors:
+
+- The backend owns spawn, workspace creation, persistence, merge checkpoints,
+  and other side effects. Agents emit structured intent; the backend decides
+  whether and how to execute it.
+- The v1 delegation transport can be a tool-shaped structured control block in
+  provider output. It should map cleanly to MCP/tool/API transport later, but
+  the first version does not depend on Codex exposing stable custom tools.
+- v1 allows one active child at a time and maximum depth one.
+- `worker` children run in an isolated git worktree with read/write access only
+  inside that worktree.
+- Child success, failure, timeout, and cancellation return to the supervisor as
+  observations. They do not automatically fail the parent goal.
+- If the supervisor is cancelled or terminal while a child is running, the child
+  is allowed to finish; late results are stored as detached/ignored instead of
+  force-cancelling a process that may be writing files.
+- The supervisor decides when to spawn a dedicated `review_merge` child.
+- `review_merge` may apply/revert changes in the supervisor workspace, must run
+  the configured fixed test command, and reports explicit outcomes such as
+  `merged`, `conflict`, `test_failed_reverted`, or `verification_failed`.
+- Paperclip is a reference for robust Codex session handling, resume fallback,
+  managed runtime home, JSONL parsing, and diagnostics. auto-agent should not
+  copy Paperclip's broader organization/remote workspace model until the local
+  goal-driven control plane needs it.
+
+### Post-MVP Priority Todo
+
+After the MVP supervisor/child/review-merge loop works end to end, revisit
+these items in roughly this order:
+
+- Reintroduce a focused multi-agent run tree change once the MVP has real
+  parent/child session records. Start with the single-child/depth-one case,
+  then add parallel children and nested relationships later.
+- Expand live status beyond the MVP summary to include rich stalled detection,
+  current command/task tracking, streamed/SSE updates, and browser verification
+  for long-running provider runs.
+- Harden Codex runtime isolation with managed `CODEX_HOME`, output inactivity
+  diagnostics, usage parsing, optional search/reasoning/extra-argument support,
+  and Paperclip-style runtime environment controls.
+- Revisit delegated authority/approval as a separate post-MVP capability for
+  just-in-time permission grants, user approve/reject flows, and
+  restart-as-continuation after authority approval.
+- Explore true MCP/tool transport for delegation control events once the
+  structured-control-block MVP is stable across providers.
+
 ### MVP API
 
 The first slice exposes only the endpoints the demo path needs:
