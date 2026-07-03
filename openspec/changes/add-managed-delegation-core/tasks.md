@@ -31,10 +31,10 @@
 
 ## 5. API and Dashboard Observability
 
-- [ ] 5.1 Extend backend goal/session snapshot APIs with delegation tree and basic child outcome read models.
-- [ ] 5.2 Render child session role, status, parent relation, safe summary, and final outcome in the dashboard.
-- [ ] 5.3 Refresh dashboard managed-session snapshots on delegation lifecycle events.
-- [ ] 5.4 Add API/UI tests for active child state, child result state, detached result state, and continuation-started display.
+- [x] 5.1 Extend backend goal/session snapshot APIs with delegation tree and basic child outcome read models.
+- [x] 5.2 Render child session role, status, parent relation, safe summary, and final outcome in the dashboard.
+- [x] 5.3 Refresh dashboard managed-session snapshots on delegation lifecycle events.
+- [x] 5.4 Add API/UI tests for active child state, child result state, detached result state, and continuation-started display.
 
 ## 6. Verification and Documentation
 

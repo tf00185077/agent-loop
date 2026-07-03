@@ -81,6 +81,48 @@ test("goal detail hides cancel control when cancellation is unsupported", () => 
   assert.equal(html.includes("Cancel session"), false);
 });
 
+test("goal detail renders managed delegation tree state and outcomes", () => {
+  const snapshot = sessionSnapshot();
+  snapshot.session!.lifecycleState = "waiting_child";
+  snapshot.delegationRequests = [
+    {
+      id: "delegation-1",
+      parentSessionId: "session-1",
+      childSessionId: "session-child",
+      role: "worker",
+      status: "failed",
+      promptSummary: "Run focused tests.",
+      resultSummary: {
+        kind: "failure",
+        safeSummary: "Worker could not complete focused tests.",
+      },
+      detachedReason: null,
+      createdAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:01.000Z",
+      acceptedAt: "2026-07-03T00:00:00.000Z",
+      startedAt: "2026-07-03T00:00:01.000Z",
+      completedAt: "2026-07-03T00:00:02.000Z",
+    },
+  ];
+
+  const html = renderToStaticMarkup(
+    <GoalDetailPanel
+      goal={goal()}
+      latestMetadata={{ provider: "codex-local", model: "gpt-5-codex" }}
+      agentSessionSnapshot={snapshot}
+      starting={false}
+      onStart={() => undefined}
+    />,
+  );
+
+  assert.match(html, /waiting_child/);
+  assert.match(html, /worker/);
+  assert.match(html, /failed/);
+  assert.match(html, /session-child/);
+  assert.match(html, /Worker could not complete focused tests/);
+});
+
+
 function goal(): Goal {
   return {
     id: "goal-1",
@@ -141,5 +183,6 @@ function sessionSnapshot(): AgentSessionSnapshot {
       },
     ],
     childSessionRequests: [],
+    delegationRequests: [],
   };
 }

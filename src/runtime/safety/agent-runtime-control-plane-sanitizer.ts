@@ -3,6 +3,7 @@ import type {
   AgentRuntimeChildSessionRequest,
   AgentRuntimeCommandDiagnostics,
   AgentRuntimeCommandRecord,
+  AgentRuntimeDelegationRequest,
   AgentRuntimeSession,
 } from "../../domain/index.js";
 import { sanitizeProcessOutput } from "./process-output-sanitizer.js";
@@ -60,6 +61,23 @@ export function sanitizeAgentRuntimeChildSessionRequest(
     ...request,
     promptSummary: sanitizeControlPlaneText(request.promptSummary),
     safeReason: sanitizeNullableText(request.safeReason),
+  };
+}
+
+export function sanitizeAgentRuntimeDelegationRequest(
+  request: AgentRuntimeDelegationRequest,
+): AgentRuntimeDelegationRequest {
+  return {
+    ...request,
+    promptSummary: sanitizeControlPlaneText(request.promptSummary),
+    detachedReason: sanitizeNullableText(request.detachedReason),
+    resultSummary: request.resultSummary
+      ? {
+          ...request.resultSummary,
+          safeSummary: sanitizeControlPlaneText(request.resultSummary.safeSummary),
+          safeDetails: sanitizeNullableText(request.resultSummary.safeDetails),
+        }
+      : null,
   };
 }
 

@@ -229,6 +229,25 @@ export function GoalDetailPanel({
               </tbody>
             </table>
           )}
+
+          {(agentSessionSnapshot?.delegationRequests.length ?? 0) > 0 && (
+            <table style={{ borderCollapse: "collapse", fontSize: 14, marginTop: 12 }}>
+              <tbody>
+                {agentSessionSnapshot?.delegationRequests.map((request) => (
+                  <tr key={request.id}>
+                    <td style={{ paddingRight: 16, paddingBottom: 4 }}>{request.role}</td>
+                    <td style={{ paddingRight: 16, paddingBottom: 4 }}>{request.status}</td>
+                    <td style={{ paddingRight: 16, paddingBottom: 4 }}>
+                      {request.childSessionId ? `child ${request.childSessionId}` : "child pending"}
+                    </td>
+                    <td style={{ paddingBottom: 4 }}>
+                      {request.resultSummary?.safeSummary ?? request.promptSummary}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </section>
       )}
     </div>

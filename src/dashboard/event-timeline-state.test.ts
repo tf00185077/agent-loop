@@ -43,7 +43,11 @@ test("isAgentSessionRefreshEvent uses durable session metadata rather than provi
     true,
   );
   assert.equal(
-    isAgentSessionRefreshEvent(event("e4", "agent.progress", { rawPayload: "provider stdout" })),
+    isAgentSessionRefreshEvent(event("e4", "agent.progress", { runtimeEventType: "delegation.completed" })),
+    true,
+  );
+  assert.equal(
+    isAgentSessionRefreshEvent(event("e5", "agent.progress", { rawPayload: "provider stdout" })),
     false,
   );
 });

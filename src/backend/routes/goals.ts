@@ -14,6 +14,7 @@ import type {
 import {
   sanitizeAgentRuntimeApprovalRequest,
   sanitizeAgentRuntimeChildSessionRequest,
+  sanitizeAgentRuntimeDelegationRequest,
   sanitizeAgentRuntimeSession,
 } from "../../runtime/safety/agent-runtime-control-plane-sanitizer.js";
 
@@ -126,6 +127,7 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
       }
 
       const session = agentSessionRepo.listSessionsForGoal(goal.id).at(-1) ?? null;
+      const sessions = agentSessionRepo.listSessionsForGoal(goal.id);
       res.json({
         session: session ? sanitizeAgentRuntimeSession(session) : null,
         approvals: session
@@ -136,6 +138,11 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
               .listChildSessionRequests(session.id)
               .map(sanitizeAgentRuntimeChildSessionRequest)
           : [],
+        delegationRequests: sessions.flatMap((managedSession) =>
+          agentSessionRepo
+            .listDelegationRequests(managedSession.id)
+            .map(sanitizeAgentRuntimeDelegationRequest),
+        ),
       });
     } catch (err) {
       next(err);

@@ -1,6 +1,7 @@
 import type {
   AgentRuntimeApprovalRequest,
   AgentRuntimeChildSessionRequest,
+  AgentRuntimeDelegationRequest,
   AgentRuntimeSession,
 } from "../domain/index.js";
 
@@ -34,6 +35,7 @@ export interface AgentSessionSnapshot {
   session: AgentRuntimeSession | null;
   approvals: AgentRuntimeApprovalRequest[];
   childSessionRequests: AgentRuntimeChildSessionRequest[];
+  delegationRequests: AgentRuntimeDelegationRequest[];
 }
 
 export type ProviderConnectionState =
