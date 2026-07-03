@@ -1,10 +1,10 @@
 ## 1. Domain and Persistence Contracts
 
-- [ ] 1.1 Add domain types for delegation role, request status, child outcome, detached/ignored result state, and safe result summary.
-- [ ] 1.2 Add persistence schema for durable delegation requests/claims linked to parent and child sessions.
-- [ ] 1.3 Add repository methods for creating, accepting, rejecting, starting, completing, failing, cancelling, timing out, detaching, and ignoring delegation requests.
-- [ ] 1.4 Add durable event payload types for delegation accepted, rejected, started, completed, failed, cancelled, timed out, detached, ignored, waiting-child, and continuation-started.
-- [ ] 1.5 Add unit tests for allowed state transitions, rejected transitions, one-active-child enforcement, and max-depth enforcement.
+- [x] 1.1 Add domain types for delegation role, request status, child outcome, detached/ignored result state, and safe result summary.
+- [x] 1.2 Add persistence schema for durable delegation requests/claims linked to parent and child sessions.
+- [x] 1.3 Add repository methods for creating, accepting, rejecting, starting, completing, failing, cancelling, timing out, detaching, and ignoring delegation requests.
+- [x] 1.4 Add durable event payload types for delegation accepted, rejected, started, completed, failed, cancelled, timed out, detached, ignored, waiting-child, and continuation-started.
+- [x] 1.5 Add unit tests for allowed state transitions, rejected transitions, one-active-child enforcement, and max-depth enforcement.
 
 ## 2. Control Event Parsing and Validation
 

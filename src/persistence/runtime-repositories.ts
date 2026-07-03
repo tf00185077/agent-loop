@@ -9,6 +9,10 @@ import type {
   AgentRuntimeCommandDiagnostics,
   AgentRuntimeCommandRecord,
   AgentRuntimeCommandStatus,
+  AgentRuntimeDelegationRequest,
+  AgentRuntimeDelegationRequestStatus,
+  AgentRuntimeDelegationRole,
+  AgentRuntimeDelegationSummary,
   AgentRuntimeSession,
   AgentRuntimeSessionParent,
   AgentSessionLifecycleState,
@@ -72,6 +76,12 @@ export interface CreateAgentRuntimeChildSessionRequestInput {
   safeReason?: string | null;
 }
 
+export interface CreateAgentRuntimeDelegationRequestInput {
+  parentSessionId: string;
+  role: AgentRuntimeDelegationRole;
+  promptSummary: string;
+}
+
 export interface AgentSessionRepositoryOptions {
   now?: () => string;
 }
@@ -92,6 +102,17 @@ export interface AgentSessionRepository {
   listApprovalRequests(sessionId: string): AgentRuntimeApprovalRequest[];
   recordChildSessionRequest(input: CreateAgentRuntimeChildSessionRequestInput): AgentRuntimeChildSessionRequest;
   listChildSessionRequests(parentSessionId: string): AgentRuntimeChildSessionRequest[];
+  createDelegationRequest(input: CreateAgentRuntimeDelegationRequestInput): AgentRuntimeDelegationRequest;
+  acceptDelegationRequest(id: string): AgentRuntimeDelegationRequest;
+  rejectDelegationRequest(id: string, safeReason: string): AgentRuntimeDelegationRequest;
+  startDelegationRequest(id: string, childSessionId: string): AgentRuntimeDelegationRequest;
+  completeDelegationRequest(id: string, summary: AgentRuntimeDelegationSummary): AgentRuntimeDelegationRequest;
+  failDelegationRequest(id: string, summary: AgentRuntimeDelegationSummary): AgentRuntimeDelegationRequest;
+  cancelDelegationRequest(id: string, summary: AgentRuntimeDelegationSummary): AgentRuntimeDelegationRequest;
+  timeOutDelegationRequest(id: string, summary: AgentRuntimeDelegationSummary): AgentRuntimeDelegationRequest;
+  detachDelegationRequest(id: string, summary: AgentRuntimeDelegationSummary, reason: string): AgentRuntimeDelegationRequest;
+  ignoreDelegationRequest(id: string, summary: AgentRuntimeDelegationSummary, reason: string): AgentRuntimeDelegationRequest;
+  listDelegationRequests(parentSessionId: string): AgentRuntimeDelegationRequest[];
 }
 
 export function createRunRepository(db: AppDatabase): RunRepository {
@@ -500,6 +521,137 @@ export function createAgentSessionRepository(
         .all(parentSessionId)
         .map(mapAgentRuntimeChildSessionRequestRow);
     },
+
+    createDelegationRequest(input) {
+      const parent = this.getSession(input.parentSessionId);
+      if (!parent) {
+        throw new Error(`Agent session not found: ${input.parentSessionId}`);
+      }
+      if (parent.parent?.sessionId) {
+        throw new Error("Maximum delegation depth reached for managed delegation requests.");
+      }
+      if (findActiveDelegationForParent(db, input.parentSessionId)) {
+        throw new Error("Supervisor already has an active delegation request.");
+      }
+
+      const now = clock();
+      const request: AgentRuntimeDelegationRequest = {
+        id: randomUUID(),
+        parentSessionId: input.parentSessionId,
+        childSessionId: null,
+        role: input.role,
+        status: "requested",
+        promptSummary: input.promptSummary,
+        resultSummary: null,
+        detachedReason: null,
+        createdAt: now,
+        updatedAt: now,
+        acceptedAt: null,
+        startedAt: null,
+        completedAt: null,
+      };
+
+      db.prepare(`
+        INSERT INTO agent_delegation_requests (
+          id,
+          parent_session_id,
+          child_session_id,
+          role,
+          status,
+          prompt_summary,
+          result_summary,
+          detached_reason,
+          created_at,
+          updated_at,
+          accepted_at,
+          started_at,
+          completed_at
+        )
+        VALUES (
+          @id,
+          @parentSessionId,
+          @childSessionId,
+          @role,
+          @status,
+          @promptSummary,
+          @resultSummary,
+          @detachedReason,
+          @createdAt,
+          @updatedAt,
+          @acceptedAt,
+          @startedAt,
+          @completedAt
+        )
+      `).run({
+        ...request,
+        resultSummary: null,
+      });
+      touchSession(input.parentSessionId);
+
+      return request;
+    },
+
+    acceptDelegationRequest(id) {
+      return updateDelegationRequest(db, id, ["requested"], {
+        status: "accepted",
+        acceptedAt: clock(),
+        updatedAt: clock(),
+      });
+    },
+
+    rejectDelegationRequest(id, safeReason) {
+      const now = clock();
+      return updateDelegationRequest(db, id, ["requested"], {
+        status: "rejected",
+        resultSummary: { kind: "failure", safeSummary: safeReason },
+        completedAt: now,
+        updatedAt: now,
+      });
+    },
+
+    startDelegationRequest(id, childSessionId) {
+      if (!this.getSession(childSessionId)) {
+        throw new Error(`Agent session not found: ${childSessionId}`);
+      }
+      const now = clock();
+      return updateDelegationRequest(db, id, ["accepted"], {
+        status: "running",
+        childSessionId,
+        startedAt: now,
+        updatedAt: now,
+      });
+    },
+
+    completeDelegationRequest(id, summary) {
+      return terminalDelegationUpdate(db, id, "completed", summary, clock());
+    },
+
+    failDelegationRequest(id, summary) {
+      return terminalDelegationUpdate(db, id, "failed", summary, clock());
+    },
+
+    cancelDelegationRequest(id, summary) {
+      return terminalDelegationUpdate(db, id, "cancelled", summary, clock());
+    },
+
+    timeOutDelegationRequest(id, summary) {
+      return terminalDelegationUpdate(db, id, "timed_out", summary, clock());
+    },
+
+    detachDelegationRequest(id, summary, reason) {
+      return terminalDelegationUpdate(db, id, "detached", summary, clock(), reason);
+    },
+
+    ignoreDelegationRequest(id, summary, reason) {
+      return terminalDelegationUpdate(db, id, "ignored", summary, clock(), reason);
+    },
+
+    listDelegationRequests(parentSessionId) {
+      return db
+        .prepare("SELECT * FROM agent_delegation_requests WHERE parent_session_id = ? ORDER BY created_at ASC, rowid ASC")
+        .all(parentSessionId)
+        .map(mapAgentRuntimeDelegationRequestRow);
+    },
   };
 }
 
@@ -632,5 +784,105 @@ function mapAgentRuntimeChildSessionRequestRow(row: unknown): AgentRuntimeChildS
     createdAt: value.created_at!,
     resolvedAt: value.resolved_at,
     safeReason: value.safe_reason,
+  };
+}
+
+const activeDelegationStatuses = ["requested", "accepted", "running"] satisfies AgentRuntimeDelegationRequestStatus[];
+
+function findActiveDelegationForParent(db: AppDatabase, parentSessionId: string): AgentRuntimeDelegationRequest | null {
+  const row = db
+    .prepare(
+      `SELECT * FROM agent_delegation_requests
+       WHERE parent_session_id = ?
+         AND status IN ('requested', 'accepted', 'running')
+       ORDER BY created_at ASC, rowid ASC
+       LIMIT 1`,
+    )
+    .get(parentSessionId);
+  return row ? mapAgentRuntimeDelegationRequestRow(row) : null;
+}
+
+function getDelegationRequestById(db: AppDatabase, id: string): AgentRuntimeDelegationRequest | null {
+  const row = db.prepare("SELECT * FROM agent_delegation_requests WHERE id = ?").get(id);
+  return row ? mapAgentRuntimeDelegationRequestRow(row) : null;
+}
+
+function updateDelegationRequest(
+  db: AppDatabase,
+  id: string,
+  allowedCurrentStatuses: AgentRuntimeDelegationRequestStatus[],
+  patch: Partial<AgentRuntimeDelegationRequest> & { status: AgentRuntimeDelegationRequestStatus; updatedAt: string },
+): AgentRuntimeDelegationRequest {
+  const existing = getDelegationRequestById(db, id);
+  if (!existing) {
+    throw new Error(`Delegation request not found: ${id}`);
+  }
+  if (!allowedCurrentStatuses.includes(existing.status)) {
+    throw new Error(`Cannot transition delegation request from ${existing.status} to ${patch.status}.`);
+  }
+
+  db.prepare(`
+    UPDATE agent_delegation_requests
+    SET child_session_id = ?,
+        status = ?,
+        result_summary = ?,
+        detached_reason = ?,
+        updated_at = ?,
+        accepted_at = ?,
+        started_at = ?,
+        completed_at = ?
+    WHERE id = ?
+  `).run(
+    patch.childSessionId === undefined ? existing.childSessionId : patch.childSessionId,
+    patch.status,
+    patch.resultSummary === undefined ? serializeDelegationSummary(existing.resultSummary) : serializeDelegationSummary(patch.resultSummary),
+    patch.detachedReason === undefined ? existing.detachedReason : patch.detachedReason,
+    patch.updatedAt,
+    patch.acceptedAt === undefined ? existing.acceptedAt : patch.acceptedAt,
+    patch.startedAt === undefined ? existing.startedAt : patch.startedAt,
+    patch.completedAt === undefined ? existing.completedAt : patch.completedAt,
+    id,
+  );
+
+  return getDelegationRequestById(db, id)!;
+}
+
+function terminalDelegationUpdate(
+  db: AppDatabase,
+  id: string,
+  status: Extract<AgentRuntimeDelegationRequestStatus, "completed" | "failed" | "cancelled" | "timed_out" | "detached" | "ignored">,
+  summary: AgentRuntimeDelegationSummary,
+  now: string,
+  detachedReason: string | null = null,
+): AgentRuntimeDelegationRequest {
+  return updateDelegationRequest(db, id, activeDelegationStatuses, {
+    status,
+    resultSummary: summary,
+    detachedReason,
+    updatedAt: now,
+    completedAt: now,
+  });
+}
+
+function serializeDelegationSummary(summary: AgentRuntimeDelegationSummary | null): string | null {
+  return summary ? JSON.stringify(summary) : null;
+}
+
+function mapAgentRuntimeDelegationRequestRow(row: unknown): AgentRuntimeDelegationRequest {
+  const value = row as Record<string, string | null>;
+  return {
+    id: value.id!,
+    parentSessionId: value.parent_session_id!,
+    childSessionId: value.child_session_id,
+    role: value.role as AgentRuntimeDelegationRole,
+    status: value.status as AgentRuntimeDelegationRequestStatus,
+    promptSummary: value.prompt_summary!,
+    resultSummary: value.result_summary ? (JSON.parse(value.result_summary) as AgentRuntimeDelegationSummary) : null,
+    detachedReason: value.detached_reason,
+    createdAt: value.created_at!,
+    updatedAt: value.updated_at!,
+    acceptedAt: value.accepted_at,
+    startedAt: value.started_at,
+    completedAt: value.completed_at,
   };
 }

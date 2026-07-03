@@ -134,6 +134,22 @@ function initializeSchema(db: AppDatabase): void {
       resolved_at TEXT,
       safe_reason TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS agent_delegation_requests (
+      id TEXT PRIMARY KEY,
+      parent_session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+      child_session_id TEXT REFERENCES agent_sessions(id),
+      role TEXT NOT NULL,
+      status TEXT NOT NULL,
+      prompt_summary TEXT NOT NULL,
+      result_summary TEXT,
+      detached_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      accepted_at TEXT,
+      started_at TEXT,
+      completed_at TEXT
+    );
   `);
 
   // Additive migration for databases created before claude-local support: the

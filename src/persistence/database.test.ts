@@ -28,6 +28,7 @@ test("initializes lifecycle and provider settings tables", () => {
 
   assert.deepEqual(tableNames(db), [
     "agent_child_session_requests",
+    "agent_delegation_requests",
     "agent_runtime_approvals",
     "agent_runtime_commands",
     "agent_sessions",
@@ -138,6 +139,21 @@ test("initializes lifecycle and provider settings tables", () => {
     "resolved_at",
     "safe_reason",
   ]);
+  assert.deepEqual(columnNames(db, "agent_delegation_requests"), [
+    "id",
+    "parent_session_id",
+    "child_session_id",
+    "role",
+    "status",
+    "prompt_summary",
+    "result_summary",
+    "detached_reason",
+    "created_at",
+    "updated_at",
+    "accepted_at",
+    "started_at",
+    "completed_at",
+  ]);
   assert.deepEqual(foreignKeys(db, "runs"), [{ from: "goal_id", table: "goals", to: "id" }]);
   assert.deepEqual(foreignKeys(db, "steps"), [
     { from: "run_id", table: "runs", to: "id" },
@@ -160,6 +176,10 @@ test("initializes lifecycle and provider settings tables", () => {
     { from: "session_id", table: "agent_sessions", to: "id" },
   ]);
   assert.deepEqual(foreignKeys(db, "agent_child_session_requests"), [
+    { from: "parent_session_id", table: "agent_sessions", to: "id" },
+  ]);
+  assert.deepEqual(foreignKeys(db, "agent_delegation_requests"), [
+    { from: "child_session_id", table: "agent_sessions", to: "id" },
     { from: "parent_session_id", table: "agent_sessions", to: "id" },
   ]);
 

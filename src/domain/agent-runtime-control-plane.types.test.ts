@@ -6,6 +6,9 @@ import {
   agentSessionLifecycleStates,
   approvalRequestStatuses,
   childSessionRequestStatuses,
+  delegationRequestStatuses,
+  delegationRoles,
+  delegationTerminalOutcomeTypes,
   commandRecordStatuses,
   type AgentRuntimeCapabilities,
   type AgentRuntimeCommandRecord,
@@ -13,6 +16,8 @@ import {
   type AgentRuntimeChildSessionRequest,
   type AgentRuntimeEvent,
   type AgentRuntimeSession,
+  type AgentRuntimeDelegationRequest,
+  type AgentRuntimeDelegationSummary,
 } from "./agent-runtime-control-plane.types.js";
 import {
   agentRuntimeCapabilityNames as publicAgentRuntimeCapabilityNames,
@@ -172,4 +177,58 @@ test("represents runtime events with session provider and optional control metad
   };
 
   assert.equal(event.metadata?.approvalRequestId, "approval-1");
+});
+
+test("represents durable managed delegation contracts", () => {
+  assert.deepEqual(delegationRoles, ["worker"]);
+  assert.deepEqual(delegationRequestStatuses, [
+    "requested",
+    "accepted",
+    "rejected",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "detached",
+    "ignored",
+  ]);
+  assert.deepEqual(delegationTerminalOutcomeTypes, ["success", "failure", "timeout", "cancelled"]);
+
+  const summary: AgentRuntimeDelegationSummary = {
+    kind: "failure",
+    safeSummary: "Worker could not complete npm test.",
+    safeDetails: "Exit code 1.",
+  };
+  const request: AgentRuntimeDelegationRequest = {
+    id: "delegation-1",
+    parentSessionId: "session-supervisor",
+    childSessionId: "session-worker",
+    role: "worker",
+    status: "failed",
+    promptSummary: "Run focused tests.",
+    resultSummary: summary,
+    detachedReason: null,
+    createdAt: "2026-07-03T00:00:00.000Z",
+    updatedAt: "2026-07-03T00:00:01.000Z",
+    acceptedAt: "2026-07-03T00:00:01.000Z",
+    startedAt: "2026-07-03T00:00:02.000Z",
+    completedAt: "2026-07-03T00:00:03.000Z",
+  };
+
+  const event: AgentRuntimeEvent = {
+    type: "delegation.failed",
+    sessionId: request.parentSessionId,
+    goalId: "goal-1",
+    runId: "run-1",
+    message: "Worker delegation failed.",
+    occurredAt: request.completedAt!,
+    metadata: {
+      delegationRequestId: request.id,
+      childSessionId: request.childSessionId!,
+    },
+  };
+
+  assert.equal(request.resultSummary?.kind, "failure");
+  assert.equal(event.metadata?.delegationRequestId, request.id);
 });

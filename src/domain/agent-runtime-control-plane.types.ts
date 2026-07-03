@@ -118,6 +118,51 @@ export interface AgentRuntimeChildSessionRequest {
   safeReason?: string | null;
 }
 
+export const delegationRoles = ["worker"] as const;
+
+export type AgentRuntimeDelegationRole = (typeof delegationRoles)[number];
+
+export const delegationRequestStatuses = [
+  "requested",
+  "accepted",
+  "rejected",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "detached",
+  "ignored",
+] as const;
+
+export type AgentRuntimeDelegationRequestStatus = (typeof delegationRequestStatuses)[number];
+
+export const delegationTerminalOutcomeTypes = ["success", "failure", "timeout", "cancelled"] as const;
+
+export type AgentRuntimeDelegationTerminalOutcome = (typeof delegationTerminalOutcomeTypes)[number];
+
+export interface AgentRuntimeDelegationSummary {
+  kind: AgentRuntimeDelegationTerminalOutcome;
+  safeSummary: string;
+  safeDetails?: string | null;
+}
+
+export interface AgentRuntimeDelegationRequest {
+  id: string;
+  parentSessionId: string;
+  childSessionId: string | null;
+  role: AgentRuntimeDelegationRole;
+  status: AgentRuntimeDelegationRequestStatus;
+  promptSummary: string;
+  resultSummary: AgentRuntimeDelegationSummary | null;
+  detachedReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  acceptedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
 export type AgentRuntimeEventType =
   | "session.started"
   | "session.state_changed"
@@ -129,6 +174,17 @@ export type AgentRuntimeEventType =
   | "approval.approved"
   | "approval.rejected"
   | "child_session.requested"
+  | "delegation.accepted"
+  | "delegation.rejected"
+  | "delegation.started"
+  | "delegation.completed"
+  | "delegation.failed"
+  | "delegation.cancelled"
+  | "delegation.timed_out"
+  | "delegation.detached"
+  | "delegation.ignored"
+  | "delegation.waiting_child"
+  | "delegation.continuation_started"
   | "session.completed"
   | "session.failed"
   | "session.cancelled";
@@ -139,6 +195,8 @@ export interface AgentRuntimeEventMetadata {
   commandId?: string;
   approvalRequestId?: string;
   childSessionRequestId?: string;
+  delegationRequestId?: string;
+  childSessionId?: string;
   agentId?: string;
   parentAgentId?: string;
   taskId?: string;

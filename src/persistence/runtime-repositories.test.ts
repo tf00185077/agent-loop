@@ -316,6 +316,153 @@ test("records child-session requests for future orchestration", () => {
   db.close();
 });
 
+test("records durable delegation request transitions and active child constraints", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({
+    title: "Delegation goal",
+    description: "Exercise managed delegation persistence.",
+  });
+  const run = createRunRepository(db).create({ goalId: goal.id, provider: "codex-local", model: "gpt-5-codex" });
+  const sessions = createAgentSessionRepository(db, {
+    now: fixedClock([
+      "2026-07-03T00:00:00.000Z",
+      "2026-07-03T00:00:01.000Z",
+      "2026-07-03T00:00:02.000Z",
+      "2026-07-03T00:00:03.000Z",
+      "2026-07-03T00:00:04.000Z",
+      "2026-07-03T00:00:05.000Z",
+      "2026-07-03T00:00:06.000Z",
+    ]),
+  });
+  const parent = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "running",
+    capabilities: {
+      eventStreaming: true,
+      approval: false,
+      cancellation: true,
+      resume: false,
+      childSessions: true,
+    },
+  });
+  const child = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "starting",
+    capabilities: {
+      eventStreaming: true,
+      approval: false,
+      cancellation: true,
+      resume: false,
+      childSessions: false,
+    },
+    parent: { sessionId: parent.id },
+  });
+
+  const requested = sessions.createDelegationRequest({
+    parentSessionId: parent.id,
+    role: "worker",
+    promptSummary: "Run focused persistence tests.",
+  });
+  const accepted = sessions.acceptDelegationRequest(requested.id);
+  const running = sessions.startDelegationRequest(accepted.id, child.id);
+
+  assert.equal(requested.status, "requested");
+  assert.equal(accepted.status, "accepted");
+  assert.equal(running.status, "running");
+  assert.equal(running.childSessionId, child.id);
+  assert.throws(
+    () =>
+      sessions.createDelegationRequest({
+        parentSessionId: parent.id,
+        role: "worker",
+        promptSummary: "Start a second worker.",
+      }),
+    /already has an active delegation/i,
+  );
+
+  const completed = sessions.completeDelegationRequest(running.id, {
+    kind: "success",
+    safeSummary: "Worker finished the tests.",
+  });
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.resultSummary?.kind, "success");
+  assert.deepEqual(sessions.listDelegationRequests(parent.id), [completed]);
+
+  db.close();
+});
+
+test("rejects invalid delegation transitions and nested child requests", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({
+    title: "Nested delegation goal",
+    description: "Exercise max-depth enforcement.",
+  });
+  const run = createRunRepository(db).create({ goalId: goal.id, provider: "codex-local", model: "gpt-5-codex" });
+  const sessions = createAgentSessionRepository(db);
+  const parent = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "running",
+    capabilities: {
+      eventStreaming: true,
+      approval: false,
+      cancellation: true,
+      resume: false,
+      childSessions: true,
+    },
+  });
+  const child = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "running",
+    capabilities: {
+      eventStreaming: true,
+      approval: false,
+      cancellation: true,
+      resume: false,
+      childSessions: true,
+    },
+    parent: { sessionId: parent.id },
+  });
+
+  const rejected = sessions.rejectDelegationRequest(
+    sessions.createDelegationRequest({
+      parentSessionId: parent.id,
+      role: "worker",
+      promptSummary: "Unsafe request.",
+    }).id,
+    "Malformed request.",
+  );
+
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.resultSummary?.safeSummary, "Malformed request.");
+  assert.throws(
+    () => sessions.acceptDelegationRequest(rejected.id),
+    /cannot transition delegation request/i,
+  );
+  assert.throws(
+    () =>
+      sessions.createDelegationRequest({
+        parentSessionId: child.id,
+        role: "worker",
+        promptSummary: "Nested worker request.",
+      }),
+    /maximum delegation depth/i,
+  );
+
+  db.close();
+});
+
 function testDatabasePath(): string {
   return join(mkdtempSync(join(tmpdir(), "auto-agent-runtime-")), "runtime.sqlite");
 }

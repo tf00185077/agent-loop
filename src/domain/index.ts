@@ -58,6 +58,11 @@ export type {
   AgentRuntimeCommandDiagnostics,
   AgentRuntimeCommandRecord,
   AgentRuntimeCommandStatus,
+  AgentRuntimeDelegationRequest,
+  AgentRuntimeDelegationRequestStatus,
+  AgentRuntimeDelegationRole,
+  AgentRuntimeDelegationSummary,
+  AgentRuntimeDelegationTerminalOutcome,
   AgentRuntimeEvent,
   AgentRuntimeEventMetadata,
   AgentRuntimeEventType,
@@ -74,6 +79,9 @@ export {
   approvalRequestStatuses,
   childSessionRequestStatuses,
   commandRecordStatuses,
+  delegationRequestStatuses,
+  delegationRoles,
+  delegationTerminalOutcomeTypes,
 } from "./agent-runtime-control-plane.types.js";
 export type {
   CreateEventInput,
