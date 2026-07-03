@@ -21,12 +21,12 @@
 
 ## 4. Fixed Test and Revert Verification
 
-- [ ] 4.1 Add configuration for the fixed review-merge test command.
-- [ ] 4.2 Run the fixed test command after apply and persist command, exit code, and safe output summary.
-- [ ] 4.3 Accept `merged` only when fixed test evidence passes verification.
-- [ ] 4.4 Automatically verify revert state when tests fail after apply.
-- [ ] 4.5 Record `test_failed_reverted`, `revert_failed`, `failed`, and `verification_failed` outcomes with safe summaries.
-- [ ] 4.6 Add integration tests for merge success, conflict, test failure with revert, revert failure, and verification failure.
+- [x] 4.1 Add configuration for the fixed review-merge test command.
+- [x] 4.2 Run the fixed test command after apply and persist command, exit code, and safe output summary.
+- [x] 4.3 Accept `merged` only when fixed test evidence passes verification.
+- [x] 4.4 Automatically verify revert state when tests fail after apply.
+- [x] 4.5 Record `test_failed_reverted`, `revert_failed`, `failed`, and `verification_failed` outcomes with safe summaries.
+- [x] 4.6 Add integration tests for merge success, conflict, test failure with revert, revert failure, and verification failure.
 
 ## 5. API and Dashboard Observability
 

@@ -650,7 +650,8 @@ test("spawns review merge children only after a worker result exists", async () 
       (event) =>
         event.data.runtimeEventType === "review_merge.apply_outcome" &&
         event.data.reviewMergeOutcome === "merged" &&
-        event.data.diffSummary === "2 files changed, 8 insertions(+).",
+        event.data.diffSummary === "2 files changed, 8 insertions(+)." &&
+        JSON.stringify(event.data.fixedTest).includes("npm run typecheck"),
     ),
   );
   fixture.db.close();
@@ -727,6 +728,74 @@ test("rejects review merge before spawn when supervisor workspace is dirty", asy
   assert.equal(reviewMergeChildStarted, false);
   assert.match(String(rejection?.data.safeReason), /dirty/i);
   fixture.db.close();
+});
+
+test("records reverted and verification-failure outcomes from fixed test evidence", async () => {
+  const failedFixture = createManagerFixture("review merge test failure");
+  const failedManager = createAgentSessionManager({
+    ...failedFixture,
+    reviewMergeVerificationService: {
+      verifyMerged() {
+        return {
+          outcome: "test_failed_reverted",
+          fixedTest: { command: "npm test", exitCode: 1, outputSummary: "failed tests" },
+          revertEvidence: { verified: true, summary: "Workspace reverted to pre-merge checkpoint." },
+          safeSummary: "Fixed review-merge test failed; workspace revert verified.",
+        };
+      },
+    },
+  });
+
+  await failedManager.startManagedSession({
+    goalId: failedFixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Review worker.",
+    adapter: adapterWithSeededReviewMergeRequest(failedFixture, {
+      reviewMergeOutcome: { status: "merged", diffSummary: "1 file changed.", safeSummary: "Applied." },
+    }),
+  });
+  await waitFor(() =>
+    failedFixture.eventRepo
+      .listForGoal(failedFixture.goal.id)
+      .some((event) => event.data.reviewMergeOutcome === "test_failed_reverted"),
+  );
+  const reverted = failedFixture.eventRepo
+    .listForGoal(failedFixture.goal.id)
+    .find((event) => event.data.reviewMergeOutcome === "test_failed_reverted");
+  assert.equal((reverted?.data.revertEvidence as { verified?: boolean } | undefined)?.verified, true);
+  failedFixture.db.close();
+
+  const verificationFixture = createManagerFixture("review merge verification failure");
+  const verificationManager = createAgentSessionManager({
+    ...verificationFixture,
+    reviewMergeVerificationService: {
+      verifyMerged() {
+        return {
+          outcome: "verification_failed",
+          fixedTest: { command: "npm test", exitCode: null, outputSummary: "spawn failed" },
+          revertEvidence: null,
+          safeSummary: "Fixed review-merge test command could not be verified.",
+        };
+      },
+    },
+  });
+
+  await verificationManager.startManagedSession({
+    goalId: verificationFixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Review worker.",
+    adapter: adapterWithSeededReviewMergeRequest(verificationFixture, {
+      reviewMergeOutcome: { status: "merged", diffSummary: "1 file changed.", safeSummary: "Applied." },
+    }),
+  });
+  await waitFor(() =>
+    verificationFixture.eventRepo
+      .listForGoal(verificationFixture.goal.id)
+      .some((event) => event.data.reviewMergeOutcome === "verification_failed"),
+  );
+  verificationFixture.db.close();
 });
 
 test("resumes a live supervisor after child completion when resume is supported", async () => {
@@ -991,6 +1060,7 @@ function createManagerFixture(title: string) {
     agentSessionRepo,
     worktreeService: memoryWorktreeService(),
     reviewMergeWorkspaceService: cleanReviewMergeWorkspaceService(),
+    reviewMergeVerificationService: passingReviewMergeVerificationService(),
   };
 }
 
@@ -1010,9 +1080,33 @@ function cleanReviewMergeWorkspaceService() {
   };
 }
 
+function passingReviewMergeVerificationService() {
+  return {
+    verifyMerged() {
+      return {
+        outcome: "merged" as const,
+        fixedTest: {
+          command: "npm run typecheck",
+          exitCode: 0,
+          outputSummary: "typecheck passed",
+        },
+        revertEvidence: null,
+        safeSummary: "Fixed review-merge test command passed.",
+      };
+    },
+  };
+}
+
 function adapterWithSeededReviewMergeRequest(
   fixture: ReturnType<typeof createManagerFixture>,
-  options: { onReviewMergeStart?: () => void } = {},
+  options: {
+    onReviewMergeStart?: () => void;
+    reviewMergeOutcome?: {
+      status: "merged" | "rejected" | "conflict";
+      diffSummary?: string | null;
+      safeSummary?: string | null;
+    };
+  } = {},
 ): AgentRuntimeAdapter {
   let workerDelegationRequestId = "";
   return {
@@ -1068,7 +1162,23 @@ function adapterWithSeededReviewMergeRequest(
         ]);
       }
       options.onReviewMergeStart?.();
-      return createHandle(input.sessionId, []);
+      return createHandle(input.sessionId, [
+        {
+          type: "session.completed",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Review merge completed.",
+          occurredAt: "2026-07-03T00:00:04.000Z",
+          metadata: {
+            reviewMergeApplyOutcome: options.reviewMergeOutcome ?? {
+              status: "merged",
+              diffSummary: "1 file changed.",
+              safeSummary: "Applied.",
+            },
+          },
+        },
+      ]);
     },
   };
 }

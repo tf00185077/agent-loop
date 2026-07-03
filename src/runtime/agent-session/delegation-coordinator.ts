@@ -17,6 +17,10 @@ import {
   createGitReviewMergeWorkspaceService,
   type ReviewMergeWorkspaceService,
 } from "./review-merge-workspace-service.js";
+import {
+  createReviewMergeVerificationService,
+  type ReviewMergeVerificationService,
+} from "./review-merge-verification-service.js";
 
 export interface DelegationCoordinatorDeps {
   runRepo: RunRepository;
@@ -24,6 +28,7 @@ export interface DelegationCoordinatorDeps {
   agentSessionRepo: AgentSessionRepository;
   worktreeService?: WorktreeService;
   reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
+  reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;
 }
 
@@ -54,6 +59,7 @@ export interface DelegationCoordinator {
 export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): DelegationCoordinator {
   const worktreeService = deps.worktreeService ?? createGitWorktreeService();
   const reviewMergeWorkspaceService = deps.reviewMergeWorkspaceService ?? createGitReviewMergeWorkspaceService();
+  const reviewMergeVerificationService = deps.reviewMergeVerificationService ?? createReviewMergeVerificationService();
   const supervisorCwd = deps.supervisorCwd ?? process.cwd();
 
   return {
@@ -65,6 +71,10 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       const workerResult = input.role === "review_merge" ? requireWorkerResult(deps, parent.id, input.workerDelegationRequestId) : null;
       const checkpoint =
         input.role === "review_merge" ? await prepareReviewMerge(reviewMergeWorkspaceService, supervisorCwd) : null;
+      const childEventData = {
+        ...input.eventData,
+        ...(checkpoint ? { reviewMergeCheckpoint: checkpoint } : {}),
+      };
 
       const request = deps.agentSessionRepo.createDelegationRequest({
         parentSessionId: parent.id,
@@ -161,8 +171,10 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         delegationRequestId: running.id,
         childRunId: childRun.id,
         childSessionId: childSession.id,
-        eventData: input.eventData,
+        eventData: childEventData,
         parentSessionId: parent.id,
+        reviewMergeVerificationService,
+        supervisorCwd,
         onChildOutcome: input.onChildOutcome,
       });
     },
@@ -243,6 +255,8 @@ interface RecordChildEventInput {
   childSessionId: string;
   parentSessionId: string;
   eventData: Record<string, unknown>;
+  reviewMergeVerificationService?: ReviewMergeVerificationService;
+  supervisorCwd?: string;
   onChildOutcome?: (input: SupervisorContinuationInput) => Promise<void>;
 }
 
@@ -334,20 +348,33 @@ function recordReviewMergeApplyOutcome(
 ): void {
   const outcome = input.event.metadata?.reviewMergeApplyOutcome;
   if (!isReviewMergeApplyOutcome(outcome)) return;
+  const checkpoint = isReviewMergeCheckpoint(input.eventData.reviewMergeCheckpoint)
+    ? input.eventData.reviewMergeCheckpoint
+    : null;
+  const verification =
+    outcome.status === "merged" && checkpoint && input.reviewMergeVerificationService
+      ? input.reviewMergeVerificationService.verifyMerged({
+          cwd: input.supervisorCwd ?? process.cwd(),
+          checkpoint,
+        })
+      : null;
+  const finalOutcome = verification?.outcome ?? outcome.status;
 
   deps.eventRepo.create({
     goalId: input.event.goalId,
     runId: input.event.runId,
     type: "agent.progress",
-    message: outcome.safeSummary ?? `Review merge outcome: ${outcome.status}.`,
+    message: verification?.safeSummary ?? outcome.safeSummary ?? `Review merge outcome: ${outcome.status}.`,
     data: {
       ...input.eventData,
       runtimeEventType: "review_merge.apply_outcome",
       delegationRequestId,
       childSessionId: input.childSessionId,
-      reviewMergeOutcome: outcome.status,
+      reviewMergeOutcome: finalOutcome,
       diffSummary: outcome.diffSummary ?? null,
-      safeSummary: outcome.safeSummary ?? null,
+      safeSummary: verification?.safeSummary ?? outcome.safeSummary ?? null,
+      fixedTest: verification?.fixedTest ?? null,
+      revertEvidence: verification?.revertEvidence ?? null,
     },
   });
 }
@@ -356,10 +383,22 @@ function isReviewMergeApplyOutcome(value: unknown): value is AgentRuntimeReviewM
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
-    (record.status === "merged" || record.status === "rejected" || record.status === "conflict") &&
+    (record.status === "merged" ||
+      record.status === "rejected" ||
+      record.status === "conflict" ||
+      record.status === "test_failed_reverted" ||
+      record.status === "revert_failed" ||
+      record.status === "failed" ||
+      record.status === "verification_failed") &&
     (record.diffSummary === undefined || record.diffSummary === null || typeof record.diffSummary === "string") &&
     (record.safeSummary === undefined || record.safeSummary === null || typeof record.safeSummary === "string")
   );
+}
+
+function isReviewMergeCheckpoint(value: unknown): value is AgentRuntimeReviewMergeCheckpoint {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.head === "string" && typeof record.statusSummary === "string";
 }
 
 function recordTerminalDelegation(

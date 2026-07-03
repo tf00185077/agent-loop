@@ -49,7 +49,14 @@ export interface AgentRuntimeReviewMergeCheckpoint {
 }
 
 export interface AgentRuntimeReviewMergeApplyOutcome {
-  status: "merged" | "rejected" | "conflict";
+  status:
+    | "merged"
+    | "rejected"
+    | "conflict"
+    | "test_failed_reverted"
+    | "revert_failed"
+    | "failed"
+    | "verification_failed";
   diffSummary?: string | null;
   safeSummary?: string | null;
 }
