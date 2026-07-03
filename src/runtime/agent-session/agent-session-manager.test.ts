@@ -301,6 +301,137 @@ test("forwards approve reject and cancel controls to the active adapter exactly 
   db.close();
 });
 
+test("persists valid delegation control events without spawning children", async () => {
+  const db = openDatabase({
+    path: join(mkdtempSync(join(tmpdir(), "auto-agent-session-delegation-")), "runtime.sqlite"),
+  });
+  const goalRepo = createGoalRepository(db);
+  const runRepo = createRunRepository(db);
+  const eventRepo = createEventRepository(db);
+  const agentSessionRepo = createAgentSessionRepository(db);
+  const goal = goalRepo.create({
+    title: "Delegating supervisor",
+    description: "Validate a structured worker request.",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-07-03T00:00:00.000Z" });
+  const manager = createAgentSessionManager({
+    goalRepo,
+    runRepo,
+    eventRepo,
+    agentSessionRepo,
+  });
+
+  const result = await manager.startManagedSession({
+    goalId: goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Delegate safely.",
+    adapter: adapterWithEvents([
+      {
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: goal.id,
+        runId: "run-placeholder",
+        message: "Requesting a worker.",
+        occurredAt: "2026-07-03T00:00:01.000Z",
+        metadata: {
+          delegationControlEvent: {
+            type: "managed_delegation.request",
+            role: "worker",
+            prompt: "Run focused tests.",
+            summary: "Run focused tests.",
+          },
+        },
+      },
+      terminalEvent(goal.id),
+    ]),
+  });
+
+  const delegations = agentSessionRepo.listDelegationRequests(result.session.id);
+  const durableEvents = eventRepo.listForGoal(goal.id);
+
+  assert.equal(delegations.length, 1);
+  assert.equal(delegations[0]?.status, "accepted");
+  assert.equal(delegations[0]?.role, "worker");
+  assert.equal(delegations[0]?.promptSummary, "Run focused tests.");
+  assert.ok(
+    durableEvents.some(
+      (event) =>
+        event.type === "agent.progress" &&
+        event.data.runtimeEventType === "delegation.accepted" &&
+        event.data.delegationRequestId === delegations[0]?.id,
+    ),
+  );
+
+  db.close();
+});
+
+test("rejects duplicate active delegation control events durably", async () => {
+  const db = openDatabase({
+    path: join(mkdtempSync(join(tmpdir(), "auto-agent-session-duplicate-delegation-")), "runtime.sqlite"),
+  });
+  const goalRepo = createGoalRepository(db);
+  const runRepo = createRunRepository(db);
+  const eventRepo = createEventRepository(db);
+  const agentSessionRepo = createAgentSessionRepository(db);
+  const goal = goalRepo.create({
+    title: "Duplicate delegation",
+    description: "Only one active child is allowed.",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-07-03T00:00:00.000Z" });
+  const manager = createAgentSessionManager({
+    goalRepo,
+    runRepo,
+    eventRepo,
+    agentSessionRepo,
+  });
+  const controlEvent = {
+    type: "managed_delegation.request",
+    role: "worker",
+    prompt: "Run focused tests.",
+    summary: "Run focused tests.",
+  };
+
+  const result = await manager.startManagedSession({
+    goalId: goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Try duplicate delegation.",
+    adapter: adapterWithEvents([
+      {
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: goal.id,
+        runId: "run-placeholder",
+        message: "Requesting a worker.",
+        occurredAt: "2026-07-03T00:00:01.000Z",
+        metadata: { delegationControlEvent: controlEvent },
+      },
+      {
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: goal.id,
+        runId: "run-placeholder",
+        message: "Requesting another worker.",
+        occurredAt: "2026-07-03T00:00:02.000Z",
+        metadata: { delegationControlEvent: controlEvent },
+      },
+      terminalEvent(goal.id),
+    ]),
+  });
+
+  const delegations = agentSessionRepo.listDelegationRequests(result.session.id);
+  const rejection = eventRepo
+    .listForGoal(goal.id)
+    .find((event) => event.data.runtimeEventType === "delegation.rejected");
+
+  assert.equal(delegations.length, 1);
+  assert.equal(delegations[0]?.status, "accepted");
+  assert.match(String(rejection?.data.safeReason), /active delegation/i);
+
+  db.close();
+});
+
 function createHandle(sessionId: string, events: AgentRuntimeEvent[]): AgentSessionHandle {
   return {
     sessionId,
@@ -318,6 +449,43 @@ function createHandle(sessionId: string, events: AgentRuntimeEvent[]): AgentSess
     async approve() {},
     async reject() {},
     async cancel() {},
+  };
+}
+
+function adapterWithEvents(events: AgentRuntimeEvent[]): AgentRuntimeAdapter {
+  return {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return {
+        eventStreaming: true,
+        approval: false,
+        cancellation: true,
+        resume: false,
+        childSessions: true,
+      };
+    },
+    async startSession(input) {
+      return createHandle(
+        input.sessionId,
+        events.map((event) => ({
+          ...event,
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+        })),
+      );
+    },
+  };
+}
+
+function terminalEvent(goalId: string): AgentRuntimeEvent {
+  return {
+    type: "session.completed",
+    sessionId: "session-placeholder",
+    goalId,
+    runId: "run-placeholder",
+    message: "Supervisor stopped after validation.",
+    occurredAt: "2026-07-03T00:00:03.000Z",
   };
 }
 

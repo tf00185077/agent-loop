@@ -195,6 +195,7 @@ export interface AgentRuntimeEventMetadata {
   commandId?: string;
   approvalRequestId?: string;
   childSessionRequestId?: string;
+  delegationControlEvent?: unknown;
   delegationRequestId?: string;
   childSessionId?: string;
   agentId?: string;

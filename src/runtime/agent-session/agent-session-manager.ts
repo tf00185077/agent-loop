@@ -10,6 +10,7 @@ import type {
   EventRepository,
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
+import { validateDelegationControlEvent } from "./delegation-control-event.js";
 
 export interface AgentSessionManagerDeps {
   goalRepo: GoalRepository;
@@ -189,6 +190,11 @@ function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: PersistRuntim
     ...input.event.metadata,
   };
 
+  if (input.event.metadata?.delegationControlEvent !== undefined) {
+    persistDelegationControlEvent(deps, input, data);
+    return;
+  }
+
   if (input.event.type === "command.started") {
     const command = deps.agentSessionRepo.recordCommand({
       sessionId: input.sessionId,
@@ -315,6 +321,73 @@ function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: PersistRuntim
     message: input.event.message,
     data: { ...data, runtimeEventType: input.event.type },
   });
+}
+
+function persistDelegationControlEvent(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  data: Record<string, unknown>,
+): void {
+  const parentSession = deps.agentSessionRepo.getSession(input.sessionId);
+  if (!parentSession) {
+    throw new Error(`Agent session not found: ${input.sessionId}`);
+  }
+
+  const validation = validateDelegationControlEvent({
+    controlEvent: input.event.metadata?.delegationControlEvent,
+    parentSession,
+  });
+  if (!validation.ok) {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: "Delegation request rejected.",
+      data: {
+        ...data,
+        delegationControlEvent: undefined,
+        runtimeEventType: "delegation.rejected",
+        safeReason: validation.safeReason,
+      },
+    });
+    return;
+  }
+
+  try {
+    const request = deps.agentSessionRepo.createDelegationRequest({
+      parentSessionId: input.sessionId,
+      role: validation.request.role,
+      promptSummary: validation.request.promptSummary,
+    });
+    const accepted = deps.agentSessionRepo.acceptDelegationRequest(request.id);
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: "Delegation request accepted.",
+      data: {
+        ...data,
+        delegationControlEvent: undefined,
+        runtimeEventType: "delegation.accepted",
+        delegationRequestId: accepted.id,
+        delegationRole: accepted.role,
+      },
+    });
+  } catch (err) {
+    const safeReason = err instanceof Error ? err.message : "Delegation request rejected.";
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: "Delegation request rejected.",
+      data: {
+        ...data,
+        delegationControlEvent: undefined,
+        runtimeEventType: "delegation.rejected",
+        safeReason,
+      },
+    });
+  }
 }
 
 function runtimeEventTypeToEventType(type: AgentRuntimeEvent["type"]) {

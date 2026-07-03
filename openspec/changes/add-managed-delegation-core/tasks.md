@@ -8,10 +8,10 @@
 
 ## 2. Control Event Parsing and Validation
 
-- [ ] 2.1 Define the provider-neutral structured delegation control-event schema for `worker` requests.
-- [ ] 2.2 Implement parser/validator logic that accepts valid delegation requests and rejects malformed or unauthorized events.
-- [ ] 2.3 Integrate validation with managed runtime event handling without embedding scheduling side effects in event persistence.
-- [ ] 2.4 Add tests for valid worker requests, invalid role fields, duplicate active child requests, and nested child requests.
+- [x] 2.1 Define the provider-neutral structured delegation control-event schema for `worker` requests.
+- [x] 2.2 Implement parser/validator logic that accepts valid delegation requests and rejects malformed or unauthorized events.
+- [x] 2.3 Integrate validation with managed runtime event handling without embedding scheduling side effects in event persistence.
+- [x] 2.4 Add tests for valid worker requests, invalid role fields, duplicate active child requests, and nested child requests.
 
 ## 3. Delegation Coordinator
 
