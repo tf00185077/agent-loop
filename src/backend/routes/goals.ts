@@ -128,8 +128,21 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
 
       const session = agentSessionRepo.listSessionsForGoal(goal.id).at(-1) ?? null;
       const sessions = agentSessionRepo.listSessionsForGoal(goal.id);
+      const mergeOutcomes = eventRepo
+        .listForGoal(goal.id)
+        .filter((event) => event.data.runtimeEventType === "review_merge.apply_outcome")
+        .map((event) => ({
+          delegationRequestId: stringValue(event.data.delegationRequestId),
+          childSessionId: stringValue(event.data.childSessionId),
+          outcome: stringValue(event.data.reviewMergeOutcome),
+          diffSummary: nullableStringValue(event.data.diffSummary),
+          safeSummary: nullableStringValue(event.data.safeSummary),
+          fixedTest: recordValue(event.data.fixedTest),
+          revertEvidence: recordValue(event.data.revertEvidence),
+        }));
       res.json({
         session: session ? sanitizeAgentRuntimeSession(session) : null,
+        sessions: sessions.map(sanitizeAgentRuntimeSession),
         approvals: session
           ? agentSessionRepo.listApprovalRequests(session.id).map(sanitizeAgentRuntimeApprovalRequest)
           : [],
@@ -143,6 +156,7 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
             .listDelegationRequests(managedSession.id)
             .map(sanitizeAgentRuntimeDelegationRequest),
         ),
+        mergeOutcomes,
       });
     } catch (err) {
       next(err);
@@ -285,4 +299,16 @@ function parseProviderOverride(value: unknown): ParseProviderOverrideResult {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function nullableStringValue(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) && !Array.isArray(value) ? value : null;
 }

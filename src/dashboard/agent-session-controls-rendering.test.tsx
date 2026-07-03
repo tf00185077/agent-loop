@@ -104,6 +104,42 @@ test("goal detail renders managed delegation tree state and outcomes", () => {
       completedAt: "2026-07-03T00:00:02.000Z",
     },
   ];
+  snapshot.sessions = [
+    snapshot.session!,
+    {
+      id: "session-child",
+      goalId: "goal-1",
+      runId: "run-1",
+      providerId: "codex-local",
+      modelLabel: "gpt-5-codex",
+      lifecycleState: "completed",
+      capabilities: {
+        eventStreaming: true,
+        approval: false,
+        cancellation: true,
+        resume: false,
+        childSessions: false,
+      },
+      parent: { sessionId: "session-1" },
+      worktree: {
+        label: "child-session",
+        path: "C:\\worktrees\\child-session",
+      },
+      createdAt: "2026-07-03T00:00:00.000Z",
+      lastActivityAt: "2026-07-03T00:00:02.000Z",
+    },
+  ];
+  snapshot.mergeOutcomes = [
+    {
+      delegationRequestId: "delegation-1",
+      childSessionId: "session-child",
+      outcome: "test_failed_reverted",
+      diffSummary: "1 file changed.",
+      safeSummary: "Fixed review-merge test failed; workspace revert verified.",
+      fixedTest: { command: "npm test", exitCode: 1, outputSummary: "failed tests" },
+      revertEvidence: { verified: true, summary: "Workspace reverted to pre-merge checkpoint." },
+    },
+  ];
 
   const html = renderToStaticMarkup(
     <GoalDetailPanel
@@ -119,7 +155,12 @@ test("goal detail renders managed delegation tree state and outcomes", () => {
   assert.match(html, /worker/);
   assert.match(html, /failed/);
   assert.match(html, /session-child/);
+  assert.match(html, /worktree child-session/);
   assert.match(html, /Worker could not complete focused tests/);
+  assert.match(html, /merge test_failed_reverted/);
+  assert.match(html, /1 file changed/);
+  assert.match(html, /npm test: exit 1/);
+  assert.match(html, /Workspace reverted to pre-merge checkpoint/);
 });
 
 

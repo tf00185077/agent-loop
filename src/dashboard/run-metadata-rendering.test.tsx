@@ -90,6 +90,29 @@ test("timeline renders observation event kinds with safe metadata and no raw pay
   assert.equal(html.includes("rawPayload"), false);
 });
 
+test("timeline renders review merge diff test and revert evidence", () => {
+  const html = renderToStaticMarkup(
+    <EventTimelineList
+      events={[
+        event("agent.progress", {
+          runtimeEventType: "review_merge.apply_outcome",
+          reviewMergeOutcome: "test_failed_reverted",
+          diffSummary: "1 file changed.",
+          safeSummary: "Fixed review-merge test failed; workspace revert verified.",
+          fixedTest: { command: "npm test", exitCode: 1, outputSummary: "failed tests" },
+          revertEvidence: { verified: true, summary: "Workspace reverted to pre-merge checkpoint." },
+        }),
+      ]}
+    />,
+  );
+
+  assert.match(html, /test_failed_reverted/);
+  assert.match(html, /1 file changed/);
+  assert.match(html, /npm test/);
+  assert.match(html, /failed tests/);
+  assert.match(html, /Workspace reverted to pre-merge checkpoint/);
+});
+
 function goal(): Goal {
   return {
     id: "goal-1",

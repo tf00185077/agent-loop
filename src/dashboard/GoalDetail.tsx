@@ -136,6 +136,10 @@ export function GoalDetailPanel({
   onCancelSession?: () => void;
 }) {
   const session = agentSessionSnapshot?.session ?? null;
+  const sessionsById = new Map((agentSessionSnapshot?.sessions ?? []).map((managedSession) => [managedSession.id, managedSession]));
+  const mergeOutcomesByDelegation = new Map(
+    (agentSessionSnapshot?.mergeOutcomes ?? []).map((outcome) => [outcome.delegationRequestId, outcome]),
+  );
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
@@ -239,9 +243,17 @@ export function GoalDetailPanel({
                     <td style={{ paddingRight: 16, paddingBottom: 4 }}>{request.status}</td>
                     <td style={{ paddingRight: 16, paddingBottom: 4 }}>
                       {request.childSessionId ? `child ${request.childSessionId}` : "child pending"}
+                      {request.childSessionId && sessionsById.get(request.childSessionId)?.worktree && (
+                        <div style={{ color: "#666", fontSize: 12 }}>
+                          {worktreeLabel(sessionsById.get(request.childSessionId)?.worktree)}
+                        </div>
+                      )}
                     </td>
                     <td style={{ paddingBottom: 4 }}>
                       {request.resultSummary?.safeSummary ?? request.promptSummary}
+                      {mergeOutcomesByDelegation.has(request.id) && (
+                        <MergeOutcomeDetails outcome={mergeOutcomesByDelegation.get(request.id)!} />
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -252,6 +264,30 @@ export function GoalDetailPanel({
       )}
     </div>
   );
+}
+
+function MergeOutcomeDetails({
+  outcome,
+}: {
+  outcome: NonNullable<AgentSessionSnapshot["mergeOutcomes"]>[number];
+}) {
+  const fixedTest = outcome.fixedTest ?? {};
+  const revertEvidence = outcome.revertEvidence ?? {};
+  return (
+    <div style={{ color: "#666", fontSize: 12, marginTop: 2 }}>
+      <div>{`merge ${outcome.outcome}`}</div>
+      {outcome.diffSummary && <div>{outcome.diffSummary}</div>}
+      {typeof fixedTest.command === "string" && (
+        <div>{`${fixedTest.command}: exit ${String(fixedTest.exitCode ?? "unknown")}`}</div>
+      )}
+      {typeof revertEvidence.summary === "string" && <div>{revertEvidence.summary}</div>}
+    </div>
+  );
+}
+
+function worktreeLabel(worktree: { label: string; path: string } | null | undefined): string {
+  if (!worktree) return "";
+  return worktree.label ? `worktree ${worktree.label}` : `worktree ${worktree.path}`;
 }
 
 function Row({ label, value }: { label: string; value: string }) {

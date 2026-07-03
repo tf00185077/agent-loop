@@ -33,9 +33,21 @@ export interface GoalEvent {
 
 export interface AgentSessionSnapshot {
   session: AgentRuntimeSession | null;
+  sessions?: AgentRuntimeSession[];
   approvals: AgentRuntimeApprovalRequest[];
   childSessionRequests: AgentRuntimeChildSessionRequest[];
   delegationRequests: AgentRuntimeDelegationRequest[];
+  mergeOutcomes?: ReviewMergeOutcomeReadModel[];
+}
+
+export interface ReviewMergeOutcomeReadModel {
+  delegationRequestId: string;
+  childSessionId: string;
+  outcome: string;
+  diffSummary: string | null;
+  safeSummary: string | null;
+  fixedTest: Record<string, unknown> | null;
+  revertEvidence: Record<string, unknown> | null;
 }
 
 export type ProviderConnectionState =

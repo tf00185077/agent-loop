@@ -10,6 +10,7 @@ import { createApp } from "./app.js";
 import { createGoalRepository } from "../persistence/goal-repository.js";
 import {
   createAgentSessionRepository,
+  createEventRepository,
   createRunRepository,
 } from "../persistence/runtime-repositories.js";
 import type { ClaudeCliDetectionOptions } from "../runtime/providers/claude/claude-cli-detection.js";
@@ -1548,6 +1549,36 @@ describe("Backend API", () => {
       }
     });
 
+    it("returns worktree metadata and review merge outcome read models", async () => {
+      const providerServer = await startServer();
+
+      try {
+        const { goal, childSession, delegation } = seedManagedSession(providerServer.db, {
+          includeReviewMergeEvidence: true,
+        });
+
+        const res = await fetch(`${providerServer.url}/api/goals/${goal.id}/agent-session`);
+        assert.equal(res.status, 200);
+        const body = (await json(res)) as Record<string, unknown>;
+
+        assert.equal(
+          ((body.sessions as Array<Record<string, unknown>>).find((item) => item.id === childSession?.id)
+            ?.worktree as Record<string, unknown>)?.label,
+          "child-session",
+        );
+        assert.equal(
+          ((body.mergeOutcomes as Array<Record<string, unknown>>)[0]).delegationRequestId,
+          delegation?.id,
+        );
+        assert.equal(
+          ((body.mergeOutcomes as Array<Record<string, unknown>>)[0]).outcome,
+          "test_failed_reverted",
+        );
+      } finally {
+        await providerServer.close();
+      }
+    });
+
     it("approves rejects and cancels managed sessions through backend actions", async () => {
       const providerServer = await startServer();
 
@@ -1712,6 +1743,7 @@ interface SeedManagedSessionOptions {
   approvalSummary?: string;
   safeCommand?: string;
   childPromptSummary?: string;
+  includeReviewMergeEvidence?: boolean;
 }
 
 function createCompletingRuntimeAdapter(providerId: string): AgentRuntimeAdapter {
@@ -1821,6 +1853,56 @@ function seedManagedSession(
     status: "unsupported",
     safeReason: "Child-session scheduling is not enabled.",
   });
+  let childSession = null;
+  let delegation = null;
+  if (options.includeReviewMergeEvidence) {
+    childSession = sessions.createSession({
+      goalId: goal.id,
+      runId: run.id,
+      providerId: "codex-local",
+      modelLabel: "gpt-5-codex",
+      lifecycleState: "completed",
+      capabilities: {
+        eventStreaming: true,
+        approval: false,
+        cancellation: true,
+        resume: false,
+        childSessions: false,
+      },
+      parent: { sessionId: session.id },
+      worktree: {
+        label: "child-session",
+        path: "C:\\Users\\TIM\\.codex\\auth-cache\\child-session",
+      },
+    });
+    delegation = sessions.createDelegationRequest({
+      parentSessionId: session.id,
+      role: "review_merge",
+      promptSummary: "Review worker output.",
+    });
+    sessions.acceptDelegationRequest(delegation.id);
+    sessions.startDelegationRequest(delegation.id, childSession.id);
+    delegation = sessions.completeDelegationRequest(delegation.id, {
+      kind: "success",
+      safeSummary: "Review merge completed.",
+    });
+    createEventRepository(db).create({
+      goalId: goal.id,
+      runId: run.id,
+      type: "agent.progress",
+      message: "Fixed review-merge test failed; workspace revert verified.",
+      data: {
+        runtimeEventType: "review_merge.apply_outcome",
+        delegationRequestId: delegation.id,
+        childSessionId: childSession.id,
+        reviewMergeOutcome: "test_failed_reverted",
+        diffSummary: "1 file changed.",
+        safeSummary: "Fixed review-merge test failed; workspace revert verified.",
+        fixedTest: { command: "npm test", exitCode: 1, outputSummary: "failed tests" },
+        revertEvidence: { verified: true, summary: "Workspace reverted to pre-merge checkpoint." },
+      },
+    });
+  }
 
-  return { goal, run, session, approval, childRequest };
+  return { goal, run, session, approval, childRequest, childSession, delegation };
 }

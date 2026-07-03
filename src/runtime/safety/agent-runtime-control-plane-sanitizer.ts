@@ -27,6 +27,12 @@ export function sanitizeAgentRuntimeSession(session: AgentRuntimeSession): Agent
     ...session,
     providerId: sanitizeControlPlaneText(session.providerId),
     modelLabel: sanitizeNullableText(session.modelLabel),
+    worktree: session.worktree
+      ? {
+          label: sanitizeControlPlaneText(session.worktree.label),
+          path: sanitizeAuthCachePath(session.worktree.path),
+        }
+      : session.worktree,
     capabilities: {
       ...session.capabilities,
       unsupportedReasons: session.capabilities.unsupportedReasons

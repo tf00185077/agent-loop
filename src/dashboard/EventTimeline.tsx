@@ -139,6 +139,20 @@ function observationDetails(event: GoalEvent): string[] {
     details.push(textValue(subtask.title), textValue(subtask.status));
   }
 
+  details.push(
+    textValue(event.data.reviewMergeOutcome),
+    textValue(event.data.diffSummary),
+    textValue(event.data.safeSummary),
+  );
+  const fixedTest = recordValue(event.data.fixedTest);
+  if (fixedTest) {
+    details.push(textValue(fixedTest.command), textValue(fixedTest.outputSummary));
+  }
+  const revertEvidence = recordValue(event.data.revertEvidence);
+  if (revertEvidence) {
+    details.push(textValue(revertEvidence.summary));
+  }
+
   return details.filter((detail): detail is string => Boolean(detail));
 }
 

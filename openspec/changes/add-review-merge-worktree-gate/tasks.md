@@ -30,9 +30,9 @@
 
 ## 5. API and Dashboard Observability
 
-- [ ] 5.1 Extend backend snapshots with worktree metadata and merge outcome read models.
-- [ ] 5.2 Render worktree label/path, merge status, diff summary, fixed test result, and revert evidence in the dashboard.
-- [ ] 5.3 Add UI/API tests for worktree metadata, successful merge display, rejected/conflict display, and reverted/verification failure display.
+- [x] 5.1 Extend backend snapshots with worktree metadata and merge outcome read models.
+- [x] 5.2 Render worktree label/path, merge status, diff summary, fixed test result, and revert evidence in the dashboard.
+- [x] 5.3 Add UI/API tests for worktree metadata, successful merge display, rejected/conflict display, and reverted/verification failure display.
 
 ## 6. Verification and Documentation
 
