@@ -155,6 +155,7 @@ function initializeSchema(db: AppDatabase): void {
   // Additive migration for databases created before claude-local support: the
   // CREATE TABLE IF NOT EXISTS above does not alter an existing table.
   ensureColumn(db, "provider_settings", "claude_command_path", "TEXT");
+  ensureColumn(db, "agent_sessions", "worktree", "TEXT");
 }
 
 function ensureColumn(db: AppDatabase, table: string, column: string, type: string): void {

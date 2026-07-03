@@ -68,6 +68,7 @@ export type {
   AgentRuntimeEventType,
   AgentRuntimeSession,
   AgentRuntimeSessionParent,
+  AgentRuntimeWorktreeMetadata,
   AgentSessionHandle,
   AgentSessionInput,
   AgentSessionLifecycleState,

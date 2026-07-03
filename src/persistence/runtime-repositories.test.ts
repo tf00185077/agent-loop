@@ -215,6 +215,47 @@ test("creates agent sessions and updates lifecycle state", () => {
   db.close();
 });
 
+test("persists worktree metadata on managed sessions", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({
+    title: "Worktree session goal",
+    description: "Exercise child worktree metadata.",
+  });
+  const run = createRunRepository(db).create({ goalId: goal.id, provider: "codex-local", model: "gpt-5-codex" });
+  const sessions = createAgentSessionRepository(db);
+
+  const session = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    lifecycleState: "starting",
+    capabilities: {
+      eventStreaming: true,
+      approval: false,
+      cancellation: true,
+      resume: false,
+      childSessions: false,
+    },
+    worktree: {
+      path: "C:\\Users\\TIM\\Desktop\\self\\auto-agent-worktrees\\child-session-1",
+      label: "child-session-1",
+    },
+  });
+  const updated = sessions.updateSessionWorktree(session.id, {
+    path: "C:\\Users\\TIM\\Desktop\\self\\auto-agent-worktrees\\child-session-2",
+    label: "child-session-2",
+  });
+
+  assert.deepEqual(updated.worktree, {
+    path: "C:\\Users\\TIM\\Desktop\\self\\auto-agent-worktrees\\child-session-2",
+    label: "child-session-2",
+  });
+  assert.deepEqual(sessions.getSession(session.id)?.worktree, updated.worktree);
+
+  db.close();
+});
+
 test("stores pending approvals and resolves them idempotently", () => {
   const db = openDatabase({ path: testDatabasePath() });
   const goal = createGoalRepository(db).create({

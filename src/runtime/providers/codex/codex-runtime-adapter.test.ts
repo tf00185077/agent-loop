@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { argv0 } from "node:process";
@@ -176,41 +176,44 @@ test("maps Codex JSONL runtime events into durable managed goal events", async (
 });
 
 test("starts Codex exec JSONL process and completes from streamed final message", async () => {
-  const capturePath = join(mkdtempSync(join(tmpdir(), "auto-agent-codex-runtime-spawn-")), "capture.json");
+  const tempDir = mkdtempSync(join(tmpdir(), "auto-agent-codex-runtime-spawn-"));
+  const capturePath = join(tempDir, "capture.json");
+  const cwd = join(tempDir, "worktree");
+  mkdirSync(cwd);
   const commandPath = fakeCodexRuntimeProcess(capturePath, [
     JSON.stringify({ type: "item.started", item: { type: "command", command: "npm test" } }),
     JSON.stringify({ type: "agent_message", message: "Managed final answer" }),
   ]);
-  const { goalRepo, eventRepo, manager, goal, close } = createManagedCodexHarness();
   const adapter = createCodexRuntimeAdapter({
     commandPath,
     modelLabel: "gpt-5-codex",
     probe: async () => ({ execJson: true, approvalResume: false }),
   });
 
-  try {
-    const result = await manager.startManagedSession({
-      goalId: goal.id,
-      providerId: "codex-local",
-      modelLabel: "gpt-5-codex",
-      prompt: "Run from process",
-      adapter,
-    });
-
-    const captured = JSON.parse(readFileSync(capturePath, "utf8")) as { args: string[]; stdin: string };
-    assert.equal(result.session.lifecycleState, "completed");
-    assert.equal(goalRepo.getById(goal.id)?.status, "completed");
-    assert.ok(captured.args.includes("exec"));
-    assert.ok(captured.args.includes("--json"));
-    assert.ok(captured.args.includes("--skip-git-repo-check"));
-    const modelIndex = captured.args.indexOf("--model");
-    assert.equal(captured.args[modelIndex + 1], "gpt-5-codex");
-    assert.equal(captured.args.at(-1), "-");
-    assert.equal(captured.stdin, "Run from process");
-    assert.ok(eventRepo.listForGoal(goal.id).some((event) => event.message === "Managed final answer"));
-  } finally {
-    close();
+  const handle = await adapter.startSession({
+    sessionId: "session-cwd",
+    goalId: "goal-cwd",
+    runId: "run-cwd",
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Run from process",
+    cwd,
+  });
+  const events: string[] = [];
+  for await (const event of handle.events()) {
+    events.push(event.type);
   }
+
+  const captured = JSON.parse(readFileSync(capturePath, "utf8")) as { args: string[]; stdin: string; cwd: string };
+  assert.deepEqual(events, ["session.started", "command.started", "progress", "session.completed"]);
+  assert.ok(captured.args.includes("exec"));
+  assert.ok(captured.args.includes("--json"));
+  assert.ok(captured.args.includes("--skip-git-repo-check"));
+  const modelIndex = captured.args.indexOf("--model");
+  assert.equal(captured.args[modelIndex + 1], "gpt-5-codex");
+  assert.equal(captured.args.at(-1), "-");
+  assert.equal(captured.stdin, "Run from process");
+  assert.equal(captured.cwd, cwd);
 });
 
 test("maps Codex process startup or non-zero exit into a failed managed session", async () => {
@@ -385,7 +388,7 @@ let stdin = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { stdin += chunk; });
 process.stdin.on("end", () => {
-  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
+  writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin, cwd: process.cwd() }));
   if (stderr) process.stderr.write(stderr);
   for (const line of lines) process.stdout.write(line + "\\n");
   process.exit(exitCode);

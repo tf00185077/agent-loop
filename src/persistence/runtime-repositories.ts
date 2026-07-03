@@ -15,6 +15,7 @@ import type {
   AgentRuntimeDelegationSummary,
   AgentRuntimeSession,
   AgentRuntimeSessionParent,
+  AgentRuntimeWorktreeMetadata,
   AgentSessionLifecycleState,
   CreateEventInput,
   CreateRunInput,
@@ -55,6 +56,7 @@ export interface CreateAgentRuntimeSessionInput {
   lifecycleState: AgentSessionLifecycleState;
   capabilities: AgentRuntimeCapabilities;
   parent?: AgentRuntimeSessionParent | null;
+  worktree?: AgentRuntimeWorktreeMetadata | null;
 }
 
 export type CreateAgentRuntimeCommandInput = Omit<AgentRuntimeCommandRecord, "id">;
@@ -88,6 +90,7 @@ export interface AgentSessionRepositoryOptions {
 
 export interface AgentSessionRepository {
   createSession(input: CreateAgentRuntimeSessionInput): AgentRuntimeSession;
+  updateSessionWorktree(id: string, worktree: AgentRuntimeWorktreeMetadata | null): AgentRuntimeSession;
   updateLifecycleState(id: string, state: AgentSessionLifecycleState): AgentRuntimeSession;
   getSession(id: string): AgentRuntimeSession | null;
   listSessionsForGoal(goalId: string): AgentRuntimeSession[];
@@ -289,6 +292,7 @@ export function createAgentSessionRepository(
         lifecycleState: input.lifecycleState,
         capabilities: input.capabilities,
         parent: input.parent ?? null,
+        worktree: input.worktree ?? null,
         createdAt: now,
         lastActivityAt: now,
       };
@@ -303,6 +307,7 @@ export function createAgentSessionRepository(
           lifecycle_state,
           capabilities,
           parent,
+          worktree,
           created_at,
           last_activity_at
         )
@@ -315,6 +320,7 @@ export function createAgentSessionRepository(
           @lifecycleState,
           @capabilities,
           @parent,
+          @worktree,
           @createdAt,
           @lastActivityAt
         )
@@ -322,6 +328,7 @@ export function createAgentSessionRepository(
         ...session,
         capabilities: JSON.stringify(session.capabilities),
         parent: session.parent ? JSON.stringify(session.parent) : null,
+        worktree: session.worktree ? JSON.stringify(session.worktree) : null,
       });
 
       return session;
@@ -337,6 +344,20 @@ export function createAgentSessionRepository(
       db.prepare("UPDATE agent_sessions SET lifecycle_state = ?, last_activity_at = ? WHERE id = ?").run(
         state,
         now,
+        id,
+      );
+
+      return this.getSession(id)!;
+    },
+
+    updateSessionWorktree(id, worktree) {
+      if (!this.getSession(id)) {
+        throw new Error(`Agent session not found: ${id}`);
+      }
+
+      db.prepare("UPDATE agent_sessions SET worktree = ?, last_activity_at = ? WHERE id = ?").run(
+        worktree ? JSON.stringify(worktree) : null,
+        clock(),
         id,
       );
 
@@ -715,6 +736,7 @@ function mapAgentSessionRow(row: unknown): AgentRuntimeSession {
     lifecycleState: value.lifecycle_state as AgentSessionLifecycleState,
     capabilities: JSON.parse(value.capabilities!) as AgentRuntimeCapabilities,
     parent: value.parent ? (JSON.parse(value.parent) as AgentRuntimeSessionParent) : null,
+    worktree: value.worktree ? (JSON.parse(value.worktree) as AgentRuntimeWorktreeMetadata) : null,
     createdAt: value.created_at!,
     lastActivityAt: value.last_activity_at!,
   };

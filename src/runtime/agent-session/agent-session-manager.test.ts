@@ -91,6 +91,7 @@ test("starts a managed session consumes adapter events and updates durable sessi
     runRepo,
     eventRepo,
     agentSessionRepo,
+    worktreeService: memoryWorktreeService(),
   });
 
   const result = await manager.startManagedSession({
@@ -179,6 +180,7 @@ test("recovers orphaned non-terminal sessions as stalled visible state", () => {
     runRepo,
     eventRepo,
     agentSessionRepo,
+    worktreeService: memoryWorktreeService(),
   });
 
   const recovered = manager.recoverOrphanedSessions();
@@ -433,7 +435,7 @@ test("rejects duplicate active delegation control events durably", async () => {
   db.close();
 });
 
-test("spawns worker children and records child failure without failing the supervisor goal", async () => {
+test("spawns worker children in isolated worktrees and records child failure without failing the supervisor goal", async () => {
   const db = openDatabase({
     path: join(mkdtempSync(join(tmpdir(), "auto-agent-session-child-failure-")), "runtime.sqlite"),
   });
@@ -446,7 +448,7 @@ test("spawns worker children and records child failure without failing the super
     description: "A failed worker should not fail the supervisor automatically.",
   });
   goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-07-03T00:00:00.000Z" });
-  const starts: Array<{ sessionId: string; parentSessionId?: string | null; prompt: string }> = [];
+  const starts: Array<{ sessionId: string; parentSessionId?: string | null; prompt: string; cwd?: string | null }> = [];
   const adapter: AgentRuntimeAdapter = {
     providerId: "codex-local",
     async detectCapabilities() {
@@ -459,7 +461,12 @@ test("spawns worker children and records child failure without failing the super
       };
     },
     async startSession(input) {
-      starts.push({ sessionId: input.sessionId, parentSessionId: input.parent?.sessionId ?? null, prompt: input.prompt });
+      starts.push({
+        sessionId: input.sessionId,
+        parentSessionId: input.parent?.sessionId ?? null,
+        prompt: input.prompt,
+        cwd: input.cwd ?? null,
+      });
       if (input.parent?.sessionId) {
         return createHandle(input.sessionId, [
           {
@@ -498,6 +505,12 @@ test("spawns worker children and records child failure without failing the super
     runRepo,
     eventRepo,
     agentSessionRepo,
+    worktreeService: {
+      async createChildWorktree(input) {
+        return { path: `C:\\worktrees\\${input.childSessionId}`, label: `child-${input.childSessionId}` };
+      },
+    },
+    supervisorCwd: "C:\\supervisor",
   });
 
   const result = await manager.startManagedSession({
@@ -514,7 +527,12 @@ test("spawns worker children and records child failure without failing the super
   assert.equal(starts.length, 3);
   assert.equal(starts[1]?.parentSessionId, result.session.id);
   assert.equal(starts[1]?.prompt, "Run focused tests.");
+  assert.equal(starts[1]?.cwd, `C:\\worktrees\\${starts[1]?.sessionId}`);
   assert.equal(starts[2]?.prompt, "Worker result: Worker could not complete focused tests.");
+  assert.deepEqual(agentSessionRepo.getSession(starts[1]!.sessionId)?.worktree, {
+    path: `C:\\worktrees\\${starts[1]?.sessionId}`,
+    label: `child-${starts[1]?.sessionId}`,
+  });
   assert.equal(agentSessionRepo.getSession(result.session.id)?.lifecycleState, "waiting_child");
   assert.equal(delegations[0]?.status, "failed");
   assert.equal(delegations[0]?.resultSummary?.safeSummary, "Worker could not complete focused tests.");
@@ -778,7 +796,15 @@ function createManagerFixture(title: string) {
   const agentSessionRepo = createAgentSessionRepository(db);
   const goal = goalRepo.create({ title, description: "Exercise section 4 delegation behavior." });
   goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-07-03T00:00:00.000Z" });
-  return { db, goal, goalRepo, runRepo, eventRepo, agentSessionRepo };
+  return { db, goal, goalRepo, runRepo, eventRepo, agentSessionRepo, worktreeService: memoryWorktreeService() };
+}
+
+function memoryWorktreeService() {
+  return {
+    async createChildWorktree(input: { childSessionId: string }) {
+      return { path: `C:\\worktrees\\${input.childSessionId}`, label: `child-${input.childSessionId}` };
+    },
+  };
 }
 
 function fixedClock(values: string[]): () => string {

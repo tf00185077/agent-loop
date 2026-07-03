@@ -12,12 +12,15 @@ import type {
 } from "../../persistence/runtime-repositories.js";
 import { createDelegationCoordinator } from "./delegation-coordinator.js";
 import { validateDelegationControlEvent } from "./delegation-control-event.js";
+import type { WorktreeService } from "./worktree-service.js";
 
 export interface AgentSessionManagerDeps {
   goalRepo: GoalRepository;
   runRepo: RunRepository;
   eventRepo: EventRepository;
   agentSessionRepo: AgentSessionRepository;
+  worktreeService?: WorktreeService;
+  supervisorCwd?: string;
 }
 
 export interface StartManagedSessionInput {

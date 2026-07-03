@@ -3,17 +3,21 @@ import type {
   AgentRuntimeDelegationRole,
   AgentRuntimeDelegationSummary,
   AgentRuntimeEvent,
+  AgentRuntimeWorktreeMetadata,
 } from "../../domain/index.js";
 import type {
   AgentSessionRepository,
   EventRepository,
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
+import { createGitWorktreeService, type WorktreeService } from "./worktree-service.js";
 
 export interface DelegationCoordinatorDeps {
   runRepo: RunRepository;
   eventRepo: EventRepository;
   agentSessionRepo: AgentSessionRepository;
+  worktreeService?: WorktreeService;
+  supervisorCwd?: string;
 }
 
 export interface StartWorkerDelegationInput {
@@ -40,6 +44,9 @@ export interface DelegationCoordinator {
 }
 
 export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): DelegationCoordinator {
+  const worktreeService = deps.worktreeService ?? createGitWorktreeService();
+  const supervisorCwd = deps.supervisorCwd ?? process.cwd();
+
   return {
     async acceptAndStartWorker(input) {
       const parent = deps.agentSessionRepo.getSession(input.parentSessionId);
@@ -73,6 +80,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         provider: input.providerId,
         model: input.modelLabel ?? "unknown",
       });
+      const provisionalWorktree = childWorktreeMetadata(childRun.id);
       const childSession = deps.agentSessionRepo.createSession({
         goalId: parent.goalId,
         runId: childRun.id,
@@ -81,7 +89,13 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         lifecycleState: "starting",
         capabilities: childCapabilities,
         parent: { sessionId: parent.id },
+        worktree: provisionalWorktree,
       });
+      const worktree = await worktreeService.createChildWorktree({
+        parentCwd: supervisorCwd,
+        childSessionId: childSession.id,
+      });
+      deps.agentSessionRepo.updateSessionWorktree(childSession.id, worktree);
       const handle = await input.adapter.startSession({
         sessionId: childSession.id,
         goalId: parent.goalId,
@@ -90,6 +104,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         modelLabel: input.modelLabel,
         prompt: input.prompt,
         parent: { sessionId: parent.id },
+        cwd: worktree.path,
       });
 
       const running = deps.agentSessionRepo.startDelegationRequest(accepted.id, childSession.id);
@@ -106,6 +121,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           runtimeEventType: "delegation.started",
           delegationRequestId: running.id,
           childSessionId: childSession.id,
+          worktree,
         },
       });
       deps.eventRepo.create({
@@ -119,6 +135,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           runtimeEventType: "delegation.waiting_child",
           delegationRequestId: running.id,
           childSessionId: childSession.id,
+          worktree,
         },
       });
 
@@ -133,6 +150,10 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       });
     },
   };
+}
+
+function childWorktreeMetadata(runId: string): AgentRuntimeWorktreeMetadata {
+  return { path: "", label: `pending-${runId}` };
 }
 
 interface ConsumeChildEventsInput extends Omit<RecordChildEventInput, "event"> {

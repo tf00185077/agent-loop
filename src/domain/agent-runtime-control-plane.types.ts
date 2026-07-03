@@ -38,6 +38,11 @@ export interface AgentRuntimeSessionParent {
   taskId?: string | null;
 }
 
+export interface AgentRuntimeWorktreeMetadata {
+  path: string;
+  label: string;
+}
+
 export interface AgentRuntimeSession {
   id: string;
   goalId: string;
@@ -49,6 +54,7 @@ export interface AgentRuntimeSession {
   createdAt: string;
   lastActivityAt: string;
   parent?: AgentRuntimeSessionParent | null;
+  worktree?: AgentRuntimeWorktreeMetadata | null;
 }
 
 export const commandRecordStatuses = [
@@ -223,6 +229,7 @@ export interface AgentSessionStartInput {
   providerId: string;
   modelLabel?: string | null;
   parent?: AgentRuntimeSessionParent | null;
+  cwd?: string | null;
 }
 
 export type AgentSessionInput =

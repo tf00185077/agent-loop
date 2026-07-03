@@ -131,6 +131,7 @@ async function createCodexSessionHandle(
 async function* runCodexJsonlSession(input: CodexRuntimeSessionRunnerInput): AsyncIterable<CodexJsonlParsedResult> {
   const request = toSpawnRequest(input.commandPath, buildCodexManagedSessionArgs(input));
   const child = spawn(request.command, request.args, {
+    cwd: input.cwd ?? undefined,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });

@@ -1,9 +1,9 @@
 ## 1. Worktree Metadata and Isolation
 
-- [ ] 1.1 Add worktree metadata fields to delegation/session read models and persistence.
-- [ ] 1.2 Implement a worktree service that creates isolated child git worktrees and records their paths or labels.
-- [ ] 1.3 Wire worker child spawning to use the isolated worktree as cwd.
-- [ ] 1.4 Add tests for worktree creation, persisted metadata, and worker cwd isolation.
+- [x] 1.1 Add worktree metadata fields to delegation/session read models and persistence.
+- [x] 1.2 Implement a worktree service that creates isolated child git worktrees and records their paths or labels.
+- [x] 1.3 Wire worker child spawning to use the isolated worktree as cwd.
+- [x] 1.4 Add tests for worktree creation, persisted metadata, and worker cwd isolation.
 
 ## 2. Review Merge Role
 
