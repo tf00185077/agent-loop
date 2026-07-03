@@ -181,7 +181,7 @@ test("represents runtime events with session provider and optional control metad
 });
 
 test("represents durable managed delegation contracts", () => {
-  assert.deepEqual(delegationRoles, ["worker"]);
+  assert.deepEqual(delegationRoles, ["worker", "review_merge"]);
   assert.deepEqual(delegationRequestStatuses, [
     "requested",
     "accepted",

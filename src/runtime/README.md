@@ -26,7 +26,9 @@ Managed delegation v1 supports a narrow backend-owned worker handoff:
 
 - A supervisor may request one active `worker` child at a time.
 - Child sessions may not request children; maximum delegation depth is one.
-- Review, merge, worktree creation, apply/revert, and fixed-test gates are out of scope for this core.
+- Worker children run in isolated local git worktrees.
+- Review merge is an explicit supervisor-triggered `review_merge` child role after a worker result exists.
+- Worker success is recorded for the supervisor; it does not automatically spawn review merge or apply changes.
 - Child success, failure, timeout, and cancellation are recorded as observations for the supervisor.
 - If the supervisor is terminal before a child result arrives, the result is stored as detached and does not continue the supervisor.
 
@@ -44,3 +46,18 @@ Providers request delegation with a structured runtime-event metadata block:
 ```
 
 The backend validates this provider-neutral shape before scheduling. Valid requests are persisted as durable delegation requests, started through the managed runtime adapter, and surfaced in the goal session snapshot. Malformed, unauthorized, duplicate active-child, and nested requests are rejected durably without spawning a child.
+
+## Review Merge Gate
+
+Review merge children have supervisor workspace authority, so the backend adds gates around them:
+
+- A `review_merge` request must include `workerDelegationRequestId` for an existing worker result.
+- The supervisor workspace must be clean before review merge starts.
+- The backend records a pre-merge checkpoint from `git rev-parse HEAD`.
+- A review-merge child may report apply evidence with `reviewMergeApplyOutcome` metadata.
+- Claimed `merged` outcomes are accepted only after the backend runs the fixed command.
+- The fixed command defaults to `npm test` and can be overridden with `AUTO_AGENT_REVIEW_MERGE_TEST_COMMAND`.
+- If fixed tests fail, the backend resets to the checkpoint, cleans untracked files, verifies the checkpoint and clean status, then records `test_failed_reverted` or `revert_failed`.
+- Other durable outcomes include `rejected`, `conflict`, `failed`, and `verification_failed`.
+
+Worker worktrees are retained after child completion. Their labels and sanitized paths are persisted in session snapshots so a later cleanup workflow can remove accepted or abandoned worktrees deliberately.

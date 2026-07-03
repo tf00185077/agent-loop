@@ -36,7 +36,7 @@
 
 ## 6. Verification and Documentation
 
-- [ ] 6.1 Document review merge authority, fixed test command configuration, and worktree retention expectations.
-- [ ] 6.2 Run `npm run typecheck`.
-- [ ] 6.3 Run `npm test`.
-- [ ] 6.4 Run `openspec validate add-review-merge-worktree-gate --strict`.
+- [x] 6.1 Document review merge authority, fixed test command configuration, and worktree retention expectations.
+- [x] 6.2 Run `npm run typecheck`.
+- [x] 6.3 Run `npm test`.
+- [x] 6.4 Run `openspec validate add-review-merge-worktree-gate --strict`.

@@ -105,6 +105,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "parent",
     "created_at",
     "last_activity_at",
+    "worktree",
   ]);
   assert.deepEqual(columnNames(db, "agent_runtime_commands"), [
     "id",
