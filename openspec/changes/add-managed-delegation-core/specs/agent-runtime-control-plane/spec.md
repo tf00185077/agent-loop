@@ -16,10 +16,10 @@ The runtime control plane SHALL validate provider output that requests delegatio
 
 #### Scenario: Valid delegation event
 - **WHEN** provider output contains a valid delegation control event
-- **THEN** the backend translates it into a managed spawn request and records the accepted request
+- **THEN** the backend translates it into a managed delegation request and records the accepted request
 
 #### Scenario: Invalid delegation event
-- **WHEN** provider output contains malformed delegation data or unauthorized role/workspace fields
+- **WHEN** provider output contains malformed delegation data or unauthorized role fields
 - **THEN** the backend rejects the event, records a validation error, and continues normal provider output handling
 
 ### Requirement: Delegation transport remains provider-neutral
