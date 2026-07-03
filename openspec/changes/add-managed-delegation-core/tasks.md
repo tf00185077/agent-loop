@@ -38,7 +38,7 @@
 
 ## 6. Verification and Documentation
 
-- [ ] 6.1 Document v1 delegation limits and structured transport shape in project docs.
-- [ ] 6.2 Run `npm run typecheck`.
-- [ ] 6.3 Run `npm test`.
-- [ ] 6.4 Run `openspec validate add-managed-delegation-core --strict`.
+- [x] 6.1 Document v1 delegation limits and structured transport shape in project docs.
+- [x] 6.2 Run `npm run typecheck`.
+- [x] 6.3 Run `npm test`.
+- [x] 6.4 Run `openspec validate add-managed-delegation-core --strict`.
