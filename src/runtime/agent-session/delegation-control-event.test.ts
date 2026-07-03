@@ -20,6 +20,23 @@ test("accepts provider-neutral worker delegation control events", () => {
   assert.equal(result.ok ? result.request.promptSummary : null, "Run persistence tests.");
 });
 
+test("accepts supervisor review merge requests with a worker result reference", () => {
+  const result = validateDelegationControlEvent({
+    controlEvent: {
+      type: "managed_delegation.request",
+      role: "review_merge",
+      prompt: "Review and merge the worker output.",
+      summary: "Review worker output.",
+      workerDelegationRequestId: "delegation-worker-1",
+    },
+    parentSession: supervisorSession(),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ok ? result.request.role : null, "review_merge");
+  assert.equal(result.ok ? result.request.workerDelegationRequestId : null, "delegation-worker-1");
+});
+
 test("rejects malformed unauthorized or nested delegation control events", () => {
   const invalidRole = validateDelegationControlEvent({
     controlEvent: {
@@ -44,10 +61,22 @@ test("rejects malformed unauthorized or nested delegation control events", () =>
     },
     parentSession: supervisorSession(),
   });
+  const missingWorkerResult = validateDelegationControlEvent({
+    controlEvent: {
+      type: "managed_delegation.request",
+      role: "review_merge",
+      prompt: "Review these changes.",
+    },
+    parentSession: supervisorSession(),
+  });
 
   assert.deepEqual(invalidRole, { ok: false, safeReason: "Unsupported delegation role: reviewer." });
   assert.deepEqual(nested, { ok: false, safeReason: "Maximum delegation depth reached." });
   assert.deepEqual(malformed, { ok: false, safeReason: "Delegation prompt must be a non-empty string." });
+  assert.deepEqual(missingWorkerResult, {
+    ok: false,
+    safeReason: "Review merge requires a worker delegation result reference.",
+  });
 });
 
 function supervisorSession(overrides: Partial<AgentRuntimeSession> = {}): AgentRuntimeSession {

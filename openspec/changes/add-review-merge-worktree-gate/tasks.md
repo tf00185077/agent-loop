@@ -7,10 +7,10 @@
 
 ## 2. Review Merge Role
 
-- [ ] 2.1 Add `review_merge` role validation on top of the managed delegation core request model.
-- [ ] 2.2 Implement supervisor-initiated `review_merge` child spawning after worker results exist.
-- [ ] 2.3 Ensure worker success does not automatically spawn review merge or apply changes.
-- [ ] 2.4 Add tests for valid review merge requests, missing worker result rejection, and no automatic merge after worker success.
+- [x] 2.1 Add `review_merge` role validation on top of the managed delegation core request model.
+- [x] 2.2 Implement supervisor-initiated `review_merge` child spawning after worker results exist.
+- [x] 2.3 Ensure worker success does not automatically spawn review merge or apply changes.
+- [x] 2.4 Add tests for valid review merge requests, missing worker result rejection, and no automatic merge after worker success.
 
 ## 3. Workspace Checkpoint and Apply Gate
 

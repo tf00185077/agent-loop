@@ -369,6 +369,7 @@ async function persistDelegationControlEvent(
       role: validation.request.role,
       prompt: validation.request.prompt,
       promptSummary: validation.request.promptSummary,
+      workerDelegationRequestId: validation.request.workerDelegationRequestId,
       adapter: input.adapter,
       eventData: data,
       onChildOutcome: (outcome) => continueSupervisorAfterChild(deps, input, outcome.observation, {

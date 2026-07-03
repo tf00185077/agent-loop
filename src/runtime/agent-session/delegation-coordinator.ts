@@ -27,6 +27,7 @@ export interface StartWorkerDelegationInput {
   role: AgentRuntimeDelegationRole;
   prompt: string;
   promptSummary: string;
+  workerDelegationRequestId?: string | null;
   adapter: AgentRuntimeAdapter;
   eventData: Record<string, unknown>;
   onChildOutcome?: (input: SupervisorContinuationInput) => Promise<void>;
@@ -53,11 +54,14 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       if (!parent) {
         throw new Error(`Agent session not found: ${input.parentSessionId}`);
       }
+      const workerResult = input.role === "review_merge" ? requireWorkerResult(deps, parent.id, input.workerDelegationRequestId) : null;
 
       const request = deps.agentSessionRepo.createDelegationRequest({
         parentSessionId: parent.id,
         role: input.role,
-        promptSummary: input.promptSummary,
+        promptSummary: workerResult
+          ? `${input.promptSummary} (worker result: ${workerResult.resultSummary.safeSummary})`
+          : input.promptSummary,
       });
       const accepted = deps.agentSessionRepo.acceptDelegationRequest(request.id);
       deps.eventRepo.create({
@@ -80,7 +84,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         provider: input.providerId,
         model: input.modelLabel ?? "unknown",
       });
-      const provisionalWorktree = childWorktreeMetadata(childRun.id);
+      const provisionalWorktree = input.role === "worker" ? childWorktreeMetadata(childRun.id) : null;
       const childSession = deps.agentSessionRepo.createSession({
         goalId: parent.goalId,
         runId: childRun.id,
@@ -91,11 +95,10 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         parent: { sessionId: parent.id },
         worktree: provisionalWorktree,
       });
-      const worktree = await worktreeService.createChildWorktree({
-        parentCwd: supervisorCwd,
-        childSessionId: childSession.id,
-      });
-      deps.agentSessionRepo.updateSessionWorktree(childSession.id, worktree);
+      const childCwd =
+        input.role === "worker"
+          ? await createWorkerCwd(worktreeService, supervisorCwd, childSession.id, deps.agentSessionRepo)
+          : { path: supervisorCwd, worktree: null };
       const handle = await input.adapter.startSession({
         sessionId: childSession.id,
         goalId: parent.goalId,
@@ -104,7 +107,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         modelLabel: input.modelLabel,
         prompt: input.prompt,
         parent: { sessionId: parent.id },
-        cwd: worktree.path,
+        cwd: childCwd.path,
       });
 
       const running = deps.agentSessionRepo.startDelegationRequest(accepted.id, childSession.id);
@@ -121,7 +124,8 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           runtimeEventType: "delegation.started",
           delegationRequestId: running.id,
           childSessionId: childSession.id,
-          worktree,
+          ...(childCwd.worktree ? { worktree: childCwd.worktree } : {}),
+          ...(workerResult ? { workerDelegationRequestId: workerResult.id } : {}),
         },
       });
       deps.eventRepo.create({
@@ -135,7 +139,8 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           runtimeEventType: "delegation.waiting_child",
           delegationRequestId: running.id,
           childSessionId: childSession.id,
-          worktree,
+          ...(childCwd.worktree ? { worktree: childCwd.worktree } : {}),
+          ...(workerResult ? { workerDelegationRequestId: workerResult.id } : {}),
         },
       });
 
@@ -154,6 +159,37 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
 
 function childWorktreeMetadata(runId: string): AgentRuntimeWorktreeMetadata {
   return { path: "", label: `pending-${runId}` };
+}
+
+async function createWorkerCwd(
+  worktreeService: WorktreeService,
+  supervisorCwd: string,
+  childSessionId: string,
+  agentSessionRepo: AgentSessionRepository,
+): Promise<{ path: string; worktree: AgentRuntimeWorktreeMetadata }> {
+  const worktree = await worktreeService.createChildWorktree({
+    parentCwd: supervisorCwd,
+    childSessionId,
+  });
+  agentSessionRepo.updateSessionWorktree(childSessionId, worktree);
+  return { path: worktree.path, worktree };
+}
+
+function requireWorkerResult(
+  deps: DelegationCoordinatorDeps,
+  parentSessionId: string,
+  workerDelegationRequestId?: string | null,
+) {
+  const workerResult = deps.agentSessionRepo
+    .listDelegationRequests(parentSessionId)
+    .find((request) => request.id === workerDelegationRequestId && request.role === "worker" && request.resultSummary);
+  if (!workerResult?.resultSummary) {
+    throw new Error("Review merge requires an existing worker result.");
+  }
+  return {
+    id: workerResult.id,
+    resultSummary: workerResult.resultSummary,
+  };
 }
 
 interface ConsumeChildEventsInput extends Omit<RecordChildEventInput, "event"> {

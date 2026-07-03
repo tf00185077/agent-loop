@@ -125,7 +125,7 @@ export interface AgentRuntimeChildSessionRequest {
   safeReason?: string | null;
 }
 
-export const delegationRoles = ["worker"] as const;
+export const delegationRoles = ["worker", "review_merge"] as const;
 
 export type AgentRuntimeDelegationRole = (typeof delegationRoles)[number];
 
