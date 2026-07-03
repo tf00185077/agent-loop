@@ -241,3 +241,21 @@ The dashboard SHALL refresh managed session snapshots when durable delegation st
 #### Scenario: Delegation state changes
 - **WHEN** the event stream receives a delegation accepted, started, completed, failed, cancelled, timeout, detached, ignored, or continuation-started event
 - **THEN** the dashboard refreshes the managed session snapshot and renders the latest delegation tree state
+
+### Requirement: Dashboard shows review merge outcomes
+The dashboard SHALL show review/merge status and evidence for `review_merge` sessions.
+
+#### Scenario: Merge succeeds
+- **WHEN** a review merge outcome is `merged`
+- **THEN** the dashboard shows the merge status, diff summary, and fixed test command result
+
+#### Scenario: Merge is reverted or rejected
+- **WHEN** a review merge outcome is `rejected`, `conflict`, `test_failed_reverted`, `revert_failed`, `failed`, or `verification_failed`
+- **THEN** the dashboard shows the outcome and the failure or revert summary without marking the whole goal failed automatically
+
+### Requirement: Dashboard shows worktree metadata
+The dashboard SHALL show safe worker worktree metadata when available.
+
+#### Scenario: Worker has worktree metadata
+- **WHEN** a worker child session has a recorded worktree label or path
+- **THEN** the dashboard shows the worktree metadata near the child session state without exposing credential-bearing paths
