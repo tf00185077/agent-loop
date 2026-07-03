@@ -511,9 +511,10 @@ test("spawns worker children and records child failure without failing the super
   const delegations = agentSessionRepo.listDelegationRequests(result.session.id);
   const durableEvents = eventRepo.listForGoal(goal.id);
 
-  assert.equal(starts.length, 2);
+  assert.equal(starts.length, 3);
   assert.equal(starts[1]?.parentSessionId, result.session.id);
   assert.equal(starts[1]?.prompt, "Run focused tests.");
+  assert.equal(starts[2]?.prompt, "Worker result: Worker could not complete focused tests.");
   assert.equal(agentSessionRepo.getSession(result.session.id)?.lifecycleState, "waiting_child");
   assert.equal(delegations[0]?.status, "failed");
   assert.equal(delegations[0]?.resultSummary?.safeSummary, "Worker could not complete focused tests.");
@@ -522,6 +523,170 @@ test("spawns worker children and records child failure without failing the super
   assert.ok(durableEvents.some((event) => event.data.runtimeEventType === "delegation.failed"));
 
   db.close();
+});
+
+test("resumes a live supervisor after child completion when resume is supported", async () => {
+  const fixture = createManagerFixture("resume supervisor");
+  const resumed: string[] = [];
+  let releaseParent!: () => void;
+  const parentReleased = new Promise<void>((resolve) => {
+    releaseParent = resolve;
+  });
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Worker finished.",
+            occurredAt: "2026-07-03T00:00:02.000Z",
+          },
+        ]);
+      }
+      return {
+        ...createHandle(input.sessionId, []),
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true },
+        async *events() {
+          yield delegationRequestEvent(input.sessionId, input.goalId, input.runId);
+          await parentReleased;
+          yield {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Supervisor finished.",
+            occurredAt: "2026-07-03T00:00:03.000Z",
+          } satisfies AgentRuntimeEvent;
+        },
+        async send(message) {
+          resumed.push(message.message ?? "");
+          releaseParent();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager(fixture);
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Delegate.",
+    adapter,
+  });
+
+  assert.deepEqual(resumed, ["Worker result: Worker finished."]);
+  assert.ok(fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.continuationMode === "resume"));
+  fixture.db.close();
+});
+
+test("starts a fresh supervisor continuation when true resume is unavailable", async () => {
+  const fixture = createManagerFixture("fresh continuation");
+  const starts: Array<{ parent?: string | null; prompt: string }> = [];
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      starts.push({ parent: input.parent?.sessionId ?? null, prompt: input.prompt });
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Worker finished.",
+            occurredAt: "2026-07-03T00:00:02.000Z",
+          },
+        ]);
+      }
+      return createHandle(input.sessionId, [delegationRequestEvent(input.sessionId, input.goalId, input.runId)]);
+    },
+  };
+  const manager = createAgentSessionManager(fixture);
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Delegate.",
+    adapter,
+  });
+  await waitFor(() => starts.length === 3);
+
+  assert.equal(starts[2]?.prompt, "Worker result: Worker finished.");
+  assert.ok(fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.continuationMode === "fresh"));
+  fixture.db.close();
+});
+
+test("leaves children running after supervisor cancellation and detaches late child results", async () => {
+  const fixture = createManagerFixture("cancel supervisor with child");
+  let releaseChild!: () => void;
+  const childReleased = new Promise<void>((resolve) => {
+    releaseChild = resolve;
+  });
+  let parentSessionId = "";
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        return {
+          ...createHandle(input.sessionId, []),
+          async *events() {
+            await childReleased;
+            yield {
+              type: "session.completed",
+              sessionId: input.sessionId,
+              goalId: input.goalId,
+              runId: input.runId,
+              message: "Late worker result.",
+              occurredAt: "2026-07-03T00:00:04.000Z",
+            } satisfies AgentRuntimeEvent;
+          },
+        };
+      }
+      parentSessionId = input.sessionId;
+      return createHandle(input.sessionId, [
+        delegationRequestEvent(input.sessionId, input.goalId, input.runId),
+        {
+          type: "session.cancelled",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Supervisor cancelled.",
+          occurredAt: "2026-07-03T00:00:03.000Z",
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager(fixture);
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Delegate.",
+    adapter,
+  });
+  assert.equal(fixture.agentSessionRepo.listDelegationRequests(parentSessionId)[0]?.status, "running");
+  releaseChild();
+  await waitFor(() => fixture.agentSessionRepo.listDelegationRequests(parentSessionId)[0]?.status === "detached");
+
+  assert.equal(fixture.agentSessionRepo.listDelegationRequests(parentSessionId)[0]?.detachedReason?.includes("terminal"), true);
+  assert.ok(fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.runtimeEventType === "delegation.detached"));
+  fixture.db.close();
 });
 
 function createHandle(sessionId: string, events: AgentRuntimeEvent[]): AgentSessionHandle {
@@ -582,6 +747,38 @@ function terminalEvent(goalId: string): AgentRuntimeEvent {
     message: "Supervisor stopped after validation.",
     occurredAt: "2026-07-03T00:00:03.000Z",
   };
+}
+
+function delegationRequestEvent(sessionId: string, goalId: string, runId: string): AgentRuntimeEvent {
+  return {
+    type: "progress",
+    sessionId,
+    goalId,
+    runId,
+    message: "Requesting worker.",
+    occurredAt: "2026-07-03T00:00:01.000Z",
+    metadata: {
+      delegationControlEvent: {
+        type: "managed_delegation.request",
+        role: "worker",
+        prompt: "Run focused tests.",
+        summary: "Run focused tests.",
+      },
+    },
+  };
+}
+
+function createManagerFixture(title: string) {
+  const db = openDatabase({
+    path: join(mkdtempSync(join(tmpdir(), "auto-agent-session-section4-")), "runtime.sqlite"),
+  });
+  const goalRepo = createGoalRepository(db);
+  const runRepo = createRunRepository(db);
+  const eventRepo = createEventRepository(db);
+  const agentSessionRepo = createAgentSessionRepository(db);
+  const goal = goalRepo.create({ title, description: "Exercise section 4 delegation behavior." });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-07-03T00:00:00.000Z" });
+  return { db, goal, goalRepo, runRepo, eventRepo, agentSessionRepo };
 }
 
 function fixedClock(values: string[]): () => string {

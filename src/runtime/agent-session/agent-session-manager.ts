@@ -99,6 +99,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
             providerId: input.providerId,
             modelLabel: input.modelLabel,
             adapter: input.adapter,
+            activeHandles,
             runtimeCommandIds,
           });
         }
@@ -182,6 +183,7 @@ interface PersistRuntimeEventInput {
   providerId: string;
   modelLabel: string | null;
   adapter: AgentRuntimeAdapter;
+  activeHandles: Map<string, AgentSessionHandle>;
   runtimeCommandIds: Map<string, string>;
 }
 
@@ -366,6 +368,10 @@ async function persistDelegationControlEvent(
       promptSummary: validation.request.promptSummary,
       adapter: input.adapter,
       eventData: data,
+      onChildOutcome: (outcome) => continueSupervisorAfterChild(deps, input, outcome.observation, {
+        delegationRequestId: outcome.delegationRequestId,
+        childSessionId: outcome.childSessionId,
+      }),
     });
   } catch (err) {
     const safeReason = err instanceof Error ? err.message : "Delegation request rejected.";
@@ -382,6 +388,72 @@ async function persistDelegationControlEvent(
       },
     });
   }
+}
+
+async function continueSupervisorAfterChild(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  observation: string,
+  metadata: { delegationRequestId: string; childSessionId: string },
+): Promise<void> {
+  const message = `Worker result: ${observation}`;
+  const handle = input.activeHandles.get(input.sessionId);
+  if (handle?.capabilities.resume) {
+    await handle.send({ type: "resume", message });
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: "Supervisor continuation started.",
+      data: {
+        sessionId: input.sessionId,
+        provider: input.providerId,
+        model: input.modelLabel,
+        runtimeEventType: "delegation.continuation_started",
+        continuationMode: "resume",
+        ...metadata,
+      },
+    });
+    return;
+  }
+
+  const run = deps.runRepo.create({
+    goalId: input.goalId,
+    provider: input.providerId,
+    model: input.modelLabel ?? "unknown",
+  });
+  const session = deps.agentSessionRepo.createSession({
+    goalId: input.goalId,
+    runId: run.id,
+    providerId: input.providerId,
+    modelLabel: input.modelLabel,
+    lifecycleState: "starting",
+    capabilities: await input.adapter.detectCapabilities(),
+  });
+  const freshHandle = await input.adapter.startSession({
+    sessionId: session.id,
+    goalId: input.goalId,
+    runId: run.id,
+    providerId: input.providerId,
+    modelLabel: input.modelLabel,
+    prompt: message,
+  });
+  input.activeHandles.set(session.id, freshHandle);
+  deps.agentSessionRepo.updateLifecycleState(session.id, "running");
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: run.id,
+    type: "agent.progress",
+    message: "Supervisor continuation started.",
+    data: {
+      sessionId: session.id,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType: "delegation.continuation_started",
+      continuationMode: "fresh",
+      ...metadata,
+    },
+  });
 }
 
 function runtimeEventTypeToEventType(type: AgentRuntimeEvent["type"]) {

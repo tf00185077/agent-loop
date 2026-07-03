@@ -23,11 +23,11 @@
 
 ## 4. Supervisor Continuation and Detached Handling
 
-- [ ] 4.1 Implement supervisor continuation after child completion using provider resume when available.
-- [ ] 4.2 Implement fresh supervisor continuation fallback when true resume is unavailable.
-- [ ] 4.3 Implement supervisor cancellation behavior that leaves active children running.
-- [ ] 4.4 Implement detached/ignored result recording when a child finishes after its supervisor is terminal.
-- [ ] 4.5 Add tests for resume continuation, fresh continuation fallback, supervisor cancel while child runs, and late detached child completion.
+- [x] 4.1 Implement supervisor continuation after child completion using provider resume when available.
+- [x] 4.2 Implement fresh supervisor continuation fallback when true resume is unavailable.
+- [x] 4.3 Implement supervisor cancellation behavior that leaves active children running.
+- [x] 4.4 Implement detached/ignored result recording when a child finishes after its supervisor is terminal.
+- [x] 4.5 Add tests for resume continuation, fresh continuation fallback, supervisor cancel while child runs, and late detached child completion.
 
 ## 5. API and Dashboard Observability
 

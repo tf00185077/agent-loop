@@ -25,6 +25,14 @@ export interface StartWorkerDelegationInput {
   promptSummary: string;
   adapter: AgentRuntimeAdapter;
   eventData: Record<string, unknown>;
+  onChildOutcome?: (input: SupervisorContinuationInput) => Promise<void>;
+}
+
+export interface SupervisorContinuationInput {
+  parentSessionId: string;
+  delegationRequestId: string;
+  childSessionId: string;
+  observation: string;
 }
 
 export interface DelegationCoordinator {
@@ -120,6 +128,8 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         childRunId: childRun.id,
         childSessionId: childSession.id,
         eventData: input.eventData,
+        parentSessionId: parent.id,
+        onChildOutcome: input.onChildOutcome,
       });
     },
   };
@@ -131,8 +141,18 @@ interface ConsumeChildEventsInput extends Omit<RecordChildEventInput, "event"> {
 
 async function consumeChildEvents(deps: DelegationCoordinatorDeps, input: ConsumeChildEventsInput): Promise<void> {
   for await (const event of input.events) {
-    const terminal = recordChildEvent(deps, { ...input, event });
-    if (terminal) return;
+    const outcome = recordChildEvent(deps, { ...input, event });
+    if (outcome) {
+      if (!outcome.detached) {
+        await input.onChildOutcome?.({
+          parentSessionId: input.parentSessionId,
+          delegationRequestId: input.delegationRequestId,
+          childSessionId: input.childSessionId,
+          observation: outcome.observation,
+        });
+      }
+      return;
+    }
   }
 }
 
@@ -141,53 +161,72 @@ interface RecordChildEventInput {
   delegationRequestId: string;
   childRunId: string;
   childSessionId: string;
+  parentSessionId: string;
   eventData: Record<string, unknown>;
+  onChildOutcome?: (input: SupervisorContinuationInput) => Promise<void>;
 }
 
-function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEventInput): boolean {
+interface ChildTerminalOutcome {
+  observation: string;
+  detached: boolean;
+}
+
+function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEventInput): ChildTerminalOutcome | null {
   if (input.event.type === "session.completed") {
     const finishedAt = new Date().toISOString();
     deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "completed");
     deps.runRepo.updateStatus(input.childRunId, "completed", { finishedAt });
-    const request = deps.agentSessionRepo.completeDelegationRequest(
-      input.delegationRequestId,
-      summary("success", input.event.message),
+    const request = recordTerminalDelegation(deps, input, "completed", summary("success", input.event.message));
+    recordDelegationOutcome(
+      deps,
+      input,
+      request.id,
+      request.status === "detached" ? "delegation.detached" : "delegation.completed",
+      input.event.message,
     );
-    recordDelegationOutcome(deps, input, request.id, "delegation.completed", input.event.message);
-    return true;
+    return { observation: input.event.message, detached: request.status === "detached" };
   }
   if (input.event.type === "session.failed") {
     const finishedAt = new Date().toISOString();
     deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "failed");
     deps.runRepo.updateStatus(input.childRunId, "failed", { finishedAt, error: input.event.message });
-    const request = deps.agentSessionRepo.failDelegationRequest(
-      input.delegationRequestId,
-      summary("failure", input.event.message),
+    const request = recordTerminalDelegation(deps, input, "failed", summary("failure", input.event.message));
+    recordDelegationOutcome(
+      deps,
+      input,
+      request.id,
+      request.status === "detached" ? "delegation.detached" : "delegation.failed",
+      input.event.message,
     );
-    recordDelegationOutcome(deps, input, request.id, "delegation.failed", input.event.message);
-    return true;
+    return { observation: input.event.message, detached: request.status === "detached" };
   }
   if (input.event.type === "session.cancelled") {
     const finishedAt = new Date().toISOString();
     deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "cancelled");
     deps.runRepo.updateStatus(input.childRunId, "failed", { finishedAt, error: input.event.message });
-    const request = deps.agentSessionRepo.cancelDelegationRequest(
-      input.delegationRequestId,
-      summary("cancelled", input.event.message),
+    const request = recordTerminalDelegation(deps, input, "cancelled", summary("cancelled", input.event.message));
+    recordDelegationOutcome(
+      deps,
+      input,
+      request.id,
+      request.status === "detached" ? "delegation.detached" : "delegation.cancelled",
+      input.event.message,
     );
-    recordDelegationOutcome(deps, input, request.id, "delegation.cancelled", input.event.message);
-    return true;
+    return { observation: input.event.message, detached: request.status === "detached" };
   }
   if (input.event.type === "session.timed_out") {
     const finishedAt = new Date().toISOString();
     deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "failed");
     deps.runRepo.updateStatus(input.childRunId, "failed", { finishedAt, error: input.event.message });
-    const request = deps.agentSessionRepo.timeOutDelegationRequest(
-      input.delegationRequestId,
-      summary("timeout", input.event.message),
+    const request = recordTerminalDelegation(deps, input, "timed_out", summary("timeout", input.event.message));
+    recordDelegationOutcome(
+      deps,
+      input,
+      request.id,
+      request.status === "detached" ? "delegation.detached" : "delegation.timed_out",
+      input.event.message,
     );
-    recordDelegationOutcome(deps, input, request.id, "delegation.timed_out", input.event.message);
-    return true;
+    return { observation: input.event.message, detached: request.status === "detached" };
   }
 
   deps.eventRepo.create({
@@ -201,7 +240,27 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
       childSessionId: input.childSessionId,
     },
   });
-  return false;
+  return null;
+}
+
+function recordTerminalDelegation(
+  deps: DelegationCoordinatorDeps,
+  input: RecordChildEventInput,
+  status: "completed" | "failed" | "cancelled" | "timed_out",
+  result: AgentRuntimeDelegationSummary,
+) {
+  const parent = deps.agentSessionRepo.getSession(input.parentSessionId);
+  if (parent && ["cancelled", "failed", "completed"].includes(parent.lifecycleState)) {
+    return deps.agentSessionRepo.detachDelegationRequest(
+      input.delegationRequestId,
+      result,
+      "Supervisor is terminal; child result stored as detached.",
+    );
+  }
+  if (status === "completed") return deps.agentSessionRepo.completeDelegationRequest(input.delegationRequestId, result);
+  if (status === "failed") return deps.agentSessionRepo.failDelegationRequest(input.delegationRequestId, result);
+  if (status === "cancelled") return deps.agentSessionRepo.cancelDelegationRequest(input.delegationRequestId, result);
+  return deps.agentSessionRepo.timeOutDelegationRequest(input.delegationRequestId, result);
 }
 
 function recordDelegationOutcome(
