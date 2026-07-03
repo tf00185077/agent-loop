@@ -66,6 +66,8 @@ export type {
   AgentRuntimeEvent,
   AgentRuntimeEventMetadata,
   AgentRuntimeEventType,
+  AgentRuntimeReviewMergeApplyOutcome,
+  AgentRuntimeReviewMergeCheckpoint,
   AgentRuntimeSession,
   AgentRuntimeSessionParent,
   AgentRuntimeWorktreeMetadata,

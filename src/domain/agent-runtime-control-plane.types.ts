@@ -43,6 +43,17 @@ export interface AgentRuntimeWorktreeMetadata {
   label: string;
 }
 
+export interface AgentRuntimeReviewMergeCheckpoint {
+  head: string;
+  statusSummary: string;
+}
+
+export interface AgentRuntimeReviewMergeApplyOutcome {
+  status: "merged" | "rejected" | "conflict";
+  diffSummary?: string | null;
+  safeSummary?: string | null;
+}
+
 export interface AgentRuntimeSession {
   id: string;
   goalId: string;
@@ -206,6 +217,7 @@ export interface AgentRuntimeEventMetadata {
   delegationControlEvent?: unknown;
   delegationRequestId?: string;
   childSessionId?: string;
+  reviewMergeApplyOutcome?: AgentRuntimeReviewMergeApplyOutcome;
   agentId?: string;
   parentAgentId?: string;
   taskId?: string;

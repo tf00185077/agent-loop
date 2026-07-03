@@ -14,10 +14,10 @@
 
 ## 3. Workspace Checkpoint and Apply Gate
 
-- [ ] 3.1 Add clean supervisor workspace verification before review merge starts.
-- [ ] 3.2 Add pre-merge checkpoint recording for the supervisor workspace.
-- [ ] 3.3 Implement apply outcome capture with diff summary evidence.
-- [ ] 3.4 Add tests for clean workspace start, dirty workspace rejection, successful apply evidence, and conflict outcome.
+- [x] 3.1 Add clean supervisor workspace verification before review merge starts.
+- [x] 3.2 Add pre-merge checkpoint recording for the supervisor workspace.
+- [x] 3.3 Implement apply outcome capture with diff summary evidence.
+- [x] 3.4 Add tests for clean workspace start, dirty workspace rejection, successful apply evidence, and conflict outcome.
 
 ## 4. Fixed Test and Revert Verification
 

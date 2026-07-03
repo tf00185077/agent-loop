@@ -3,6 +3,8 @@ import type {
   AgentRuntimeDelegationRole,
   AgentRuntimeDelegationSummary,
   AgentRuntimeEvent,
+  AgentRuntimeReviewMergeApplyOutcome,
+  AgentRuntimeReviewMergeCheckpoint,
   AgentRuntimeWorktreeMetadata,
 } from "../../domain/index.js";
 import type {
@@ -11,12 +13,17 @@ import type {
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
 import { createGitWorktreeService, type WorktreeService } from "./worktree-service.js";
+import {
+  createGitReviewMergeWorkspaceService,
+  type ReviewMergeWorkspaceService,
+} from "./review-merge-workspace-service.js";
 
 export interface DelegationCoordinatorDeps {
   runRepo: RunRepository;
   eventRepo: EventRepository;
   agentSessionRepo: AgentSessionRepository;
   worktreeService?: WorktreeService;
+  reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   supervisorCwd?: string;
 }
 
@@ -46,6 +53,7 @@ export interface DelegationCoordinator {
 
 export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): DelegationCoordinator {
   const worktreeService = deps.worktreeService ?? createGitWorktreeService();
+  const reviewMergeWorkspaceService = deps.reviewMergeWorkspaceService ?? createGitReviewMergeWorkspaceService();
   const supervisorCwd = deps.supervisorCwd ?? process.cwd();
 
   return {
@@ -55,6 +63,8 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         throw new Error(`Agent session not found: ${input.parentSessionId}`);
       }
       const workerResult = input.role === "review_merge" ? requireWorkerResult(deps, parent.id, input.workerDelegationRequestId) : null;
+      const checkpoint =
+        input.role === "review_merge" ? await prepareReviewMerge(reviewMergeWorkspaceService, supervisorCwd) : null;
 
       const request = deps.agentSessionRepo.createDelegationRequest({
         parentSessionId: parent.id,
@@ -126,6 +136,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           childSessionId: childSession.id,
           ...(childCwd.worktree ? { worktree: childCwd.worktree } : {}),
           ...(workerResult ? { workerDelegationRequestId: workerResult.id } : {}),
+          ...(checkpoint ? { reviewMergeCheckpoint: checkpoint } : {}),
         },
       });
       deps.eventRepo.create({
@@ -141,6 +152,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           childSessionId: childSession.id,
           ...(childCwd.worktree ? { worktree: childCwd.worktree } : {}),
           ...(workerResult ? { workerDelegationRequestId: workerResult.id } : {}),
+          ...(checkpoint ? { reviewMergeCheckpoint: checkpoint } : {}),
         },
       });
 
@@ -155,6 +167,17 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       });
     },
   };
+}
+
+async function prepareReviewMerge(
+  reviewMergeWorkspaceService: ReviewMergeWorkspaceService,
+  supervisorCwd: string,
+): Promise<AgentRuntimeReviewMergeCheckpoint> {
+  const preparation = await reviewMergeWorkspaceService.prepareReviewMerge(supervisorCwd);
+  if (!preparation.ok) {
+    throw new Error(preparation.safeReason);
+  }
+  return preparation.checkpoint;
 }
 
 function childWorktreeMetadata(runId: string): AgentRuntimeWorktreeMetadata {
@@ -234,6 +257,7 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
     deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "completed");
     deps.runRepo.updateStatus(input.childRunId, "completed", { finishedAt });
     const request = recordTerminalDelegation(deps, input, "completed", summary("success", input.event.message));
+    recordReviewMergeApplyOutcome(deps, input, request.id);
     recordDelegationOutcome(
       deps,
       input,
@@ -248,6 +272,7 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
     deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "failed");
     deps.runRepo.updateStatus(input.childRunId, "failed", { finishedAt, error: input.event.message });
     const request = recordTerminalDelegation(deps, input, "failed", summary("failure", input.event.message));
+    recordReviewMergeApplyOutcome(deps, input, request.id);
     recordDelegationOutcome(
       deps,
       input,
@@ -262,6 +287,7 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
     deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "cancelled");
     deps.runRepo.updateStatus(input.childRunId, "failed", { finishedAt, error: input.event.message });
     const request = recordTerminalDelegation(deps, input, "cancelled", summary("cancelled", input.event.message));
+    recordReviewMergeApplyOutcome(deps, input, request.id);
     recordDelegationOutcome(
       deps,
       input,
@@ -276,6 +302,7 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
     deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "failed");
     deps.runRepo.updateStatus(input.childRunId, "failed", { finishedAt, error: input.event.message });
     const request = recordTerminalDelegation(deps, input, "timed_out", summary("timeout", input.event.message));
+    recordReviewMergeApplyOutcome(deps, input, request.id);
     recordDelegationOutcome(
       deps,
       input,
@@ -298,6 +325,41 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
     },
   });
   return null;
+}
+
+function recordReviewMergeApplyOutcome(
+  deps: DelegationCoordinatorDeps,
+  input: RecordChildEventInput,
+  delegationRequestId: string,
+): void {
+  const outcome = input.event.metadata?.reviewMergeApplyOutcome;
+  if (!isReviewMergeApplyOutcome(outcome)) return;
+
+  deps.eventRepo.create({
+    goalId: input.event.goalId,
+    runId: input.event.runId,
+    type: "agent.progress",
+    message: outcome.safeSummary ?? `Review merge outcome: ${outcome.status}.`,
+    data: {
+      ...input.eventData,
+      runtimeEventType: "review_merge.apply_outcome",
+      delegationRequestId,
+      childSessionId: input.childSessionId,
+      reviewMergeOutcome: outcome.status,
+      diffSummary: outcome.diffSummary ?? null,
+      safeSummary: outcome.safeSummary ?? null,
+    },
+  });
+}
+
+function isReviewMergeApplyOutcome(value: unknown): value is AgentRuntimeReviewMergeApplyOutcome {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (record.status === "merged" || record.status === "rejected" || record.status === "conflict") &&
+    (record.diffSummary === undefined || record.diffSummary === null || typeof record.diffSummary === "string") &&
+    (record.safeSummary === undefined || record.safeSummary === null || typeof record.safeSummary === "string")
+  );
 }
 
 function recordTerminalDelegation(

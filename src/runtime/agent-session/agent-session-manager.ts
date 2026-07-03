@@ -12,6 +12,7 @@ import type {
 } from "../../persistence/runtime-repositories.js";
 import { createDelegationCoordinator } from "./delegation-coordinator.js";
 import { validateDelegationControlEvent } from "./delegation-control-event.js";
+import type { ReviewMergeWorkspaceService } from "./review-merge-workspace-service.js";
 import type { WorktreeService } from "./worktree-service.js";
 
 export interface AgentSessionManagerDeps {
@@ -20,6 +21,7 @@ export interface AgentSessionManagerDeps {
   eventRepo: EventRepository;
   agentSessionRepo: AgentSessionRepository;
   worktreeService?: WorktreeService;
+  reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   supervisorCwd?: string;
 }
 

@@ -601,7 +601,23 @@ test("spawns review merge children only after a worker result exists", async () 
           },
         ]);
       }
-      return createHandle(input.sessionId, []);
+      return createHandle(input.sessionId, [
+        {
+          type: "session.completed",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Review merge applied worker output.",
+          occurredAt: "2026-07-03T00:00:04.000Z",
+          metadata: {
+            reviewMergeApplyOutcome: {
+              status: "merged",
+              diffSummary: "2 files changed, 8 insertions(+).",
+              safeSummary: "Applied cleanly.",
+            },
+          },
+        },
+      ]);
     },
   };
   const manager = createAgentSessionManager({ ...fixture, supervisorCwd: "C:\\supervisor" });
@@ -613,14 +629,30 @@ test("spawns review merge children only after a worker result exists", async () 
     prompt: "Review worker.",
     adapter,
   });
-  await waitFor(() => fixture.agentSessionRepo.listDelegationRequests(result.session.id).length === 2);
+  await waitFor(() => fixture.agentSessionRepo.listDelegationRequests(result.session.id)[1]?.status === "completed");
 
   const delegations = fixture.agentSessionRepo.listDelegationRequests(result.session.id);
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   assert.deepEqual(delegations.map((delegation) => delegation.role), ["worker", "review_merge"]);
-  assert.equal(delegations[1]?.status, "running");
+  assert.equal(delegations[1]?.status, "completed");
   assert.equal(starts[1]?.cwd, "C:\\supervisor");
   assert.equal(starts[1]?.prompt, "Review and merge worker output.");
   assert.match(delegations[1]?.promptSummary ?? "", /Worker produced a patch/);
+  assert.ok(
+    events.some(
+      (event) =>
+        event.data.runtimeEventType === "delegation.started" &&
+        JSON.stringify(event.data.reviewMergeCheckpoint).includes("checkpoint-head"),
+    ),
+  );
+  assert.ok(
+    events.some(
+      (event) =>
+        event.data.runtimeEventType === "review_merge.apply_outcome" &&
+        event.data.reviewMergeOutcome === "merged" &&
+        event.data.diffSummary === "2 files changed, 8 insertions(+).",
+    ),
+  );
   fixture.db.close();
 });
 
@@ -660,6 +692,40 @@ test("rejects review merge requests when no worker result exists", async () => {
     .find((event) => event.data.runtimeEventType === "delegation.rejected");
   assert.equal(fixture.agentSessionRepo.listDelegationRequests(result.session.id).length, 0);
   assert.match(String(rejection?.data.safeReason), /existing worker result/i);
+  fixture.db.close();
+});
+
+test("rejects review merge before spawn when supervisor workspace is dirty", async () => {
+  const fixture = createManagerFixture("review merge dirty workspace");
+  let reviewMergeChildStarted = false;
+  const manager = createAgentSessionManager({
+    ...fixture,
+    reviewMergeWorkspaceService: {
+      async prepareReviewMerge() {
+        return { ok: false, safeReason: "Supervisor workspace is dirty: M src/file.ts" };
+      },
+    },
+  });
+
+  const result = await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Review dirty workspace.",
+    adapter: adapterWithSeededReviewMergeRequest(fixture, {
+      onReviewMergeStart() {
+        reviewMergeChildStarted = true;
+      },
+    }),
+  });
+
+  const delegations = fixture.agentSessionRepo.listDelegationRequests(result.session.id);
+  const rejection = fixture.eventRepo
+    .listForGoal(fixture.goal.id)
+    .find((event) => event.data.runtimeEventType === "delegation.rejected");
+  assert.deepEqual(delegations.map((delegation) => delegation.role), ["worker"]);
+  assert.equal(reviewMergeChildStarted, false);
+  assert.match(String(rejection?.data.safeReason), /dirty/i);
   fixture.db.close();
 });
 
@@ -916,13 +982,93 @@ function createManagerFixture(title: string) {
   const agentSessionRepo = createAgentSessionRepository(db);
   const goal = goalRepo.create({ title, description: "Exercise section 4 delegation behavior." });
   goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-07-03T00:00:00.000Z" });
-  return { db, goal, goalRepo, runRepo, eventRepo, agentSessionRepo, worktreeService: memoryWorktreeService() };
+  return {
+    db,
+    goal,
+    goalRepo,
+    runRepo,
+    eventRepo,
+    agentSessionRepo,
+    worktreeService: memoryWorktreeService(),
+    reviewMergeWorkspaceService: cleanReviewMergeWorkspaceService(),
+  };
 }
 
 function memoryWorktreeService() {
   return {
     async createChildWorktree(input: { childSessionId: string }) {
       return { path: `C:\\worktrees\\${input.childSessionId}`, label: `child-${input.childSessionId}` };
+    },
+  };
+}
+
+function cleanReviewMergeWorkspaceService() {
+  return {
+    async prepareReviewMerge() {
+      return { ok: true as const, checkpoint: { head: "checkpoint-head", statusSummary: "clean" } };
+    },
+  };
+}
+
+function adapterWithSeededReviewMergeRequest(
+  fixture: ReturnType<typeof createManagerFixture>,
+  options: { onReviewMergeStart?: () => void } = {},
+): AgentRuntimeAdapter {
+  let workerDelegationRequestId = "";
+  return {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (!input.parent?.sessionId) {
+        const childRun = fixture.runRepo.create({
+          goalId: input.goalId,
+          provider: "codex-local",
+          model: "gpt-5-codex",
+        });
+        const child = fixture.agentSessionRepo.createSession({
+          goalId: input.goalId,
+          runId: childRun.id,
+          providerId: "codex-local",
+          modelLabel: "gpt-5-codex",
+          lifecycleState: "completed",
+          capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: false },
+          parent: { sessionId: input.sessionId },
+        });
+        const request = fixture.agentSessionRepo.createDelegationRequest({
+          parentSessionId: input.sessionId,
+          role: "worker",
+          promptSummary: "Implement focused change.",
+        });
+        fixture.agentSessionRepo.acceptDelegationRequest(request.id);
+        fixture.agentSessionRepo.startDelegationRequest(request.id, child.id);
+        workerDelegationRequestId = fixture.agentSessionRepo.completeDelegationRequest(request.id, {
+          kind: "success",
+          safeSummary: "Worker produced a patch.",
+        }).id;
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Requesting review merge.",
+            occurredAt: "2026-07-03T00:00:03.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "review_merge",
+                prompt: "Review and merge worker output.",
+                summary: "Review worker output.",
+                workerDelegationRequestId,
+              },
+            },
+          },
+        ]);
+      }
+      options.onReviewMergeStart?.();
+      return createHandle(input.sessionId, []);
     },
   };
 }
