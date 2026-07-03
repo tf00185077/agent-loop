@@ -5,6 +5,7 @@ import type {
 
 export interface DelegationControlEventRequest {
   role: AgentRuntimeDelegationRole;
+  prompt: string;
   promptSummary: string;
 }
 
@@ -46,6 +47,7 @@ export function validateDelegationControlEvent(
     ok: true,
     request: {
       role: "worker",
+      prompt: input.controlEvent.prompt.trim(),
       promptSummary,
     },
   };

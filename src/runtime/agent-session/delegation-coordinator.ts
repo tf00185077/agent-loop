@@ -1,0 +1,230 @@
+import type {
+  AgentRuntimeAdapter,
+  AgentRuntimeDelegationRole,
+  AgentRuntimeDelegationSummary,
+  AgentRuntimeEvent,
+} from "../../domain/index.js";
+import type {
+  AgentSessionRepository,
+  EventRepository,
+  RunRepository,
+} from "../../persistence/runtime-repositories.js";
+
+export interface DelegationCoordinatorDeps {
+  runRepo: RunRepository;
+  eventRepo: EventRepository;
+  agentSessionRepo: AgentSessionRepository;
+}
+
+export interface StartWorkerDelegationInput {
+  parentSessionId: string;
+  providerId: string;
+  modelLabel: string | null;
+  role: AgentRuntimeDelegationRole;
+  prompt: string;
+  promptSummary: string;
+  adapter: AgentRuntimeAdapter;
+  eventData: Record<string, unknown>;
+}
+
+export interface DelegationCoordinator {
+  acceptAndStartWorker(input: StartWorkerDelegationInput): Promise<void>;
+}
+
+export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): DelegationCoordinator {
+  return {
+    async acceptAndStartWorker(input) {
+      const parent = deps.agentSessionRepo.getSession(input.parentSessionId);
+      if (!parent) {
+        throw new Error(`Agent session not found: ${input.parentSessionId}`);
+      }
+
+      const request = deps.agentSessionRepo.createDelegationRequest({
+        parentSessionId: parent.id,
+        role: input.role,
+        promptSummary: input.promptSummary,
+      });
+      const accepted = deps.agentSessionRepo.acceptDelegationRequest(request.id);
+      deps.eventRepo.create({
+        goalId: parent.goalId,
+        runId: parent.runId,
+        type: "agent.progress",
+        message: "Delegation request accepted.",
+        data: {
+          ...input.eventData,
+          delegationControlEvent: undefined,
+          runtimeEventType: "delegation.accepted",
+          delegationRequestId: accepted.id,
+          delegationRole: accepted.role,
+        },
+      });
+
+      const childCapabilities = await input.adapter.detectCapabilities();
+      const childRun = deps.runRepo.create({
+        goalId: parent.goalId,
+        provider: input.providerId,
+        model: input.modelLabel ?? "unknown",
+      });
+      const childSession = deps.agentSessionRepo.createSession({
+        goalId: parent.goalId,
+        runId: childRun.id,
+        providerId: input.providerId,
+        modelLabel: input.modelLabel,
+        lifecycleState: "starting",
+        capabilities: childCapabilities,
+        parent: { sessionId: parent.id },
+      });
+      const handle = await input.adapter.startSession({
+        sessionId: childSession.id,
+        goalId: parent.goalId,
+        runId: childRun.id,
+        providerId: input.providerId,
+        modelLabel: input.modelLabel,
+        prompt: input.prompt,
+        parent: { sessionId: parent.id },
+      });
+
+      const running = deps.agentSessionRepo.startDelegationRequest(accepted.id, childSession.id);
+      deps.agentSessionRepo.updateLifecycleState(childSession.id, "running");
+      deps.agentSessionRepo.updateLifecycleState(parent.id, "waiting_child");
+      deps.eventRepo.create({
+        goalId: parent.goalId,
+        runId: parent.runId,
+        type: "agent.progress",
+        message: "Worker delegation started.",
+        data: {
+          ...input.eventData,
+          delegationControlEvent: undefined,
+          runtimeEventType: "delegation.started",
+          delegationRequestId: running.id,
+          childSessionId: childSession.id,
+        },
+      });
+      deps.eventRepo.create({
+        goalId: parent.goalId,
+        runId: parent.runId,
+        type: "agent.progress",
+        message: "Supervisor waiting for worker result.",
+        data: {
+          ...input.eventData,
+          delegationControlEvent: undefined,
+          runtimeEventType: "delegation.waiting_child",
+          delegationRequestId: running.id,
+          childSessionId: childSession.id,
+        },
+      });
+
+      void consumeChildEvents(deps, {
+        events: handle.events(),
+        delegationRequestId: running.id,
+        childRunId: childRun.id,
+        childSessionId: childSession.id,
+        eventData: input.eventData,
+      });
+    },
+  };
+}
+
+interface ConsumeChildEventsInput extends Omit<RecordChildEventInput, "event"> {
+  events: AsyncIterable<AgentRuntimeEvent>;
+}
+
+async function consumeChildEvents(deps: DelegationCoordinatorDeps, input: ConsumeChildEventsInput): Promise<void> {
+  for await (const event of input.events) {
+    const terminal = recordChildEvent(deps, { ...input, event });
+    if (terminal) return;
+  }
+}
+
+interface RecordChildEventInput {
+  event: AgentRuntimeEvent;
+  delegationRequestId: string;
+  childRunId: string;
+  childSessionId: string;
+  eventData: Record<string, unknown>;
+}
+
+function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEventInput): boolean {
+  if (input.event.type === "session.completed") {
+    const finishedAt = new Date().toISOString();
+    deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "completed");
+    deps.runRepo.updateStatus(input.childRunId, "completed", { finishedAt });
+    const request = deps.agentSessionRepo.completeDelegationRequest(
+      input.delegationRequestId,
+      summary("success", input.event.message),
+    );
+    recordDelegationOutcome(deps, input, request.id, "delegation.completed", input.event.message);
+    return true;
+  }
+  if (input.event.type === "session.failed") {
+    const finishedAt = new Date().toISOString();
+    deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "failed");
+    deps.runRepo.updateStatus(input.childRunId, "failed", { finishedAt, error: input.event.message });
+    const request = deps.agentSessionRepo.failDelegationRequest(
+      input.delegationRequestId,
+      summary("failure", input.event.message),
+    );
+    recordDelegationOutcome(deps, input, request.id, "delegation.failed", input.event.message);
+    return true;
+  }
+  if (input.event.type === "session.cancelled") {
+    const finishedAt = new Date().toISOString();
+    deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "cancelled");
+    deps.runRepo.updateStatus(input.childRunId, "failed", { finishedAt, error: input.event.message });
+    const request = deps.agentSessionRepo.cancelDelegationRequest(
+      input.delegationRequestId,
+      summary("cancelled", input.event.message),
+    );
+    recordDelegationOutcome(deps, input, request.id, "delegation.cancelled", input.event.message);
+    return true;
+  }
+  if (input.event.type === "session.timed_out") {
+    const finishedAt = new Date().toISOString();
+    deps.agentSessionRepo.updateLifecycleState(input.childSessionId, "failed");
+    deps.runRepo.updateStatus(input.childRunId, "failed", { finishedAt, error: input.event.message });
+    const request = deps.agentSessionRepo.timeOutDelegationRequest(
+      input.delegationRequestId,
+      summary("timeout", input.event.message),
+    );
+    recordDelegationOutcome(deps, input, request.id, "delegation.timed_out", input.event.message);
+    return true;
+  }
+
+  deps.eventRepo.create({
+    goalId: input.event.goalId,
+    runId: input.event.runId,
+    type: "agent.progress",
+    message: input.event.message,
+    data: {
+      ...input.eventData,
+      runtimeEventType: input.event.type,
+      childSessionId: input.childSessionId,
+    },
+  });
+  return false;
+}
+
+function recordDelegationOutcome(
+  deps: DelegationCoordinatorDeps,
+  input: RecordChildEventInput,
+  delegationRequestId: string,
+  runtimeEventType: string,
+  message: string,
+): void {
+  deps.eventRepo.create({
+    goalId: input.event.goalId,
+    runId: input.event.runId,
+    type: "agent.progress",
+    message,
+    data: {
+      ...input.eventData,
+      runtimeEventType,
+      delegationRequestId,
+      childSessionId: input.childSessionId,
+    },
+  });
+}
+
+function summary(kind: AgentRuntimeDelegationSummary["kind"], safeSummary: string): AgentRuntimeDelegationSummary {
+  return { kind, safeSummary };
+}

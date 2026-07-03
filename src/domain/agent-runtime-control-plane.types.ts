@@ -2,6 +2,7 @@ export const agentSessionLifecycleStates = [
   "starting",
   "running",
   "waiting_approval",
+  "waiting_child",
   "waiting_input",
   "stalled",
   "cancelling",
@@ -174,6 +175,7 @@ export type AgentRuntimeEventType =
   | "approval.approved"
   | "approval.rejected"
   | "child_session.requested"
+  | "session.timed_out"
   | "delegation.accepted"
   | "delegation.rejected"
   | "delegation.started"

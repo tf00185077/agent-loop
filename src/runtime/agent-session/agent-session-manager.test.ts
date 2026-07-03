@@ -301,7 +301,7 @@ test("forwards approve reject and cancel controls to the active adapter exactly 
   db.close();
 });
 
-test("persists valid delegation control events without spawning children", async () => {
+test("persists valid delegation control events and starts a child claim", async () => {
   const db = openDatabase({
     path: join(mkdtempSync(join(tmpdir(), "auto-agent-session-delegation-")), "runtime.sqlite"),
   });
@@ -351,9 +351,10 @@ test("persists valid delegation control events without spawning children", async
   const durableEvents = eventRepo.listForGoal(goal.id);
 
   assert.equal(delegations.length, 1);
-  assert.equal(delegations[0]?.status, "accepted");
+  assert.equal(delegations[0]?.status, "running");
   assert.equal(delegations[0]?.role, "worker");
   assert.equal(delegations[0]?.promptSummary, "Run focused tests.");
+  assert.equal(typeof delegations[0]?.childSessionId, "string");
   assert.ok(
     durableEvents.some(
       (event) =>
@@ -426,8 +427,99 @@ test("rejects duplicate active delegation control events durably", async () => {
     .find((event) => event.data.runtimeEventType === "delegation.rejected");
 
   assert.equal(delegations.length, 1);
-  assert.equal(delegations[0]?.status, "accepted");
+  assert.equal(delegations[0]?.status, "running");
   assert.match(String(rejection?.data.safeReason), /active delegation/i);
+
+  db.close();
+});
+
+test("spawns worker children and records child failure without failing the supervisor goal", async () => {
+  const db = openDatabase({
+    path: join(mkdtempSync(join(tmpdir(), "auto-agent-session-child-failure-")), "runtime.sqlite"),
+  });
+  const goalRepo = createGoalRepository(db);
+  const runRepo = createRunRepository(db);
+  const eventRepo = createEventRepository(db);
+  const agentSessionRepo = createAgentSessionRepository(db);
+  const goal = goalRepo.create({
+    title: "Child failure observation",
+    description: "A failed worker should not fail the supervisor automatically.",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-07-03T00:00:00.000Z" });
+  const starts: Array<{ sessionId: string; parentSessionId?: string | null; prompt: string }> = [];
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return {
+        eventStreaming: true,
+        approval: false,
+        cancellation: true,
+        resume: false,
+        childSessions: true,
+      };
+    },
+    async startSession(input) {
+      starts.push({ sessionId: input.sessionId, parentSessionId: input.parent?.sessionId ?? null, prompt: input.prompt });
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          {
+            type: "session.failed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Worker could not complete focused tests.",
+            occurredAt: "2026-07-03T00:00:02.000Z",
+          },
+        ]);
+      }
+
+      return createHandle(input.sessionId, [
+        {
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Requesting worker.",
+          occurredAt: "2026-07-03T00:00:01.000Z",
+          metadata: {
+            delegationControlEvent: {
+              type: "managed_delegation.request",
+              role: "worker",
+              prompt: "Run focused tests.",
+              summary: "Run focused tests.",
+            },
+          },
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager({
+    goalRepo,
+    runRepo,
+    eventRepo,
+    agentSessionRepo,
+  });
+
+  const result = await manager.startManagedSession({
+    goalId: goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Delegate to a worker.",
+    adapter,
+  });
+  await waitFor(() => agentSessionRepo.listDelegationRequests(result.session.id)[0]?.status === "failed");
+  const delegations = agentSessionRepo.listDelegationRequests(result.session.id);
+  const durableEvents = eventRepo.listForGoal(goal.id);
+
+  assert.equal(starts.length, 2);
+  assert.equal(starts[1]?.parentSessionId, result.session.id);
+  assert.equal(starts[1]?.prompt, "Run focused tests.");
+  assert.equal(agentSessionRepo.getSession(result.session.id)?.lifecycleState, "waiting_child");
+  assert.equal(delegations[0]?.status, "failed");
+  assert.equal(delegations[0]?.resultSummary?.safeSummary, "Worker could not complete focused tests.");
+  assert.equal(goalRepo.getById(goal.id)?.status, "running");
+  assert.ok(durableEvents.some((event) => event.data.runtimeEventType === "delegation.waiting_child"));
+  assert.ok(durableEvents.some((event) => event.data.runtimeEventType === "delegation.failed"));
 
   db.close();
 });
@@ -465,6 +557,9 @@ function adapterWithEvents(events: AgentRuntimeEvent[]): AgentRuntimeAdapter {
       };
     },
     async startSession(input) {
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, []);
+      }
       return createHandle(
         input.sessionId,
         events.map((event) => ({

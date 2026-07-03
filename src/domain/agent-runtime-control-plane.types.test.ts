@@ -29,6 +29,7 @@ test("defines managed session lifecycle states in control-plane order", () => {
     "starting",
     "running",
     "waiting_approval",
+    "waiting_child",
     "waiting_input",
     "stalled",
     "cancelling",

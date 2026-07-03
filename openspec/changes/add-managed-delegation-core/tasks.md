@@ -15,11 +15,11 @@
 
 ## 3. Delegation Coordinator
 
-- [ ] 3.1 Add a delegation coordinator service that owns request acceptance, child spawning, outcome recording, and supervisor continuation decisions.
-- [ ] 3.2 Implement backend child session spawning for the `worker` role using managed runtime adapter APIs.
-- [ ] 3.3 Record supervisor waiting-child state and durable waiting-child events after a child starts.
-- [ ] 3.4 Implement child completion handling for success, failure, timeout, and cancellation summaries.
-- [ ] 3.5 Add tests proving child failures continue the supervisor as observations rather than failing the parent goal automatically.
+- [x] 3.1 Add a delegation coordinator service that owns request acceptance, child spawning, outcome recording, and supervisor continuation decisions.
+- [x] 3.2 Implement backend child session spawning for the `worker` role using managed runtime adapter APIs.
+- [x] 3.3 Record supervisor waiting-child state and durable waiting-child events after a child starts.
+- [x] 3.4 Implement child completion handling for success, failure, timeout, and cancellation summaries.
+- [x] 3.5 Add tests proving child failures continue the supervisor as observations rather than failing the parent goal automatically.
 
 ## 4. Supervisor Continuation and Detached Handling
 

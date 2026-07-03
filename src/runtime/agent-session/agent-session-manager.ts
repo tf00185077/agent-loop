@@ -10,6 +10,7 @@ import type {
   EventRepository,
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
+import { createDelegationCoordinator } from "./delegation-coordinator.js";
 import { validateDelegationControlEvent } from "./delegation-control-event.js";
 
 export interface AgentSessionManagerDeps {
@@ -90,13 +91,14 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
 
       try {
         for await (const event of handle.events()) {
-          persistRuntimeEvent(deps, {
+          await persistRuntimeEvent(deps, {
             event,
             goalId: goal.id,
             runId: run.id,
             sessionId: session.id,
             providerId: input.providerId,
             modelLabel: input.modelLabel,
+            adapter: input.adapter,
             runtimeCommandIds,
           });
         }
@@ -179,10 +181,11 @@ interface PersistRuntimeEventInput {
   sessionId: string;
   providerId: string;
   modelLabel: string | null;
+  adapter: AgentRuntimeAdapter;
   runtimeCommandIds: Map<string, string>;
 }
 
-function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: PersistRuntimeEventInput): void {
+async function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: PersistRuntimeEventInput): Promise<void> {
   const data = {
     sessionId: input.sessionId,
     provider: input.providerId,
@@ -191,7 +194,7 @@ function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: PersistRuntim
   };
 
   if (input.event.metadata?.delegationControlEvent !== undefined) {
-    persistDelegationControlEvent(deps, input, data);
+    await persistDelegationControlEvent(deps, input, data);
     return;
   }
 
@@ -323,11 +326,11 @@ function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: PersistRuntim
   });
 }
 
-function persistDelegationControlEvent(
+async function persistDelegationControlEvent(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
   data: Record<string, unknown>,
-): void {
+): Promise<void> {
   const parentSession = deps.agentSessionRepo.getSession(input.sessionId);
   if (!parentSession) {
     throw new Error(`Agent session not found: ${input.sessionId}`);
@@ -354,24 +357,15 @@ function persistDelegationControlEvent(
   }
 
   try {
-    const request = deps.agentSessionRepo.createDelegationRequest({
+    await createDelegationCoordinator(deps).acceptAndStartWorker({
       parentSessionId: input.sessionId,
+      providerId: input.providerId,
+      modelLabel: input.modelLabel,
       role: validation.request.role,
+      prompt: validation.request.prompt,
       promptSummary: validation.request.promptSummary,
-    });
-    const accepted = deps.agentSessionRepo.acceptDelegationRequest(request.id);
-    deps.eventRepo.create({
-      goalId: input.goalId,
-      runId: input.runId,
-      type: "agent.progress",
-      message: "Delegation request accepted.",
-      data: {
-        ...data,
-        delegationControlEvent: undefined,
-        runtimeEventType: "delegation.accepted",
-        delegationRequestId: accepted.id,
-        delegationRole: accepted.role,
-      },
+      adapter: input.adapter,
+      eventData: data,
     });
   } catch (err) {
     const safeReason = err instanceof Error ? err.message : "Delegation request rejected.";
