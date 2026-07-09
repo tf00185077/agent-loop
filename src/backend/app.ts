@@ -215,7 +215,6 @@ function createRuntimeFromAgentRuntimeAdapter(
         goalId,
         providerId: settings.provider,
         modelLabel: settings.modelLabel,
-        prompt: "Run this goal through the managed local agent runtime.",
         adapter,
       });
     },

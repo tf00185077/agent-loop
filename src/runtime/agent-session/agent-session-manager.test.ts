@@ -528,7 +528,8 @@ test("spawns worker children in isolated worktrees and records child failure wit
   assert.equal(starts[1]?.parentSessionId, result.session.id);
   assert.equal(starts[1]?.prompt, "Run focused tests.");
   assert.equal(starts[1]?.cwd, `C:\\worktrees\\${starts[1]?.sessionId}`);
-  assert.equal(starts[2]?.prompt, "Worker result: Worker could not complete focused tests.");
+  assert.ok(starts[2]?.prompt.includes("Worker result: Worker could not complete focused tests."));
+  assert.ok(starts[2]?.prompt.includes("auto-agent-control"));
   assert.deepEqual(agentSessionRepo.getSession(starts[1]!.sessionId)?.worktree, {
     path: `C:\\worktrees\\${starts[1]?.sessionId}`,
     label: `child-${starts[1]?.sessionId}`,
@@ -896,7 +897,8 @@ test("starts a fresh supervisor continuation when true resume is unavailable", a
   });
   await waitFor(() => starts.length === 3);
 
-  assert.equal(starts[2]?.prompt, "Worker result: Worker finished.");
+  assert.ok(starts[2]?.prompt.includes("Worker result: Worker finished."));
+  assert.ok(starts[2]?.prompt.includes("auto-agent-control"));
   assert.ok(fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.continuationMode === "fresh"));
   fixture.db.close();
 });

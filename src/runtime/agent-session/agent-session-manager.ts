@@ -12,6 +12,7 @@ import type {
 } from "../../persistence/runtime-repositories.js";
 import { createDelegationCoordinator } from "./delegation-coordinator.js";
 import { validateDelegationControlEvent } from "./delegation-control-event.js";
+import { buildSupervisorPrompt } from "./supervisor-prompt.js";
 import type { ReviewMergeVerificationService } from "./review-merge-verification-service.js";
 import type { ReviewMergeWorkspaceService } from "./review-merge-workspace-service.js";
 import type { WorktreeService } from "./worktree-service.js";
@@ -31,7 +32,8 @@ export interface StartManagedSessionInput {
   goalId: string;
   providerId: string;
   modelLabel: string | null;
-  prompt: string;
+  /** Session prompt override; when omitted the supervisor bootstrap prompt is built from the goal. */
+  prompt?: string;
   adapter: AgentRuntimeAdapter;
 }
 
@@ -91,7 +93,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
         runId: run.id,
         providerId: input.providerId,
         modelLabel: input.modelLabel,
-        prompt: input.prompt,
+        prompt: input.prompt ?? buildSupervisorPrompt({ goal, phase: { kind: "bootstrap" } }),
       });
       activeHandles.set(session.id, handle);
       deps.agentSessionRepo.updateLifecycleState(session.id, "running");
@@ -438,13 +440,16 @@ async function continueSupervisorAfterChild(
     lifecycleState: "starting",
     capabilities: await input.adapter.detectCapabilities(),
   });
+  const goal = deps.goalRepo.getById(input.goalId);
   const freshHandle = await input.adapter.startSession({
     sessionId: session.id,
     goalId: input.goalId,
     runId: run.id,
     providerId: input.providerId,
     modelLabel: input.modelLabel,
-    prompt: message,
+    prompt: goal
+      ? buildSupervisorPrompt({ goal, phase: { kind: "continuation", observation } })
+      : message,
   });
   input.activeHandles.set(session.id, freshHandle);
   deps.agentSessionRepo.updateLifecycleState(session.id, "running");

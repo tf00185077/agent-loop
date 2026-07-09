@@ -9,9 +9,9 @@
 
 ## 2. Supervisor Prompt Contract
 
-- [ ] 2.1 Add tests for `buildSupervisorPrompt(goal)` asserting required sections: role framing, goal context, decomposition-first instruction, one-worker-at-a-time rule, review-merge instruction, exact control-block format examples for both types.
-- [ ] 2.2 Implement the supervisor prompt builder with bootstrap and continuation variants (continuation carries child observation or "continue or complete" nudge plus full contract).
-- [ ] 2.3 Replace the placeholder prompt in the managed-session start path and the bare `Worker result: …` continuation message with the builder outputs.
+- [x] 2.1 Add tests for `buildSupervisorPrompt(goal)` asserting required sections: role framing, goal context, decomposition-first instruction, one-worker-at-a-time rule, review-merge instruction, exact control-block format examples for both types.
+- [x] 2.2 Implement the supervisor prompt builder with bootstrap and continuation variants (continuation carries child observation or "continue or complete" nudge plus full contract).
+- [x] 2.3 Replace the placeholder prompt in the managed-session start path and the bare `Worker result: …` continuation message with the builder outputs.
 
 ## 3. Sequential Delegation + Explicit Completion (control plane)
 
