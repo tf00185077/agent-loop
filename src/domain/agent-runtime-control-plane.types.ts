@@ -172,6 +172,43 @@ export interface AgentRuntimeDelegationSummary {
   safeDetails?: string | null;
 }
 
+export const managedControlEventTypes = [
+  "managed_delegation.request",
+  "managed_delegation.complete",
+  "managed_delegation.task_list",
+] as const;
+
+export type ManagedControlEventType = (typeof managedControlEventTypes)[number];
+
+export interface ManagedDelegationRequestControlEvent {
+  type: "managed_delegation.request";
+  role: AgentRuntimeDelegationRole;
+  prompt: string;
+  summary?: string | null;
+  taskId?: string | null;
+  workerDelegationRequestId?: string | null;
+}
+
+export interface ManagedDelegationCompleteControlEvent {
+  type: "managed_delegation.complete";
+  summary: string;
+}
+
+export interface ManagedTaskListEntry {
+  id: string;
+  title: string;
+}
+
+export interface ManagedTaskListControlEvent {
+  type: "managed_delegation.task_list";
+  tasks: ManagedTaskListEntry[];
+}
+
+export type ManagedControlEvent =
+  | ManagedDelegationRequestControlEvent
+  | ManagedDelegationCompleteControlEvent
+  | ManagedTaskListControlEvent;
+
 export interface AgentRuntimeDelegationRequest {
   id: string;
   parentSessionId: string;
@@ -179,6 +216,7 @@ export interface AgentRuntimeDelegationRequest {
   role: AgentRuntimeDelegationRole;
   status: AgentRuntimeDelegationRequestStatus;
   promptSummary: string;
+  taskId?: string | null;
   resultSummary: AgentRuntimeDelegationSummary | null;
   detachedReason: string | null;
   createdAt: string;

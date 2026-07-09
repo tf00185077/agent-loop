@@ -2,10 +2,10 @@
 
 ## 1. Control-Block Wire Format (provider-neutral)
 
-- [ ] 1.1 Add domain types for the completion control event (`managed_delegation.complete` with safe result summary) and optional `taskId` on delegation control events.
-- [ ] 1.2 Add tests for a shared `extractControlBlocks(text)` utility: fenced `auto-agent-control` blocks are extracted, prose is preserved, blocks are stripped from progress text, malformed JSON yields a typed rejection.
-- [ ] 1.3 Implement `extractControlBlocks` in `src/runtime/agent-session/` (or a shared runtime util) as pure functions.
-- [ ] 1.4 Extend `validateDelegationControlEvent` tests and implementation to accept optional `taskId` and validate `managed_delegation.complete` payloads.
+- [x] 1.1 Add domain types for the completion control event (`managed_delegation.complete` with safe result summary) and optional `taskId` on delegation control events.
+- [x] 1.2 Add tests for a shared `extractControlBlocks(text)` utility: fenced `auto-agent-control` blocks are extracted, prose is preserved, blocks are stripped from progress text, malformed JSON yields a typed rejection.
+- [x] 1.3 Implement `extractControlBlocks` in `src/runtime/agent-session/` (or a shared runtime util) as pure functions.
+- [x] 1.4 Extend `validateDelegationControlEvent` tests and implementation to accept optional `taskId` and validate `managed_delegation.complete` payloads.
 
 ## 2. Supervisor Prompt Contract
 

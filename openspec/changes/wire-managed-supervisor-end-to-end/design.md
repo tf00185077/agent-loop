@@ -44,7 +44,7 @@ Supervisor output signals intent with a fenced block the parser can extract dete
 ```
 ````
 
-- `type` ∈ {`managed_delegation.request`, `managed_delegation.complete`}.
+- `type` ∈ {`managed_delegation.request`, `managed_delegation.complete`, `managed_delegation.task_list`}. The task list is a control block too (not free prose) so the durable `taskList` metadata is deterministic to extract.
 - The fence tag `auto-agent-control` is unambiguous to grep out of mixed prose and cheap for models to produce reliably; JSON body reuses the existing `validateDelegationControlEvent` schema (extended with optional `taskId`).
 - Extraction happens in the runtime adapter layer (Codex: on `agent_message` items; Claude: on stdout text), which attaches the parsed object as `metadata.delegationControlEvent` on the runtime event — exactly what `agent-session-manager` already consumes. **Alternative considered**: teaching the JSONL parser itself about control blocks — rejected because the parser should stay a pure Codex-JSONL translator; control-block semantics are provider-neutral and belong one layer up in a shared `extractControlBlocks(text)` utility used by both adapters.
 - Text before/after the block still flows as normal sanitized progress. A message containing a control block is not shown verbatim (the block is stripped from the progress message).
@@ -63,7 +63,7 @@ Today `session.completed` (process exit) marks the goal completed. With a multi-
 
 1. Role framing (you are a supervisor; you do not edit files yourself).
 2. The goal title/description.
-3. Instructions: decompose into an ordered task list first; announce it in plain text (durably recorded as an `agent.progress` event with `taskList` metadata); delegate exactly one `worker` task at a time; after each worker result decide re-delegate / next task / review_merge; run `review_merge` referencing the worker delegation request id before declaring done.
+3. Instructions: decompose into an ordered task list first; announce it with a `managed_delegation.task_list` control block (durably recorded as an `agent.progress` event with `taskList` metadata); delegate exactly one `worker` task at a time; after each worker result decide re-delegate / next task / review_merge; run `review_merge` referencing the worker delegation request id before declaring done.
 4. The exact control-block format with one example per type, and the rule that only fenced `auto-agent-control` blocks are honored.
 5. Continuation variant: same contract plus the child observation ("Worker result: …") — replacing today's bare `Worker result: ${observation}` message so fresh continuations retain the contract. This matters because Claude v1 has no resume: every continuation must re-carry the full contract.
 
