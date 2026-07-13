@@ -13,7 +13,13 @@ import type {
   EventRepository,
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
-import { createGitWorktreeService, type WorktreeService } from "./worktree-service.js";
+import { validateManagedTaskResult, type ManagedTaskResult } from "./delegation-control-event.js";
+import {
+  attestWorktreeFiles,
+  createGitWorktreeService,
+  type WorktreeAttestor,
+  type WorktreeService,
+} from "./worktree-service.js";
 import {
   createGitReviewMergeWorkspaceService,
   type ReviewMergeWorkspaceService,
@@ -28,6 +34,8 @@ export interface DelegationCoordinatorDeps {
   eventRepo: EventRepository;
   agentSessionRepo: AgentSessionRepository;
   worktreeService?: WorktreeService;
+  /** Reads authoritative changed files from a worker worktree at terminal. */
+  worktreeAttestor?: WorktreeAttestor;
   reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;
@@ -190,6 +198,8 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         role: input.role,
         taskId: input.taskId ?? null,
         workerTaskId: workerResult?.taskId ?? null,
+        worktreePath: childCwd.worktree?.path ?? null,
+        pending: {},
         reviewMergeVerificationService,
         supervisorCwd,
         onChildOutcome: input.onChildOutcome,
@@ -281,6 +291,9 @@ interface RecordChildEventInput {
   childSessionId: string;
   parentSessionId: string;
   eventData: Record<string, unknown>;
+  worktreePath: string | null;
+  /** Mutable per-child scratch: the latest structured result the child emitted. */
+  pending: { taskResult?: ManagedTaskResult };
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;
   onChildOutcome?: (input: SupervisorContinuationInput) => Promise<void>;
@@ -312,7 +325,7 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
       deps,
       input,
       terminal.status,
-      summary(terminal.kind, input.event.message),
+      buildTerminalSummary(deps, input, terminal.kind),
     );
     recordReviewMergeApplyOutcome(deps, input, request.id);
     recordDelegationOutcome(
@@ -332,6 +345,41 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
     };
   }
 
+  if (input.event.metadata?.delegationControlEvent !== undefined) {
+    const parsed = validateManagedTaskResult(input.event.metadata.delegationControlEvent);
+    if (parsed.ok) {
+      input.pending.taskResult = parsed.result;
+      deps.eventRepo.create({
+        goalId: input.event.goalId,
+        runId: input.event.runId,
+        type: "agent.progress",
+        message: "Child task result received.",
+        data: {
+          ...input.eventData,
+          delegationControlEvent: undefined,
+          runtimeEventType: "task.result",
+          childSessionId: input.childSessionId,
+          taskResult: parsed.result,
+        },
+      });
+      return null;
+    }
+    deps.eventRepo.create({
+      goalId: input.event.goalId,
+      runId: input.event.runId,
+      type: "agent.progress",
+      message: "Child control block ignored.",
+      data: {
+        ...input.eventData,
+        delegationControlEvent: undefined,
+        runtimeEventType: "child_control.ignored",
+        childSessionId: input.childSessionId,
+        safeReason: parsed.safeReason,
+      },
+    });
+    return null;
+  }
+
   deps.eventRepo.create({
     goalId: input.event.goalId,
     runId: input.event.runId,
@@ -344,6 +392,33 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
     },
   });
   return null;
+}
+
+/** Merge the child's structured result and backend attestation into the terminal summary. */
+function buildTerminalSummary(
+  deps: DelegationCoordinatorDeps,
+  input: RecordChildEventInput,
+  kind: AgentRuntimeDelegationSummary["kind"],
+): AgentRuntimeDelegationSummary {
+  const base = summary(kind, input.event.message);
+  const structured = input.pending.taskResult;
+  if (structured) {
+    if (structured.criterionEvidence.length > 0) base.criterionEvidence = structured.criterionEvidence;
+    if (structured.tests.length > 0) base.tests = structured.tests;
+    if (structured.claimedFiles.length > 0) base.claimedFiles = structured.claimedFiles;
+  }
+  if (input.worktreePath) {
+    const attestor = deps.worktreeAttestor ?? attestWorktreeFiles;
+    const attestedFiles = attestor(input.worktreePath).sort();
+    base.attestedFiles = attestedFiles;
+    if (structured && structured.claimedFiles.length > 0) {
+      const claimed = [...structured.claimedFiles].sort();
+      base.filesDiscrepancy =
+        claimed.length !== attestedFiles.length ||
+        claimed.some((path, index) => path !== attestedFiles[index]);
+    }
+  }
+  return base;
 }
 
 function recordReviewMergeApplyOutcome(

@@ -1719,6 +1719,130 @@ test("classifies review rejections as substantive or deferred by criterion citat
   }
 });
 
+test("captures structured child results and attests changed files from the worktree", async () => {
+  const fixture = createManagerFixture("structured result attestation");
+  let supervisorStarted = false;
+  const attestedPaths: string[] = [];
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Reporting structured result.",
+            occurredAt: "2026-07-13T04:00:01.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_task.result",
+                taskId: "task-1",
+                criterionEvidence: [{ criterionId: "A1", evidence: "Second player joined in test run." }],
+                tests: [{ command: "npm test -- lobby", exitCode: 0, summary: "3 passing" }],
+                claimedFiles: ["src/lobby.ts", "src/matchmaking.ts"],
+              },
+            },
+          },
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Worker done.",
+            occurredAt: "2026-07-13T04:00:02.000Z",
+          },
+        ]);
+      }
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
+      return createHandle(input.sessionId, [
+        {
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Announcing task.",
+          occurredAt: "2026-07-13T04:00:00.000Z",
+          metadata: {
+            delegationControlEvent: {
+              type: "managed_delegation.task_list",
+              tasks: [
+                {
+                  id: "task-1",
+                  title: "Lobby join",
+                  acceptance: [{ id: "A1", text: "Second player can join the lobby." }],
+                },
+              ],
+            },
+          },
+        },
+        {
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Delegating.",
+          occurredAt: "2026-07-13T04:00:00.500Z",
+          metadata: {
+            delegationControlEvent: {
+              type: "managed_delegation.request",
+              role: "worker",
+              taskId: "task-1",
+              prompt: "Implement lobby join.",
+            },
+          },
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    worktreeAttestor: (worktreePath: string) => {
+      attestedPaths.push(worktreePath);
+      return ["src/lobby.ts"];
+    },
+  });
+
+  const result = await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(
+    () => fixture.agentSessionRepo.listDelegationRequests(result.session.id)[0]?.status === "completed",
+  );
+  await waitFor(() =>
+    fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.continuationMode === "fresh"),
+  );
+
+  const request = fixture.agentSessionRepo.listDelegationRequests(result.session.id)[0];
+  assert.deepEqual(request?.acceptance, [{ id: "A1", text: "Second player can join the lobby." }]);
+  assert.deepEqual(request?.resultSummary?.criterionEvidence, [
+    { criterionId: "A1", evidence: "Second player joined in test run." },
+  ]);
+  assert.deepEqual(request?.resultSummary?.tests, [
+    { command: "npm test -- lobby", exitCode: 0, summary: "3 passing" },
+  ]);
+  assert.deepEqual(request?.resultSummary?.claimedFiles, ["src/lobby.ts", "src/matchmaking.ts"]);
+  assert.deepEqual(request?.resultSummary?.attestedFiles, ["src/lobby.ts"]);
+  assert.equal(request?.resultSummary?.filesDiscrepancy, true);
+  assert.equal(attestedPaths.length, 1);
+  assert.match(attestedPaths[0] ?? "", /worktrees/i);
+  const taskResultEvent = fixture.eventRepo
+    .listForGoal(fixture.goal.id)
+    .find((event) => event.data.runtimeEventType === "task.result");
+  assert.ok(taskResultEvent, "expected a durable task.result event from the child");
+  fixture.db.close();
+});
+
 test("feeds control rejection reasons into the next supervisor continuation", async () => {
   const fixture = createManagerFixture("rejected control block");
   const starts: string[] = [];

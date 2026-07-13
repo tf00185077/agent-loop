@@ -44,6 +44,29 @@ export function createGitWorktreeService(options: GitWorktreeServiceOptions = {}
   };
 }
 
+export type WorktreeAttestor = (worktreePath: string) => string[];
+
+/**
+ * Authoritative changed-file evidence: reads the worker worktree's git status
+ * instead of trusting the child's self-reported file list.
+ */
+export function attestWorktreeFiles(worktreePath: string): string[] {
+  const result = spawnSync("git", ["status", "--porcelain"], {
+    cwd: worktreePath,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (result.status !== 0) {
+    return [];
+  }
+  return String(result.stdout ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 3)
+    .map((line) => line.slice(2).trim().replace(/^"|"$/g, ""))
+    .filter((path) => path.length > 0);
+}
+
 function defaultGitRunner(input: { cwd: string; args: string[] }): { status: number | null; stderr?: string } {
   const result = spawnSync("git", input.args, {
     cwd: input.cwd,

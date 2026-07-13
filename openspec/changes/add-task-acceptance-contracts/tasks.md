@@ -22,10 +22,10 @@
 
 ## 4. Structured Results + Worktree Attestation
 
-- [ ] 4.1 Add coordinator tests: `managed_task.result` control block in child output is captured into the delegation result; absent block falls back to safeSummary-only.
-- [ ] 4.2 Implement structured-result capture in the delegation coordinator/child event flow.
-- [ ] 4.3 Add tests: at worker terminal, backend attests changed files from worktree git status (injectable attestor); claimed-vs-attested mismatch recorded durably; attested list authoritative.
-- [ ] 4.4 Implement worktree attestation service and wire it at child terminal outcomes.
+- [x] 4.1 Add coordinator tests: `managed_task.result` control block in child output is captured into the delegation result; absent block falls back to safeSummary-only.
+- [x] 4.2 Implement structured-result capture in the delegation coordinator/child event flow.
+- [x] 4.3 Add tests: at worker terminal, backend attests changed files from worktree git status (injectable attestor); claimed-vs-attested mismatch recorded durably; attested list authoritative.
+- [x] 4.4 Implement worktree attestation service and wire it at child terminal outcomes.
 
 ## 5. Prompt Contract + Continuation Task History
 

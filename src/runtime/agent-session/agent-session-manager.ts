@@ -16,7 +16,7 @@ import { buildSupervisorPrompt } from "./supervisor-prompt.js";
 import { GoalTaskRegistry } from "./task-registry.js";
 import type { ReviewMergeVerificationService } from "./review-merge-verification-service.js";
 import type { ReviewMergeWorkspaceService } from "./review-merge-workspace-service.js";
-import type { WorktreeService } from "./worktree-service.js";
+import type { WorktreeAttestor, WorktreeService } from "./worktree-service.js";
 
 export interface AgentSessionManagerDeps {
   goalRepo: GoalRepository;
@@ -24,6 +24,7 @@ export interface AgentSessionManagerDeps {
   eventRepo: EventRepository;
   agentSessionRepo: AgentSessionRepository;
   worktreeService?: WorktreeService;
+  worktreeAttestor?: WorktreeAttestor;
   reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;

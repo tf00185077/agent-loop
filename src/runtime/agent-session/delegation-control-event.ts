@@ -196,6 +196,25 @@ function validateAcceptanceCriteria(value: unknown): AcceptanceValidation {
   return { ok: true, criteria };
 }
 
+export type ManagedTaskResultValidation =
+  | { ok: true; result: ManagedTaskResult }
+  | { ok: false; safeReason: string };
+
+/** Validate a child-emitted managed_task.result payload in isolation. */
+export function validateManagedTaskResult(controlEvent: unknown): ManagedTaskResultValidation {
+  if (!isRecord(controlEvent) || controlEvent.type !== "managed_task.result") {
+    return { ok: false, safeReason: "Not a managed_task.result control event." };
+  }
+  const validated = validateTaskResult(controlEvent);
+  if (!validated.ok) {
+    return validated;
+  }
+  if (validated.kind !== "task_result") {
+    return { ok: false, safeReason: "Not a managed_task.result control event." };
+  }
+  return { ok: true, result: validated.result };
+}
+
 function validateTaskResult(controlEvent: Record<string, unknown>): ManagedControlEventValidationResult {
   const taskId =
     typeof controlEvent.taskId === "string" && controlEvent.taskId.trim().length > 0
