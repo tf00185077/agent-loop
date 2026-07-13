@@ -187,6 +187,7 @@ export const managedControlEventTypes = [
   "managed_delegation.complete",
   "managed_delegation.task_list",
   "managed_task.result",
+  "managed_change.plan",
 ] as const;
 
 export type ManagedControlEventType = (typeof managedControlEventTypes)[number];
@@ -204,6 +205,7 @@ export interface ManagedDelegationRequestControlEvent {
   prompt: string;
   summary?: string | null;
   taskId?: string | null;
+  changeId?: string | null;
   acceptance?: TaskAcceptanceCriterion[] | null;
   workerDelegationRequestId?: string | null;
 }
@@ -224,6 +226,30 @@ export interface ManagedTaskListEntry {
 export interface ManagedTaskListControlEvent {
   type: "managed_delegation.task_list";
   tasks: ManagedTaskListEntry[];
+  changeId?: string | null;
+}
+
+export const managedChangeStatuses = [
+  "planned",
+  "specifying",
+  "executing",
+  "merging",
+  "archived",
+  "blocked",
+] as const;
+
+export type ManagedChangeStatus = (typeof managedChangeStatuses)[number];
+
+export interface ManagedChangePlanEntry {
+  id: string;
+  title: string;
+  rationale: string;
+  dependsOn?: string[] | null;
+}
+
+export interface ManagedChangePlanControlEvent {
+  type: "managed_change.plan";
+  changes: ManagedChangePlanEntry[];
 }
 
 export interface TaskCriterionEvidence {
@@ -249,7 +275,8 @@ export type ManagedControlEvent =
   | ManagedDelegationRequestControlEvent
   | ManagedDelegationCompleteControlEvent
   | ManagedTaskListControlEvent
-  | ManagedTaskResultControlEvent;
+  | ManagedTaskResultControlEvent
+  | ManagedChangePlanControlEvent;
 
 export interface AgentRuntimeDelegationRequest {
   id: string;
@@ -259,6 +286,7 @@ export interface AgentRuntimeDelegationRequest {
   status: AgentRuntimeDelegationRequestStatus;
   promptSummary: string;
   taskId?: string | null;
+  changeId?: string | null;
   /** Frozen acceptance criteria snapshot in force at dispatch. */
   acceptance?: TaskAcceptanceCriterion[] | null;
   resultSummary: AgentRuntimeDelegationSummary | null;

@@ -502,6 +502,22 @@ async function persistDelegationControlEvent(
     return;
   }
 
+  if (validation.kind === "change_plan") {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: "Supervisor change plan recorded.",
+      data: {
+        ...data,
+        delegationControlEvent: undefined,
+        runtimeEventType: "supervisor.change_plan",
+        changePlan: validation.plan.changes,
+      },
+    });
+    return;
+  }
+
   if (validation.kind === "task_result") {
     deps.eventRepo.create({
       goalId: input.goalId,

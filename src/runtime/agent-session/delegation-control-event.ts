@@ -1,6 +1,7 @@
 import type {
   AgentRuntimeDelegationRole,
   AgentRuntimeSession,
+  ManagedChangePlanEntry,
   ManagedTaskListEntry,
   TaskAcceptanceCriterion,
   TaskCriterionEvidence,
@@ -12,8 +13,13 @@ export interface DelegationControlEventRequest {
   prompt: string;
   promptSummary: string;
   taskId?: string | null;
+  changeId?: string | null;
   acceptance?: TaskAcceptanceCriterion[] | null;
   workerDelegationRequestId?: string | null;
+}
+
+export interface ManagedChangePlan {
+  changes: ManagedChangePlanEntry[];
 }
 
 export interface ManagedTaskResult {
@@ -81,6 +87,10 @@ export function validateDelegationControlEvent(
       prompt: input.controlEvent.prompt.trim(),
       promptSummary,
       taskId,
+      changeId:
+        typeof input.controlEvent.changeId === "string" && input.controlEvent.changeId.trim().length > 0
+          ? input.controlEvent.changeId.trim()
+          : null,
       acceptance: acceptance.criteria,
       workerDelegationRequestId,
     },
@@ -90,8 +100,9 @@ export function validateDelegationControlEvent(
 export type ManagedControlEventValidationResult =
   | { ok: true; kind: "delegation"; request: DelegationControlEventRequest }
   | { ok: true; kind: "completion"; summary: string }
-  | { ok: true; kind: "task_list"; tasks: ManagedTaskListEntry[] }
+  | { ok: true; kind: "task_list"; tasks: ManagedTaskListEntry[]; changeId: string | null }
   | { ok: true; kind: "task_result"; result: ManagedTaskResult }
+  | { ok: true; kind: "change_plan"; plan: ManagedChangePlan }
   | { ok: false; safeReason: string };
 
 export function validateManagedControlEvent(
@@ -117,11 +128,15 @@ export function validateManagedControlEvent(
   }
 
   if (input.controlEvent.type === "managed_delegation.task_list") {
-    return validateTaskList(input.controlEvent.tasks);
+    return validateTaskList(input.controlEvent.tasks, input.controlEvent.changeId);
   }
 
   if (input.controlEvent.type === "managed_task.result") {
     return validateTaskResult(input.controlEvent);
+  }
+
+  if (input.controlEvent.type === "managed_change.plan") {
+    return validateChangePlan(input.controlEvent.changes);
   }
 
   return {
@@ -130,7 +145,85 @@ export function validateManagedControlEvent(
   };
 }
 
-function validateTaskList(tasks: unknown): ManagedControlEventValidationResult {
+const MIN_PLAN_CHANGES = 2;
+const MAX_PLAN_CHANGES = 8;
+
+function validateChangePlan(changes: unknown): ManagedControlEventValidationResult {
+  if (!Array.isArray(changes) || changes.length < MIN_PLAN_CHANGES || changes.length > MAX_PLAN_CHANGES) {
+    return {
+      ok: false,
+      safeReason: `Change plans must contain between ${MIN_PLAN_CHANGES} and ${MAX_PLAN_CHANGES} changes.`,
+    };
+  }
+
+  const entries: ManagedChangePlanEntry[] = [];
+  const ids = new Set<string>();
+  for (const change of changes) {
+    if (
+      !isRecord(change) ||
+      typeof change.id !== "string" ||
+      change.id.trim().length === 0 ||
+      typeof change.title !== "string" ||
+      change.title.trim().length === 0 ||
+      typeof change.rationale !== "string" ||
+      change.rationale.trim().length === 0
+    ) {
+      return { ok: false, safeReason: "Plan changes require non-empty id, title, and rationale strings." };
+    }
+    const id = change.id.trim();
+    if (ids.has(id)) {
+      return { ok: false, safeReason: "Change ids must be unique within a plan." };
+    }
+    ids.add(id);
+    let dependsOn: string[] | null = null;
+    if (change.dependsOn !== undefined && change.dependsOn !== null) {
+      if (!Array.isArray(change.dependsOn) || change.dependsOn.some((dep) => typeof dep !== "string" || !dep.trim())) {
+        return { ok: false, safeReason: "Change dependencies must be a list of change ids." };
+      }
+      dependsOn = change.dependsOn.map((dep) => (dep as string).trim());
+    }
+    entries.push({ id, title: change.title.trim(), rationale: change.rationale.trim(), dependsOn });
+  }
+
+  for (const entry of entries) {
+    for (const dep of entry.dependsOn ?? []) {
+      if (!ids.has(dep)) {
+        return { ok: false, safeReason: `Change dependency references an unknown change id: ${dep}.` };
+      }
+    }
+  }
+  if (hasDependencyCycle(entries)) {
+    return { ok: false, safeReason: "Change dependencies must be acyclic." };
+  }
+
+  return { ok: true, kind: "change_plan", plan: { changes: entries } };
+}
+
+function hasDependencyCycle(entries: ManagedChangePlanEntry[]): boolean {
+  const dependsOn = new Map(entries.map((entry) => [entry.id, entry.dependsOn ?? []]));
+  const visiting = new Set<string>();
+  const done = new Set<string>();
+
+  function visit(id: string): boolean {
+    if (done.has(id)) return false;
+    if (visiting.has(id)) return true;
+    visiting.add(id);
+    for (const dep of dependsOn.get(id) ?? []) {
+      if (visit(dep)) return true;
+    }
+    visiting.delete(id);
+    done.add(id);
+    return false;
+  }
+
+  return entries.some((entry) => visit(entry.id));
+}
+
+function normalizeOptionalId(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function validateTaskList(tasks: unknown, changeId?: unknown): ManagedControlEventValidationResult {
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return { ok: false, safeReason: "Task list must contain at least one task." };
   }
@@ -160,7 +253,7 @@ function validateTaskList(tasks: unknown): ManagedControlEventValidationResult {
       parentTaskId,
     });
   }
-  return { ok: true, kind: "task_list", tasks: entries };
+  return { ok: true, kind: "task_list", tasks: entries, changeId: normalizeOptionalId(changeId) };
 }
 
 type AcceptanceValidation =

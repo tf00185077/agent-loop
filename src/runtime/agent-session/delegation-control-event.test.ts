@@ -292,6 +292,105 @@ test("validates managed task result control events", () => {
   assert.equal(minimal.ok, true);
 });
 
+test("validates change plans with budgets and acyclic dependencies", () => {
+  const valid = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_change.plan",
+      changes: [
+        { id: "change-core", title: "Core loop", rationale: "Foundation for both modes." },
+        {
+          id: "change-4v4",
+          title: "4v4 mode",
+          rationale: "Competitive mode.",
+          dependsOn: ["change-core"],
+        },
+      ],
+    },
+    parentSession: supervisorSession(),
+  });
+  const tooFew = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_change.plan",
+      changes: [{ id: "only", title: "One", rationale: "r" }],
+    },
+    parentSession: supervisorSession(),
+  });
+  const duplicate = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_change.plan",
+      changes: [
+        { id: "a", title: "A", rationale: "r" },
+        { id: "a", title: "A again", rationale: "r" },
+      ],
+    },
+    parentSession: supervisorSession(),
+  });
+  const unknownDep = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_change.plan",
+      changes: [
+        { id: "a", title: "A", rationale: "r", dependsOn: ["ghost"] },
+        { id: "b", title: "B", rationale: "r" },
+      ],
+    },
+    parentSession: supervisorSession(),
+  });
+  const cyclic = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_change.plan",
+      changes: [
+        { id: "a", title: "A", rationale: "r", dependsOn: ["b"] },
+        { id: "b", title: "B", rationale: "r", dependsOn: ["a"] },
+      ],
+    },
+    parentSession: supervisorSession(),
+  });
+
+  assert.equal(valid.ok, true);
+  assert.equal(valid.ok ? valid.kind : null, "change_plan");
+  assert.deepEqual(
+    valid.ok && valid.kind === "change_plan" ? valid.plan.changes[1]?.dependsOn : null,
+    ["change-core"],
+  );
+  assert.deepEqual(tooFew, {
+    ok: false,
+    safeReason: "Change plans must contain between 2 and 8 changes.",
+  });
+  assert.deepEqual(duplicate, { ok: false, safeReason: "Change ids must be unique within a plan." });
+  assert.deepEqual(unknownDep, {
+    ok: false,
+    safeReason: "Change dependency references an unknown change id: ghost.",
+  });
+  assert.deepEqual(cyclic, { ok: false, safeReason: "Change dependencies must be acyclic." });
+});
+
+test("accepts changeId on task lists and delegation requests", () => {
+  const list = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_delegation.task_list",
+      changeId: " change-core ",
+      tasks: [{ id: "task-1", title: "T", acceptance: [{ id: "A1", text: "Done." }] }],
+    },
+    parentSession: supervisorSession(),
+  });
+  const request = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_delegation.request",
+      role: "worker",
+      prompt: "Do task one.",
+      taskId: "task-1",
+      changeId: "change-core",
+    },
+    parentSession: supervisorSession(),
+  });
+
+  assert.equal(list.ok && list.kind === "task_list" ? list.changeId : null, "change-core");
+  assert.equal(
+    request.ok && request.kind === "delegation" ? request.request.changeId : null,
+    "change-core",
+  );
+});
+
 test("rejects unknown managed control event types with a safe reason", () => {
   const result = validateManagedControlEvent({
     controlEvent: { type: "managed_delegation.pause" },

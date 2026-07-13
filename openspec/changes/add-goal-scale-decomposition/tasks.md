@@ -2,9 +2,9 @@
 
 ## 1. Domain Types + Control-Event Validation
 
-- [ ] 1.1 Add domain types: `managed_change.plan` control event (`changes: [{id, title, rationale, dependsOn?}]`), change record/status types, optional `changeId` on task-list entries and delegation control events/requests.
-- [ ] 1.2 Add tests + implementation in `validateManagedControlEvent`: plan shape validation (unique ids, non-empty title/rationale, 2–8 changes, dependsOn references exist and are acyclic); `changeId` accepted on task lists and worker delegations.
-- [ ] 1.3 Persist `change_id` on delegation requests (additive `ensureColumn` + repository round-trip + schema test).
+- [x] 1.1 Add domain types: `managed_change.plan` control event (`changes: [{id, title, rationale, dependsOn?}]`), change record/status types, optional `changeId` on task-list entries and delegation control events/requests.
+- [x] 1.2 Add tests + implementation in `validateManagedControlEvent`: plan shape validation (unique ids, non-empty title/rationale, 2–8 changes, dependsOn references exist and are acyclic); `changeId` accepted on task lists and worker delegations.
+- [x] 1.3 Persist `change_id` on delegation requests (additive `ensureColumn` + repository round-trip + schema test).
 
 ## 2. OpenSpec Workspace Service
 

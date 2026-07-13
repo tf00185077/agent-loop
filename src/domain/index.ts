@@ -75,6 +75,9 @@ export type {
   AgentSessionInput,
   AgentSessionLifecycleState,
   AgentSessionStartInput,
+  ManagedChangePlanControlEvent,
+  ManagedChangePlanEntry,
+  ManagedChangeStatus,
   ManagedControlEvent,
   ManagedControlEventType,
   ManagedDelegationCompleteControlEvent,
@@ -88,6 +91,7 @@ export type {
 } from "./agent-runtime-control-plane.types.js";
 export {
   agentRuntimeCapabilityNames,
+  managedChangeStatuses,
   managedControlEventTypes,
   agentSessionLifecycleStates,
   approvalRequestStatuses,
