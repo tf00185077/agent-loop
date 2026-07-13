@@ -45,7 +45,7 @@
 
 ## 7. Docs + Verification
 
-- [ ] 7.1 Update README: replace the stale `add-managed-delegation-continuations` reference, document the managed supervisor demo path (big goal → decompose → workers → review-merge → complete) and the downgrade/fallback behavior.
-- [ ] 7.2 Run a manual end-to-end smoke with a real Codex Local goal that requires at least two tasks; capture the durable timeline as evidence.
-- [ ] 7.3 Run typecheck and the full test suite; document any unrelated pre-existing failures.
-- [ ] 7.4 Run `openspec validate wire-managed-supervisor-end-to-end --strict`.
+- [x] 7.1 Update README: replace the stale `add-managed-delegation-continuations` reference, document the managed supervisor demo path (big goal → decompose → workers → review-merge → complete) and the downgrade/fallback behavior.
+- [x] 7.2 Run a manual end-to-end smoke with a real Codex Local goal that requires at least two tasks; capture the durable timeline as evidence. (See `verification.md`; first run exposed and fixed a supervisor-stranding bug, second run completed end to end.)
+- [x] 7.3 Run typecheck and the full test suite; document any unrelated pre-existing failures. (354 tests, 0 failures; typecheck clean; no unrelated failures.)
+- [x] 7.4 Run `openspec validate wire-managed-supervisor-end-to-end --strict`.
