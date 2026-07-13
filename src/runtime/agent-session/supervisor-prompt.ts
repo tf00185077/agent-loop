@@ -1,4 +1,5 @@
 import type { TaskAcceptanceCriterion } from "../../domain/index.js";
+import type { ChangeRecord } from "./change-registry.js";
 import type { TaskRecord } from "./task-registry.js";
 
 export interface SupervisorPromptGoal {
@@ -17,6 +18,8 @@ export interface BuildSupervisorPromptInput {
   phase: SupervisorPromptPhase;
   /** Durable task history rendered into continuation/nudge/rejection prompts. */
   taskHistory?: TaskRecord[];
+  /** Durable change-plan state rendered into continuation/nudge/rejection prompts. */
+  changeHistory?: ChangeRecord[];
 }
 
 const fence = "```";
@@ -33,7 +36,17 @@ const CONTRACT = [
   "results.",
   "",
   "Rules:",
-  "1. First, decompose the goal into an ordered task list and announce it with a",
+  "0. Assess the goal's scale before anything else. If it is too large for one",
+  "   flat task list (several distinct deliverables or proof obligations that",
+  "   later work must not contradict), declare an ordered change plan with a",
+  "   `managed_change.plan` control block: 2–8 changes, unique ids, and",
+  "   optional acyclic `dependsOn` references. The backend scaffolds each",
+  "   change's OpenSpec artifacts and registers one spec-authoring task per",
+  "   change (`spec:<changeId>`) that you delegate like any worker task; a",
+  "   change's implementation tasks run only after its specs are merged, one",
+  "   change at a time. Small goals skip the plan entirely and keep the flat",
+  "   task-list flow below.",
+  "1. Decompose the work into an ordered task list and announce it with a",
   "   `managed_delegation.task_list` control block before delegating anything.",
   "   Every task MUST include acceptance criteria: an immutable id (A1, A2, ...)",
   "   and one binary, testable condition each. Delegating a task without",
@@ -55,6 +68,23 @@ const CONTRACT = [
   "   anything else is treated as progress commentary.",
   "",
   "Control block formats (one JSON object per fenced block):",
+  "",
+  controlExample({
+    type: "managed_change.plan",
+    changes: [
+      {
+        id: "core-loop",
+        title: "Core gameplay loop",
+        rationale: "Everything else builds on the playable loop.",
+      },
+      {
+        id: "multiplayer-modes",
+        title: "4v4 and co-op modes",
+        rationale: "Modes extend the core loop and must not contradict it.",
+        dependsOn: ["core-loop"],
+      },
+    ],
+  }),
   "",
   controlExample({
     type: "managed_delegation.task_list",
@@ -99,11 +129,29 @@ const CONTRACT = [
 
 export function buildSupervisorPrompt(input: BuildSupervisorPromptInput): string {
   const sections = [phaseHeader(input.phase), goalSection(input.goal)];
+  if (input.phase.kind !== "bootstrap" && input.changeHistory && input.changeHistory.length > 0) {
+    sections.push(renderChangeHistory(input.changeHistory));
+  }
   if (input.phase.kind !== "bootstrap" && input.taskHistory && input.taskHistory.length > 0) {
     sections.push(renderTaskHistory(input.taskHistory));
   }
   sections.push(CONTRACT);
   return sections.join("\n\n");
+}
+
+/** Renders the durable change-plan state so continuations do not re-plan. */
+export function renderChangeHistory(changes: ChangeRecord[]): string {
+  const active = changes.find((change) => change.status !== "archived" && change.status !== "blocked");
+  const lines = [
+    "## Change plan (durable — one active change at a time; do not re-plan)",
+    "",
+    ...changes.map((change) => {
+      const dependsOn = change.dependsOn.length > 0 ? ` (depends on ${change.dependsOn.join(", ")})` : "";
+      const activeMark = change.id === active?.id ? " (active — work here)" : "";
+      return `- ${change.id} "${change.title}" [${change.status}]${dependsOn}${activeMark}`;
+    }),
+  ];
+  return lines.join("\n");
 }
 
 /** Renders the durable per-task state so continuations do not re-derive it. */

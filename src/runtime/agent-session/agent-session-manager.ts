@@ -1143,6 +1143,7 @@ async function startCompletionlessContinuation(
     goal,
     phase: rejectionReason ? { kind: "rejection", safeReason: rejectionReason } : { kind: "nudge" },
     taskHistory: getTaskRegistry(input.state, input.goalId).listTasks(),
+    changeHistory: getChangeRegistry(input.state, input.goalId).listChanges(),
   });
 
   const run = deps.runRepo.create({
@@ -1243,6 +1244,7 @@ async function continueSupervisorAfterChild(
           goal,
           phase: { kind: "continuation", observation },
           taskHistory: getTaskRegistry(input.state, input.goalId).listTasks(),
+          changeHistory: getChangeRegistry(input.state, input.goalId).listChanges(),
         })
       : message,
   });

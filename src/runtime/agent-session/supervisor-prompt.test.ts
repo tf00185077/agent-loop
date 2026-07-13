@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   buildSupervisorPrompt,
   buildWorkerContractAppendix,
+  renderChangeHistory,
   renderTaskHistory,
 } from "./supervisor-prompt.js";
+import type { ChangeRecord } from "./change-registry.js";
 import type { TaskRecord } from "./task-registry.js";
 
 const goal = {
@@ -145,6 +147,85 @@ test("worker contract appendix lists criteria and the result-block format", () =
   assert.ok(appendix.includes("managed_task.result"));
   assert.ok(appendix.includes('"taskId": "task-1"'));
   assert.ok(appendix.includes("auto-agent-control"));
+});
+
+test("bootstrap prompt documents goal scale assessment and the change plan format", () => {
+  const prompt = buildSupervisorPrompt({ goal, phase: { kind: "bootstrap" } });
+
+  assert.ok(/scale/i.test(prompt), "bootstrap must document scale assessment");
+  assert.ok(prompt.includes("managed_change.plan"));
+  assert.ok(/2–8|2-8|between 2 and 8/i.test(prompt), "bootstrap must state the plan budget");
+  assert.ok(/dependsOn/.test(prompt), "plan example must show dependencies");
+  assert.ok(/"rationale"/.test(prompt), "plan example must show a rationale");
+  assert.ok(/small goals?/i.test(prompt), "bootstrap must keep small goals on the flat flow");
+  assert.ok(/spec:/.test(prompt), "bootstrap must explain the backend-registered spec tasks");
+});
+
+const changeHistoryFixture: ChangeRecord[] = [
+  {
+    id: "change-one",
+    title: "Change one",
+    rationale: "First slice.",
+    dependsOn: [],
+    status: "archived",
+    taskIds: ["spec:change-one", "task-1"],
+    hasUnmergedAttestedChanges: false,
+  },
+  {
+    id: "change-two",
+    title: "Change two",
+    rationale: "Second slice.",
+    dependsOn: ["change-one"],
+    status: "executing",
+    taskIds: ["spec:change-two"],
+    hasUnmergedAttestedChanges: false,
+  },
+  {
+    id: "change-three",
+    title: "Change three",
+    rationale: "Third slice.",
+    dependsOn: [],
+    status: "planned",
+    taskIds: ["spec:change-three"],
+    hasUnmergedAttestedChanges: false,
+  },
+];
+
+test("change history renders plan statuses and marks the active change", () => {
+  const history = renderChangeHistory(changeHistoryFixture);
+
+  assert.ok(history.includes('change-one "Change one" [archived]'));
+  assert.match(history, /change-two "Change two" \[executing\].*\(active/);
+  assert.ok(history.includes("(depends on change-one)"));
+  assert.ok(history.includes('change-three "Change three" [planned]'));
+  assert.doesNotMatch(history, /change-one "Change one" \[archived\].*\(active/);
+  assert.doesNotMatch(history, /change-three "Change three" \[planned\].*\(active/);
+});
+
+test("continuation and nudge prompts carry the change history when a plan exists", () => {
+  const continuation = buildSupervisorPrompt({
+    goal,
+    phase: { kind: "continuation", observation: "Worker finished." },
+    changeHistory: changeHistoryFixture,
+  });
+  const nudge = buildSupervisorPrompt({ goal, phase: { kind: "nudge" }, changeHistory: changeHistoryFixture });
+
+  assert.ok(continuation.includes("## Change plan"));
+  assert.ok(nudge.includes("## Change plan"));
+  assert.ok(continuation.includes("change-two"));
+});
+
+test("plan-less goals render without a change plan section", () => {
+  const continuation = buildSupervisorPrompt({
+    goal,
+    phase: { kind: "continuation", observation: "Worker finished." },
+    taskHistory: historyFixture,
+    changeHistory: [],
+  });
+  const nudge = buildSupervisorPrompt({ goal, phase: { kind: "nudge" } });
+
+  assert.ok(!continuation.includes("## Change plan"));
+  assert.ok(!nudge.includes("## Change plan"));
 });
 
 test("rejection prompt carries the safe rejection reason", () => {

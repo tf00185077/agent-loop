@@ -33,8 +33,8 @@
 
 ## 6. Prompts + Continuation Change History
 
-- [ ] 6.1 Add prompt tests: bootstrap documents scale assessment and the plan format with an example; change history section renders plan status and the active change; plan-less goals render unchanged.
-- [ ] 6.2 Implement prompt contract sections and the change-history renderer wired into continuations/nudges.
+- [x] 6.1 Add prompt tests: bootstrap documents scale assessment and the plan format with an example; change history section renders plan status and the active change; plan-less goals render unchanged.
+- [x] 6.2 Implement prompt contract sections and the change-history renderer wired into continuations/nudges.
 
 ## 7. End-to-End + Verification
 
