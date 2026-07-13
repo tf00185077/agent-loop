@@ -11,8 +11,13 @@ import type {
   EventRepository,
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
+import { GoalChangeRegistry, specTaskId } from "./change-registry.js";
 import { createDelegationCoordinator, type SupervisorContinuationInput } from "./delegation-coordinator.js";
 import { validateManagedControlEvent } from "./delegation-control-event.js";
+import {
+  createOpenSpecWorkspaceService,
+  type OpenSpecWorkspaceService,
+} from "./openspec-workspace-service.js";
 import { buildSupervisorPrompt } from "./supervisor-prompt.js";
 import { GoalTaskRegistry } from "./task-registry.js";
 import type { ReviewMergeVerificationService } from "./review-merge-verification-service.js";
@@ -26,6 +31,7 @@ export interface AgentSessionManagerDeps {
   agentSessionRepo: AgentSessionRepository;
   worktreeService?: WorktreeService;
   worktreeAttestor?: WorktreeAttestor;
+  openSpecWorkspaceService?: OpenSpecWorkspaceService;
   reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;
@@ -77,8 +83,12 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     completionlessContinuations: new Map(),
     lastRejectionReasons: new Map(),
     taskRegistries: new Map(),
+    changeRegistries: new Map(),
+    openspecDowngradeReported: new Set(),
     roleResolutions: new Map(),
     maxSupervisorContinuations: deps.maxSupervisorContinuations ?? 10,
+    openSpec: deps.openSpecWorkspaceService ?? createOpenSpecWorkspaceService(),
+    supervisorCwd: deps.supervisorCwd ?? process.cwd(),
   };
 
   return {
@@ -214,9 +224,15 @@ interface SupervisorState {
   lastRejectionReasons: Map<string, string>;
   /** Per-goal frozen acceptance-contract registry. */
   taskRegistries: Map<string, GoalTaskRegistry>;
+  /** Per-goal change-plan registry. */
+  changeRegistries: Map<string, GoalChangeRegistry>;
+  /** Goals whose openspec degraded mode was already reported. */
+  openspecDowngradeReported: Set<string>;
   /** Per goal+role resolved child agent (null = use the goal default). */
   roleResolutions: Map<string, ResolvedRoleAgentLike | null>;
   maxSupervisorContinuations: number;
+  openSpec: OpenSpecWorkspaceService;
+  supervisorCwd: string;
 }
 
 function getTaskRegistry(state: SupervisorState, goalId: string): GoalTaskRegistry {
