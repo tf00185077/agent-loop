@@ -21,10 +21,10 @@
 
 ## 4. Spec-Writer Delegations
 
-- [ ] 4.1 Add tests: spec-writer prompt appendix contains the change context, target paths, artifact templates, and S1–S3 criteria — and does not contain CLI workflow instructions.
-- [ ] 4.2 Implement the spec-writer appendix and wire it into dispatch for `spec:<changeId>` tasks.
-- [ ] 4.3 Add tests: spec-writer result triggers worktree validation (S1 via CLI or degraded checks); failure records a substantive rejection citing the failing criteria; success requires review-merge before the change leaves `specifying`.
-- [ ] 4.4 Implement the worktree validation hook at spec-writer terminal outcomes and the `specifying → executing` transition on merged, validated artifacts.
+- [x] 4.1 Add tests: spec-writer prompt appendix contains the change context, target paths, artifact templates, and S1–S3 criteria — and does not contain CLI workflow instructions.
+- [x] 4.2 Implement the spec-writer appendix and wire it into dispatch for `spec:<changeId>` tasks.
+- [x] 4.3 Add tests: spec-writer result triggers worktree validation (S1 via CLI or degraded checks); failure records a substantive rejection citing the failing criteria; success requires review-merge before the change leaves `specifying`.
+- [x] 4.4 Implement the worktree validation hook at spec-writer terminal outcomes and the `specifying → executing` transition on merged, validated artifacts.
 
 ## 5. Change Completion + Archive Gating
 

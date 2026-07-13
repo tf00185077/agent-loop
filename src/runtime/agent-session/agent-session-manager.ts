@@ -11,14 +11,14 @@ import type {
   EventRepository,
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
-import { GoalChangeRegistry, specTaskAcceptance, specTaskId } from "./change-registry.js";
+import { GoalChangeRegistry, specTaskAcceptance, specTaskId, specValidationVerdict } from "./change-registry.js";
 import { createDelegationCoordinator, type SupervisorContinuationInput } from "./delegation-coordinator.js";
 import { validateManagedControlEvent } from "./delegation-control-event.js";
 import {
   createOpenSpecWorkspaceService,
   type OpenSpecWorkspaceService,
 } from "./openspec-workspace-service.js";
-import { buildSupervisorPrompt } from "./supervisor-prompt.js";
+import { buildSpecWriterAppendix, buildSupervisorPrompt } from "./supervisor-prompt.js";
 import { GoalTaskRegistry } from "./task-registry.js";
 import type { ReviewMergeVerificationService } from "./review-merge-verification-service.js";
 import type { ReviewMergeWorkspaceService } from "./review-merge-workspace-service.js";
@@ -650,9 +650,25 @@ async function persistDelegationControlEvent(
     recordControlRejection(deps, input, data, changeResolution.safeReason);
     return;
   }
+  const owningChange = validation.request.taskId
+    ? changeRegistry.findChangeByTask(validation.request.taskId)
+    : undefined;
+  if (owningChange && owningChange.id !== changeResolution.changeId) {
+    recordControlRejection(
+      deps,
+      input,
+      data,
+      `Change ${owningChange.id} is not active. Work on the active change ${changeResolution.changeId} first.`,
+    );
+    return;
+  }
   if (changeResolution.changeId && validation.request.taskId) {
     changeRegistry.registerTask(changeResolution.changeId, validation.request.taskId);
   }
+  const specChange =
+    validation.request.taskId && validation.request.taskId.startsWith("spec:")
+      ? changeRegistry.getChange(validation.request.taskId.slice("spec:".length))
+      : undefined;
 
   const registry = getTaskRegistry(input.state, input.goalId);
   let dispatchAcceptance = validation.request.acceptance ?? null;
@@ -706,6 +722,14 @@ async function persistDelegationControlEvent(
       taskId: validation.request.taskId,
       changeId: changeResolution.changeId,
       acceptance: dispatchAcceptance,
+      promptAppendix: specChange
+        ? buildSpecWriterAppendix({
+            id: specChange.id,
+            title: specChange.title,
+            rationale: specChange.rationale,
+            dependsOn: specChange.dependsOn,
+          })
+        : null,
       workerDelegationRequestId: validation.request.workerDelegationRequestId,
       adapter: childAgent.adapter,
       eventData: { ...data, ...(uncontracted ? { uncontracted: true } : {}) },
@@ -794,7 +818,11 @@ function recordChildOutcomeInRegistry(
   outcome: SupervisorContinuationInput,
 ): void {
   const registry = getTaskRegistry(input.state, input.goalId);
+  const changeRegistry = getChangeRegistry(input.state, input.goalId);
   if (outcome.role === "worker" && outcome.taskId) {
+    if (outcome.resultSummary.kind === "success" && rejectInvalidSpecResult(deps, input, outcome, registry)) {
+      return;
+    }
     registry.recordOutcome(outcome.taskId, outcome.resultSummary);
     return;
   }
@@ -805,6 +833,9 @@ function recordChildOutcomeInRegistry(
     (outcome.reviewMergeOutcome !== null && REVIEW_REJECTION_OUTCOMES.has(outcome.reviewMergeOutcome)) ||
     outcome.resultSummary.kind === "failure";
   if (!rejecting) {
+    if (outcome.reviewMergeOutcome === "merged") {
+      approveSpecChangeAfterMerge(deps, input, outcome.workerTaskId, changeRegistry);
+    }
     return;
   }
   const verdict = registry.classifyVerdict(outcome.workerTaskId, outcome.observation);
@@ -838,6 +869,107 @@ function recordChildOutcomeInRegistry(
       runtimeEventType: "task.deferred_finding",
       taskId: outcome.workerTaskId,
       finding: verdict.deferredFinding,
+    },
+  });
+}
+
+/**
+ * Pre-merge gate for spec-writer results: validate the OpenSpec artifacts in
+ * the worker's worktree and convert failures into a substantive rejection
+ * citing the frozen S1–S3 criteria. Returns true when the result was rejected.
+ */
+function rejectInvalidSpecResult(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  outcome: SupervisorContinuationInput,
+  registry: GoalTaskRegistry,
+): boolean {
+  const taskId = outcome.taskId!;
+  const changeRegistry = getChangeRegistry(input.state, input.goalId);
+  const change = changeRegistry.findChangeByTask(taskId);
+  if (!change || specTaskId(change.id) !== taskId) {
+    return false;
+  }
+  const validated = input.state.openSpec.validateChange({
+    cwd: outcome.worktreePath ?? input.state.supervisorCwd,
+    changeId: change.id,
+  });
+  if (validated.ok) {
+    return false;
+  }
+  const verdict = registry.classifyVerdict(taskId, specValidationVerdict(validated.failures));
+  registry.recordOutcome(taskId, {
+    kind: "failure",
+    safeSummary: `Spec artifacts failed validation: ${validated.failures.join("; ")}`.slice(0, 500),
+  });
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "agent.progress",
+    message: "Spec artifacts failed validation; result rejected.",
+    data: {
+      sessionId: input.sessionId,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType: "task.rejection_recorded",
+      taskId,
+      changeId: change.id,
+      citedCriteria: verdict.citedCriteria,
+      failures: validated.failures,
+      rejectionCount: registry.getTask(taskId)?.substantiveRejections,
+    },
+  });
+  return true;
+}
+
+/**
+ * Post-merge gate: a change leaves `specifying` only after its spec-writer
+ * result was review-merged and the merged artifacts validate in the goal
+ * workspace.
+ */
+function approveSpecChangeAfterMerge(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  workerTaskId: string,
+  changeRegistry: GoalChangeRegistry,
+): void {
+  const change = changeRegistry.findChangeByTask(workerTaskId);
+  if (!change || specTaskId(change.id) !== workerTaskId || change.status !== "specifying") {
+    return;
+  }
+  const validated = input.state.openSpec.validateChange({
+    cwd: input.state.supervisorCwd,
+    changeId: change.id,
+  });
+  if (!validated.ok) {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: `Merged spec artifacts for ${change.id} failed validation; change stays in specifying.`,
+      data: {
+        sessionId: input.sessionId,
+        provider: input.providerId,
+        model: input.modelLabel,
+        runtimeEventType: "change.spec_validation_failed",
+        changeId: change.id,
+        failures: validated.failures,
+      },
+    });
+    return;
+  }
+  changeRegistry.markSpecApproved(change.id);
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "agent.progress",
+    message: `Spec artifacts for ${change.id} approved; change is executing.`,
+    data: {
+      sessionId: input.sessionId,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType: "change.spec_approved",
+      changeId: change.id,
     },
   });
 }

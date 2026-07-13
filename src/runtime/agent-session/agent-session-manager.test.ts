@@ -2359,6 +2359,23 @@ test("rejects task lists and delegations referencing a change that is not active
         },
       },
     },
+    {
+      type: "progress",
+      sessionId: "session-placeholder",
+      goalId: fixture.goal.id,
+      runId: "run-placeholder",
+      message: "Delegating the later spec task without naming its change.",
+      occurredAt: "2026-07-13T00:00:04.000Z",
+      metadata: {
+        delegationControlEvent: {
+          type: "managed_delegation.request",
+          role: "worker",
+          taskId: "spec:change-two",
+          prompt: "Author the later change specs.",
+          summary: "Author the later change specs.",
+        },
+      },
+    },
   ]);
   const manager = createAgentSessionManager({
     ...fixture,
@@ -2375,13 +2392,342 @@ test("rejects task lists and delegations referencing a change that is not active
 
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   const rejections = events.filter((event) => event.data.runtimeEventType === "delegation.rejected");
-  assert.equal(rejections.length, 2);
+  assert.equal(rejections.length, 3);
   for (const rejection of rejections) {
     assert.match(String(rejection.data.safeReason), /change-two is not active/i);
     assert.match(String(rejection.data.safeReason), /change-one/);
   }
   assert.ok(!events.some((event) => event.data.runtimeEventType === "supervisor.task_list"));
   assert.equal(fixture.agentSessionRepo.listDelegationRequests(result.session.id).length, 0);
+
+  fixture.db.close();
+});
+
+test("appends the spec-writer appendix to spec task delegations without CLI workflow instructions", async () => {
+  const fixture = createManagerFixture("spec writer prompt goal");
+  const openSpec = recordingOpenSpecService("cli");
+  const childPrompts: string[] = [];
+  let supervisorStarted = false;
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        childPrompts.push(input.prompt);
+        return createHandle(input.sessionId, []);
+      }
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
+      return createHandle(input.sessionId, [
+        {
+          ...changePlanEvent([
+            { id: "change-one", title: "Change one", rationale: "First slice of the goal." },
+            { id: "change-two", title: "Change two", rationale: "Second slice.", dependsOn: ["change-one"] },
+          ]),
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+        },
+        {
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Delegating spec authoring.",
+          occurredAt: "2026-07-13T00:00:02.000Z",
+          metadata: {
+            delegationControlEvent: {
+              type: "managed_delegation.request",
+              role: "worker",
+              taskId: "spec:change-one",
+              prompt: "Author the OpenSpec artifacts for change-one.",
+              summary: "Author change-one specs.",
+            },
+          },
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+
+  assert.equal(childPrompts.length, 1);
+  const prompt = childPrompts[0]!;
+  // Change context and target paths.
+  assert.match(prompt, /change-one/);
+  assert.match(prompt, /Change one/);
+  assert.match(prompt, /First slice of the goal\./);
+  assert.match(prompt, /openspec\/changes\/change-one\/proposal\.md/);
+  assert.match(prompt, /openspec\/changes\/change-one\/specs\//);
+  assert.match(prompt, /openspec\/changes\/change-one\/tasks\.md/);
+  // Artifact templates with a filled example.
+  assert.match(prompt, /### Requirement:/);
+  assert.match(prompt, /#### Scenario:/);
+  assert.match(prompt, /\*\*WHEN\*\*/);
+  assert.match(prompt, /\*\*THEN\*\*/);
+  assert.match(prompt, /Acceptance:/);
+  // Frozen criteria ride the standard worker contract appendix.
+  assert.match(prompt, /S1/);
+  assert.match(prompt, /S2/);
+  assert.match(prompt, /S3/);
+  // No CLI workflow instructions leak into the agent prompt.
+  assert.doesNotMatch(prompt, /openspec (propose|apply|archive|sync|list|validate|init)\b/i);
+  assert.doesNotMatch(prompt, /opsx/i);
+
+  fixture.db.close();
+});
+
+test("rejects spec-writer results whose worktree artifacts fail validation citing the failing criteria", async () => {
+  const fixture = createManagerFixture("spec validation failure goal");
+  const openSpec = recordingOpenSpecService("cli", {
+    validateFailures: [
+      [
+        'requirement "Change plan control" needs at least one WHEN/THEN scenario',
+        'task "- [ ] 1.1 Add types" is missing an acceptance line',
+      ],
+    ],
+  });
+  let supervisorStarted = false;
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Spec artifacts authored.",
+            occurredAt: "2026-07-13T00:00:03.000Z",
+          },
+        ]);
+      }
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
+      return createHandle(input.sessionId, [
+        {
+          ...changePlanEvent([
+            { id: "change-one", title: "Change one", rationale: "First slice." },
+            { id: "change-two", title: "Change two", rationale: "Second slice." },
+          ]),
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+        },
+        {
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Delegating spec authoring.",
+          occurredAt: "2026-07-13T00:00:02.000Z",
+          metadata: {
+            delegationControlEvent: {
+              type: "managed_delegation.request",
+              role: "worker",
+              taskId: "spec:change-one",
+              prompt: "Author the OpenSpec artifacts for change-one.",
+              summary: "Author change-one specs.",
+            },
+          },
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() =>
+    fixture.eventRepo
+      .listForGoal(fixture.goal.id)
+      .some((event) => event.data.runtimeEventType === "task.rejection_recorded"),
+  );
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const rejection = events.find((event) => event.data.runtimeEventType === "task.rejection_recorded");
+  assert.ok(rejection, "expected a substantive rejection from spec validation");
+  assert.equal(rejection.data.taskId, "spec:change-one");
+  assert.deepEqual(rejection.data.citedCriteria, ["S2", "S3"]);
+  assert.equal(openSpec.validated.length, 1);
+  assert.equal(openSpec.validated[0]!.changeId, "change-one");
+  assert.match(openSpec.validated[0]!.cwd, /^C:\\worktrees\\/);
+  assert.ok(!events.some((event) => event.data.runtimeEventType === "change.spec_approved"));
+
+  fixture.db.close();
+});
+
+test("approves the spec change only after a merged review validates the goal workspace", async () => {
+  const fixture = createManagerFixture("spec approval goal");
+  const openSpec = recordingOpenSpecService("cli");
+  let supervisorSessionId = "";
+  let childCount = 0;
+  let releaseParent!: () => void;
+  const parentReleased = new Promise<void>((resolve) => {
+    releaseParent = resolve;
+  });
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        childCount += 1;
+        if (childCount === 1) {
+          return createHandle(input.sessionId, [
+            {
+              type: "session.completed",
+              sessionId: input.sessionId,
+              goalId: input.goalId,
+              runId: input.runId,
+              message: "Spec artifacts authored.",
+              occurredAt: "2026-07-13T00:00:03.000Z",
+            },
+          ]);
+        }
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Review merge completed.",
+            occurredAt: "2026-07-13T00:00:05.000Z",
+            metadata: {
+              reviewMergeApplyOutcome: {
+                status: "merged",
+                diffSummary: "3 files changed.",
+                safeSummary: "Spec artifacts merged.",
+              },
+            },
+          },
+        ]);
+      }
+      if (supervisorSessionId) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorSessionId = input.sessionId;
+      return {
+        ...createHandle(input.sessionId, []),
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true },
+        async *events() {
+          yield {
+            ...changePlanEvent([
+              { id: "change-one", title: "Change one", rationale: "First slice." },
+              { id: "change-two", title: "Change two", rationale: "Second slice." },
+            ]),
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+          } satisfies AgentRuntimeEvent;
+          yield {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Delegating spec authoring.",
+            occurredAt: "2026-07-13T00:00:02.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "worker",
+                taskId: "spec:change-one",
+                prompt: "Author the OpenSpec artifacts for change-one.",
+                summary: "Author change-one specs.",
+              },
+            },
+          } satisfies AgentRuntimeEvent;
+          await parentReleased;
+          const workerRequest = fixture.agentSessionRepo
+            .listDelegationRequests(input.sessionId)
+            .find((request) => request.role === "worker" && request.resultSummary);
+          yield {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Requesting spec review merge.",
+            occurredAt: "2026-07-13T00:00:04.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "review_merge",
+                workerDelegationRequestId: workerRequest?.id ?? "missing",
+                prompt: "Review and merge the spec artifacts.",
+                summary: "Review spec artifacts.",
+              },
+            },
+          } satisfies AgentRuntimeEvent;
+        },
+        async send() {
+          releaseParent();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() =>
+    fixture.eventRepo
+      .listForGoal(fixture.goal.id)
+      .some((event) => event.data.runtimeEventType === "change.spec_approved"),
+  );
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const approved = events.find((event) => event.data.runtimeEventType === "change.spec_approved");
+  assert.ok(approved);
+  assert.equal(approved.data.changeId, "change-one");
+  // Pre-merge validation ran in the worker worktree; post-merge in the goal workspace.
+  assert.equal(openSpec.validated.length, 2);
+  assert.match(openSpec.validated[0]!.cwd, /^C:\\worktrees\\/);
+  assert.equal(openSpec.validated[1]!.cwd, "C:\\goal-workspace");
+  assert.deepEqual(
+    openSpec.validated.map((call) => call.changeId),
+    ["change-one", "change-one"],
+  );
+  // Approval only lands after the merged review outcome.
+  const mergedIndex = events.findIndex((event) => event.data.runtimeEventType === "review_merge.apply_outcome");
+  const approvedIndex = events.findIndex((event) => event.data.runtimeEventType === "change.spec_approved");
+  assert.ok(mergedIndex >= 0 && approvedIndex > mergedIndex);
 
   fixture.db.close();
 });
@@ -2674,22 +3020,29 @@ function changePlanEvent(
   };
 }
 
-function recordingOpenSpecService(mode: "cli" | "degraded") {
+function recordingOpenSpecService(
+  mode: "cli" | "degraded",
+  options: { validateFailures?: string[][] } = {},
+) {
   const scaffolded: Array<{ changeId: string; cwd: string }> = [];
+  const validated: Array<{ changeId: string; cwd: string }> = [];
+  const pendingFailures = [...(options.validateFailures ?? [])];
   const service: OpenSpecWorkspaceService = {
     mode: () => mode,
     scaffoldChange(input) {
       scaffolded.push({ changeId: input.change.id, cwd: input.cwd });
       return { ok: true, committed: true };
     },
-    validateChange() {
-      return { ok: true, failures: [] };
+    validateChange(input) {
+      validated.push({ changeId: input.changeId, cwd: input.cwd });
+      const failures = pendingFailures.shift() ?? [];
+      return { ok: failures.length === 0, failures };
     },
     archiveChange() {
       return { ok: true };
     },
   };
-  return { scaffolded, service };
+  return { scaffolded, validated, service };
 }
 
 function fixedClock(values: string[]): () => string {

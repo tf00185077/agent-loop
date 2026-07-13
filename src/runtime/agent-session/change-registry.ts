@@ -28,6 +28,24 @@ export function specTaskId(changeId: string): string {
 }
 
 /**
+ * Map OpenSpec validation failures onto the frozen S1–S3 criteria and render
+ * a verdict text that cites them, so the standard substantive-rejection
+ * machinery (criterion citation, retry budgets, narrowing) applies unchanged.
+ */
+export function specValidationVerdict(failures: string[]): string {
+  return failures
+    .map((failure) => {
+      const criterion = /WHEN\/THEN/i.test(failure)
+        ? "S2"
+        : /acceptance/i.test(failure) || /no tasks/i.test(failure)
+          ? "S3"
+          : "S1";
+      return `${criterion} fails: ${failure}`;
+    })
+    .join(" ");
+}
+
+/**
  * Backend-authored acceptance contract for spec-writer tasks. Frozen at plan
  * acceptance; supervisors cannot replace it (the task registry ignores
  * criteria mutations on contracted tasks).

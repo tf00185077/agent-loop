@@ -52,6 +52,8 @@ export interface StartWorkerDelegationInput {
   taskId?: string | null;
   changeId?: string | null;
   acceptance?: TaskAcceptanceCriterion[] | null;
+  /** Extra role-specific instructions appended after the contract appendix. */
+  promptAppendix?: string | null;
   workerDelegationRequestId?: string | null;
   adapter: AgentRuntimeAdapter;
   eventData: Record<string, unknown>;
@@ -67,6 +69,8 @@ export interface SupervisorContinuationInput {
   taskId: string | null;
   /** For review_merge children: the task of the worker result under review. */
   workerTaskId: string | null;
+  /** The worker child's isolated worktree, when one was created. */
+  worktreePath: string | null;
   resultSummary: AgentRuntimeDelegationSummary;
   reviewMergeOutcome: string | null;
 }
@@ -143,10 +147,13 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         input.role === "worker"
           ? await createWorkerCwd(worktreeService, supervisorCwd, childSession.id, deps.agentSessionRepo)
           : { path: supervisorCwd, worktree: null };
-      const childPrompt =
+      const contractedPrompt =
         input.role === "worker" && input.acceptance && input.acceptance.length > 0
           ? `${input.prompt}\n\n${buildWorkerContractAppendix(input.acceptance, input.taskId ?? null)}`
           : input.prompt;
+      const childPrompt = input.promptAppendix
+        ? `${contractedPrompt}\n\n${input.promptAppendix}`
+        : contractedPrompt;
       const handle = await input.adapter.startSession({
         sessionId: childSession.id,
         goalId: parent.goalId,
@@ -287,6 +294,7 @@ async function consumeChildEvents(deps: DelegationCoordinatorDeps, input: Consum
           role: input.role,
           taskId: input.taskId,
           workerTaskId: input.workerTaskId,
+          worktreePath: input.worktreePath,
           resultSummary: outcome.resultSummary,
           reviewMergeOutcome: outcome.reviewMergeOutcome,
         });

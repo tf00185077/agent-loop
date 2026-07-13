@@ -155,6 +155,62 @@ export function buildWorkerContractAppendix(acceptance: TaskAcceptanceCriterion[
   ].join("\n");
 }
 
+export interface SpecWriterChangeContext {
+  id: string;
+  title: string;
+  rationale: string;
+  dependsOn: string[];
+}
+
+/**
+ * Appendix appended to a spec-writer child's prompt at dispatch: the change
+ * context, target artifact paths, and minimal filled templates. Provider-
+ * neutral markdown authoring instructions only — the OpenSpec CLI workflow
+ * stays backend-owned and is never taught to agents.
+ */
+export function buildSpecWriterAppendix(change: SpecWriterChangeContext): string {
+  return [
+    `## Spec authoring assignment (change: ${change.id})`,
+    "",
+    `Title: ${change.title}`,
+    `Rationale: ${change.rationale}`,
+    ...(change.dependsOn.length > 0 ? [`Depends on: ${change.dependsOn.join(", ")}`] : []),
+    "",
+    "Author these markdown files in your workspace (scaffolding already exists):",
+    "",
+    `- openspec/changes/${change.id}/proposal.md — Why this change and what it changes`,
+    `- openspec/changes/${change.id}/specs/<capability>/spec.md — one file per capability this change touches`,
+    `- openspec/changes/${change.id}/tasks.md — ordered implementation tasks`,
+    "",
+    "Structural rules (the backend validates these):",
+    "- Every requirement heading uses `### Requirement:` and is followed by at",
+    "  least one `#### Scenario:` block with **WHEN**/**THEN** bullet lines.",
+    "- Every task is a `- [ ]` checkbox followed by an indented `Acceptance:`",
+    "  line listing binary, testable conditions.",
+    "",
+    "Example spec file shape:",
+    "",
+    "```markdown",
+    "### Requirement: Users can reset their password",
+    "The system SHALL send a reset link when a registered user requests one.",
+    "",
+    "#### Scenario: Reset link is issued",
+    "- **WHEN** a registered user requests a password reset",
+    "- **THEN** the system emails a single-use reset link",
+    "```",
+    "",
+    "Example tasks file shape:",
+    "",
+    "```markdown",
+    "- [ ] 1.1 Add the reset request endpoint",
+    "  - Acceptance: POST /reset returns 202 for registered emails.",
+    "```",
+    "",
+    "Do not install or run any OpenSpec tooling; author the markdown files",
+    "only. The backend performs all validation and archiving.",
+  ].join("\n");
+}
+
 function goalSection(goal: SupervisorPromptGoal): string {
   return ["## Goal", "", `Title: ${goal.title}`, `Description: ${goal.description}`].join("\n");
 }
