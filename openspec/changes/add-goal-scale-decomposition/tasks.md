@@ -1,5 +1,24 @@
 # Tasks: add-goal-scale-decomposition
 
+> **Handoff status (2026-07-13, commit `cde144c`)** — read before resuming.
+>
+> Done and committed: Groups 1–2 fully; from Group 3 only the pure
+> `GoalChangeRegistry` state machine (`change-registry.ts`, unit-tested) and
+> the session-manager STATE fields (`changeRegistries`, `openSpec`,
+> `supervisorCwd` in `SupervisorState`).
+>
+> Not started (despite the state fields existing): all behavior wiring in
+> `agent-session-manager.ts` —
+> the `change_plan` branch still only records an event (replace with:
+> `registry.registerPlan` → scaffold via `state.openSpec` + downgrade event
+> once per goal → auto-register `spec:<changeId>` tasks with S1–S3 criteria →
+> `change.activated` event); the task_list/delegation branches do not yet call
+> `resolveChangeId` (inherit/mismatch-reject) or pass `changeId` to the
+> coordinator; no spec-writer worktree validation hook; no
+> merged→`markSpecApproved`/`recordMerged`→`tryArchive` flow; completion is
+> not yet gated on `allArchived`. Tasks 3.1–3.4 test names describe the
+> expected manager behavior.
+
 ## 1. Domain Types + Control-Event Validation
 
 - [x] 1.1 Add domain types: `managed_change.plan` control event (`changes: [{id, title, rationale, dependsOn?}]`), change record/status types, optional `changeId` on task-list entries and delegation control events/requests.
