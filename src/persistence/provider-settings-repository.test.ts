@@ -51,6 +51,55 @@ test("saves one local provider settings record", () => {
   db.close();
 });
 
+test("round-trips sanitized role assignments across database reopen", () => {
+  const dbPath = testDatabasePath();
+  const firstDb = openDatabase({ path: dbPath });
+
+  const saved = createProviderSettingsRepository(firstDb).save({
+    provider: "codex-local",
+    modelLabel: "gpt-5.5",
+    codexCommandPath: "C:\\Tools\\codex.exe",
+    status: { state: "detected", detected: true, checkedAt: null, message: null },
+    roleAssignments: {
+      worker: {
+        provider: "claude-local",
+        modelLabel: "claude-sonnet-4",
+        commandPath: "C:\\Tools\\claude.cmd --api-key sk-secret",
+      },
+      review_merge: { provider: "codex-local", modelLabel: "", commandPath: null },
+    },
+  });
+  firstDb.close();
+
+  assert.equal(saved.roleAssignments?.worker?.commandPath, "C:\\Tools\\claude.cmd");
+  const reopened = openDatabase({ path: dbPath });
+  const settings = createProviderSettingsRepository(reopened).get();
+  assert.deepEqual(settings.roleAssignments, {
+    worker: {
+      provider: "claude-local",
+      modelLabel: "claude-sonnet-4",
+      commandPath: "C:\\Tools\\claude.cmd",
+    },
+    review_merge: { provider: "codex-local", modelLabel: "", commandPath: null },
+  });
+  reopened.close();
+});
+
+test("settings without role assignments read back without the field", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const settings = createProviderSettingsRepository(db);
+
+  settings.save({
+    provider: "codex-local",
+    modelLabel: "gpt-5.5",
+    codexCommandPath: "C:\\Tools\\codex.exe",
+    status: { state: "detected", detected: true, checkedAt: null, message: null },
+  });
+
+  assert.equal("roleAssignments" in settings.get(), false);
+  db.close();
+});
+
 test("saved Codex Local provider settings survive database reopen", () => {
   const dbPath = testDatabasePath();
   const firstDb = openDatabase({ path: dbPath });

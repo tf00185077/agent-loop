@@ -16,11 +16,28 @@ export interface ProviderStatus {
   message: string | null;
 }
 
+export const agentAssignableRoles = ["worker", "spec_writer", "review_merge"] as const;
+
+export type AgentAssignableRole = (typeof agentAssignableRoles)[number];
+
+/**
+ * User-configured agent for one child role. Carries its own command path
+ * because saved provider settings only retain the selected provider's path.
+ */
+export interface AgentRoleAssignment {
+  provider: LocalProviderKind;
+  modelLabel: string;
+  commandPath: string | null;
+}
+
+export type RoleAssignments = Partial<Record<AgentAssignableRole, AgentRoleAssignment>>;
+
 export interface MockProviderSettings {
   provider: "mock";
   modelLabel: "mock-v1";
   codexCommandPath: null;
   status: ProviderStatus;
+  roleAssignments?: RoleAssignments;
 }
 
 export interface CodexLocalProviderSettings {
@@ -28,6 +45,7 @@ export interface CodexLocalProviderSettings {
   modelLabel: string;
   codexCommandPath: string | null;
   status: ProviderStatus;
+  roleAssignments?: RoleAssignments;
 }
 
 export interface ClaudeLocalProviderSettings {
@@ -35,6 +53,7 @@ export interface ClaudeLocalProviderSettings {
   modelLabel: string;
   claudeCommandPath: string | null;
   status: ProviderStatus;
+  roleAssignments?: RoleAssignments;
 }
 
 export type ProviderSettings =
@@ -176,6 +195,21 @@ export function sanitizeStartGoalProviderOverride(
   }
 
   return override;
+}
+
+export function sanitizeRoleAssignments(assignments: RoleAssignments | undefined): RoleAssignments | undefined {
+  if (!assignments) return undefined;
+  const sanitized: RoleAssignments = {};
+  for (const role of agentAssignableRoles) {
+    const assignment = assignments[role];
+    if (!assignment) continue;
+    sanitized[role] = {
+      provider: assignment.provider,
+      modelLabel: assignment.modelLabel,
+      commandPath: sanitizeProviderCommandPath(assignment.commandPath),
+    };
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
 export function sanitizeProviderCommandPath(commandPath: string | null): string | null {

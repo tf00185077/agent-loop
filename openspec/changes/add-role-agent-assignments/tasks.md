@@ -2,13 +2,13 @@
 
 ## 1. Domain Types + Settings Persistence
 
-- [ ] 1.1 Add domain types: `AgentAssignableRole` (`worker | spec_writer | review_merge`), `AgentRoleAssignment {provider, modelLabel, commandPath}`, `roleAssignments` on provider settings; sanitization of assignment command paths.
-- [ ] 1.2 Add tests + implementation: `role_assignments` JSON column (additive `ensureColumn` + schema test), repository save/read round-trip with sanitization, absent assignments read as undefined.
+- [x] 1.1 Add domain types: `AgentAssignableRole` (`worker | spec_writer | review_merge`), `AgentRoleAssignment {provider, modelLabel, commandPath}`, `roleAssignments` on provider settings; sanitization of assignment command paths.
+- [x] 1.2 Add tests + implementation: `role_assignments` JSON column (additive `ensureColumn` + schema test), repository save/read round-trip with sanitization, absent assignments read as undefined.
 
 ## 2. Provider-Settings API
 
-- [ ] 2.1 Add API tests: PUT round-trips `roleAssignments`; unknown role/provider or malformed shapes → 400 with settings unchanged; GET after restart returns saved assignments; credential-like path arguments come back sanitized.
-- [ ] 2.2 Implement route validation and pass-through.
+- [x] 2.1 Add API tests: PUT round-trips `roleAssignments`; unknown role/provider or malformed shapes → 400 with settings unchanged; GET after restart returns saved assignments; credential-like path arguments come back sanitized.
+- [x] 2.2 Implement route validation and pass-through.
 
 ## 3. Role-Adapter Resolver + Dispatch Wiring
 

@@ -242,6 +242,72 @@ describe("Backend API", () => {
       }
     });
 
+    it("round-trips sanitized role assignments and rejects invalid shapes", async () => {
+      const providerServer = await startServer();
+
+      try {
+        const saved = await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5.5",
+            codexCommandPath: "C:\\Tools\\codex.exe",
+            roleAssignments: {
+              worker: {
+                provider: "claude-local",
+                modelLabel: "claude-sonnet-4",
+                commandPath: "C:\\Tools\\claude.cmd --api-key sk-secret",
+              },
+            },
+          }),
+        });
+        assert.equal(saved.status, 200);
+        const savedBody = (await json(saved)) as Record<string, unknown>;
+        assert.deepEqual(savedBody.roleAssignments, {
+          worker: {
+            provider: "claude-local",
+            modelLabel: "claude-sonnet-4",
+            commandPath: "C:\\Tools\\claude.cmd",
+          },
+        });
+
+        const readBack = await fetch(`${providerServer.url}/api/provider-settings`);
+        const readBody = (await json(readBack)) as Record<string, unknown>;
+        assert.deepEqual(readBody.roleAssignments, savedBody.roleAssignments);
+        assertDoesNotContainValues(readBody, ["sk-secret"]);
+
+        const unknownRole = await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5.5",
+            roleAssignments: { reviewer: { provider: "codex-local" } },
+          }),
+        });
+        assert.equal(unknownRole.status, 400);
+        const unknownProvider = await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5.5",
+            roleAssignments: { worker: { provider: "gpt-cloud" } },
+          }),
+        });
+        assert.equal(unknownProvider.status, 400);
+
+        // Failed updates leave the saved assignments unchanged.
+        const after = (await json(
+          await fetch(`${providerServer.url}/api/provider-settings`),
+        )) as Record<string, unknown>;
+        assert.deepEqual(after.roleAssignments, savedBody.roleAssignments);
+      } finally {
+        await providerServer.close();
+      }
+    });
+
     it("saves Codex Local provider settings with model label and command path", async () => {
       const providerServer = await startServer();
 

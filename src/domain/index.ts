@@ -105,8 +105,11 @@ export type {
 } from "./event.types.js";
 export type { GoalStatus, RunStatus, StepStatus } from "./status.types.js";
 export type {
+  AgentAssignableRole,
+  AgentRoleAssignment,
   ClaudeLocalProviderSettings,
   CodexLocalProviderSettings,
+  RoleAssignments,
   CodexModelCatalogEntry,
   CodexModelCatalogResult,
   CodexModelCatalogSource,
@@ -121,8 +124,10 @@ export type {
   StartGoalRequestBody,
 } from "./provider-settings.types.js";
 export {
+  agentAssignableRoles,
   CODEX_DEFAULT_MODEL_LABEL,
   createDefaultProviderSettings,
+  sanitizeRoleAssignments,
   defaultProviderStatus,
   describeCodexModelLabel,
   LEGACY_CODEX_MODEL_LABEL,

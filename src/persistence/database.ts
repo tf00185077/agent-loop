@@ -79,6 +79,7 @@ function initializeSchema(db: AppDatabase): void {
       model_label TEXT NOT NULL,
       codex_command_path TEXT,
       claude_command_path TEXT,
+      role_assignments TEXT,
       status_state TEXT NOT NULL,
       status_detected INTEGER NOT NULL,
       status_checked_at TEXT,
@@ -160,6 +161,7 @@ function initializeSchema(db: AppDatabase): void {
   ensureColumn(db, "agent_sessions", "worktree", "TEXT");
   ensureColumn(db, "agent_delegation_requests", "task_id", "TEXT");
   ensureColumn(db, "agent_delegation_requests", "acceptance", "TEXT");
+  ensureColumn(db, "provider_settings", "role_assignments", "TEXT");
 }
 
 function ensureColumn(db: AppDatabase, table: string, column: string, type: string): void {

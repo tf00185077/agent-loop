@@ -1,9 +1,11 @@
 import { Router } from "express";
 
 import {
+  agentAssignableRoles,
   sanitizeProviderStatus,
   type CodexModelCatalogResult,
   type ProviderSettings,
+  type RoleAssignments,
 } from "../../domain/index.js";
 import type { ProviderSettingsRepository } from "../../persistence/provider-settings-repository.js";
 import {
@@ -367,10 +369,68 @@ function parseDetectProviderInput(body: unknown): ParseDetectProviderInputResult
   return { ok: false, error: "provider must be codex-local or claude-local" };
 }
 
+type ParseRoleAssignmentsResult =
+  | { ok: true; roleAssignments: RoleAssignments | undefined }
+  | { ok: false; error: string };
+
+function parseRoleAssignments(value: unknown): ParseRoleAssignmentsResult {
+  if (value === undefined || value === null) {
+    return { ok: true, roleAssignments: undefined };
+  }
+  if (!isRecord(value)) {
+    return { ok: false, error: "roleAssignments must be an object" };
+  }
+  const roleAssignments: RoleAssignments = {};
+  for (const [role, assignment] of Object.entries(value)) {
+    if (!(agentAssignableRoles as readonly string[]).includes(role)) {
+      return { ok: false, error: `unknown role: ${role}` };
+    }
+    if (assignment === undefined || assignment === null) continue;
+    if (!isRecord(assignment)) {
+      return { ok: false, error: `roleAssignments.${role} must be an object` };
+    }
+    if (
+      assignment.provider !== "mock" &&
+      assignment.provider !== "codex-local" &&
+      assignment.provider !== "claude-local"
+    ) {
+      return { ok: false, error: `roleAssignments.${role}.provider must be mock, codex-local, or claude-local` };
+    }
+    if (assignment.modelLabel !== undefined && typeof assignment.modelLabel !== "string") {
+      return { ok: false, error: `roleAssignments.${role}.modelLabel must be a string` };
+    }
+    if (
+      assignment.commandPath !== undefined &&
+      assignment.commandPath !== null &&
+      typeof assignment.commandPath !== "string"
+    ) {
+      return { ok: false, error: `roleAssignments.${role}.commandPath must be a string or null` };
+    }
+    roleAssignments[role as (typeof agentAssignableRoles)[number]] = {
+      provider: assignment.provider,
+      modelLabel: typeof assignment.modelLabel === "string" ? assignment.modelLabel.trim() : "",
+      commandPath:
+        typeof assignment.commandPath === "string" && assignment.commandPath.trim()
+          ? assignment.commandPath.trim()
+          : null,
+    };
+  }
+  return {
+    ok: true,
+    roleAssignments: Object.keys(roleAssignments).length > 0 ? roleAssignments : undefined,
+  };
+}
+
 function parseProviderSettings(body: unknown): ParseProviderSettingsResult {
   if (!isRecord(body)) {
     return { ok: false, error: "request body must be an object" };
   }
+
+  const parsedAssignments = parseRoleAssignments(body.roleAssignments);
+  if (!parsedAssignments.ok) {
+    return { ok: false, error: parsedAssignments.error };
+  }
+  const roleAssignments = parsedAssignments.roleAssignments;
 
   if (body.provider === "mock") {
     return {
@@ -385,6 +445,7 @@ function parseProviderSettings(body: unknown): ParseProviderSettingsResult {
           checkedAt: null,
           message: null,
         },
+        ...(roleAssignments ? { roleAssignments } : {}),
       },
     };
   }
@@ -413,6 +474,7 @@ function parseProviderSettings(body: unknown): ParseProviderSettingsResult {
           checkedAt: null,
           message: null,
         },
+        ...(roleAssignments ? { roleAssignments } : {}),
       },
     };
   }
@@ -438,6 +500,7 @@ function parseProviderSettings(body: unknown): ParseProviderSettingsResult {
           checkedAt: null,
           message: null,
         },
+        ...(roleAssignments ? { roleAssignments } : {}),
       },
     };
   }

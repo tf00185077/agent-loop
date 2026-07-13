@@ -88,6 +88,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "model_label",
     "codex_command_path",
     "claude_command_path",
+    "role_assignments",
     "status_state",
     "status_detected",
     "status_checked_at",
