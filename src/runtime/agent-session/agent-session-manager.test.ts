@@ -2270,19 +2270,21 @@ test("tags task lists and delegations with the active change and persists change
       },
     },
     {
+      // While the change is specifying, its spec task is the delegable work;
+      // the delegation must inherit the active changeId onto its row.
       type: "progress",
       sessionId: "session-placeholder",
       goalId: fixture.goal.id,
       runId: "run-placeholder",
-      message: "Delegating task one.",
+      message: "Delegating the spec task.",
       occurredAt: "2026-07-13T00:00:03.000Z",
       metadata: {
         delegationControlEvent: {
           type: "managed_delegation.request",
           role: "worker",
-          taskId: "task-1",
-          prompt: "Implement the first slice.",
-          summary: "Implement the first slice.",
+          taskId: "spec:change-one",
+          prompt: "Author the change-one specs.",
+          summary: "Author the change-one specs.",
         },
       },
     },
@@ -2306,9 +2308,72 @@ test("tags task lists and delegations with the active change and persists change
   assert.equal(taskListEvent.data.changeId, "change-one");
   const request = fixture.agentSessionRepo
     .listDelegationRequests(result.session.id)
-    .find((row) => row.taskId === "task-1");
-  assert.ok(request, "expected the worker delegation to dispatch");
+    .find((row) => row.taskId === "spec:change-one");
+  assert.ok(request, "expected the spec delegation to dispatch");
   assert.equal(request.changeId, "change-one");
+
+  fixture.db.close();
+});
+
+test("rejects implementation delegations while the active change is still specifying", async () => {
+  const fixture = createManagerFixture("premature implementation goal");
+  const openSpec = recordingOpenSpecService("cli");
+  const adapter = adapterWithEvents([
+    changePlanEvent([
+      { id: "change-one", title: "Change one", rationale: "First slice." },
+      { id: "change-two", title: "Change two", rationale: "Second slice." },
+    ]),
+    {
+      type: "progress",
+      sessionId: "session-placeholder",
+      goalId: fixture.goal.id,
+      runId: "run-placeholder",
+      message: "Announcing implementation tasks before the spec is merged.",
+      occurredAt: "2026-07-13T00:00:02.000Z",
+      metadata: {
+        delegationControlEvent: {
+          type: "managed_delegation.task_list",
+          tasks: [{ id: "task-1", title: "Implement it", acceptance: [{ id: "A1", text: "Works." }] }],
+        },
+      },
+    },
+    {
+      type: "progress",
+      sessionId: "session-placeholder",
+      goalId: fixture.goal.id,
+      runId: "run-placeholder",
+      message: "Delegating implementation before the spec is merged.",
+      occurredAt: "2026-07-13T00:00:03.000Z",
+      metadata: {
+        delegationControlEvent: {
+          type: "managed_delegation.request",
+          role: "worker",
+          taskId: "task-1",
+          prompt: "Implement it.",
+          summary: "Implement it.",
+        },
+      },
+    },
+  ]);
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  const result = await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const rejection = events.find((event) => event.data.runtimeEventType === "delegation.rejected");
+  assert.ok(rejection, "expected the premature implementation delegation to be rejected");
+  assert.match(String(rejection.data.safeReason), /specifying/i);
+  assert.match(String(rejection.data.safeReason), /spec:change-one/);
+  assert.equal(fixture.agentSessionRepo.listDelegationRequests(result.session.id).length, 0);
 
   fixture.db.close();
 });

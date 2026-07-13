@@ -690,6 +690,21 @@ async function persistDelegationControlEvent(
     validation.request.taskId && validation.request.taskId.startsWith("spec:")
       ? changeRegistry.getChange(validation.request.taskId.slice("spec:".length))
       : undefined;
+  if (validation.request.role === "worker" && !specChange && changeResolution.changeId) {
+    const activeChange = changeRegistry.getChange(changeResolution.changeId);
+    if (activeChange && activeChange.status === "specifying") {
+      // Prompt text tells the supervisor to wait for merged specs; this is
+      // the deterministic version of that rule.
+      recordControlRejection(
+        deps,
+        input,
+        data,
+        `Change ${activeChange.id} is still specifying. Deliver and review-merge ` +
+          `${specTaskId(activeChange.id)} before delegating implementation tasks.`,
+      );
+      return;
+    }
+  }
 
   const registry = getTaskRegistry(input.state, input.goalId);
   let dispatchAcceptance = validation.request.acceptance ?? null;
