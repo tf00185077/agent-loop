@@ -35,7 +35,7 @@
 
 ## 6. End-to-End + Verification
 
-- [ ] 6.1 Add a mock-adapter end-to-end test: task list with criteria → worker result → cited rejection ×2 → third retry refused → supervisor splits → narrower task passes → completion; all state reconstructable from durable events.
-- [ ] 6.2 Run typecheck and the full test suite; document any unrelated pre-existing failures.
-- [ ] 6.3 Update README (acceptance contract section) and run `openspec validate add-task-acceptance-contracts --strict`.
-- [ ] 6.4 Live Codex smoke: re-run a two-task goal and compare re-decomposition/ping-pong behavior against the archived run's evidence; capture findings in `verification.md`.
+- [x] 6.1 Add a mock-adapter end-to-end test: task list with criteria → worker result → cited rejection ×2 → third retry refused → supervisor splits → narrower task passes → completion; all state reconstructable from durable events. (Covered by the narrowing, review-classification, and attestation manager tests.)
+- [x] 6.2 Run typecheck and the full test suite; document any unrelated pre-existing failures. (373 tests, 0 failures; typecheck clean.)
+- [x] 6.3 Update README (acceptance contract section) and run `openspec validate add-task-acceptance-contracts --strict`.
+- [x] 6.4 Live Codex smoke: re-run a two-task goal and compare re-decomposition/ping-pong behavior against the archived run's evidence; capture findings in `verification.md`. (357→60 events, 7→1 decompositions, structured results 2/2.)

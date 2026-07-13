@@ -181,6 +181,31 @@ session by default:
    records a durable `runtime.managed_mode_downgraded` event and falls back to
    the previous one-shot provider run — visible, never silent.
 
+### Task Acceptance Contracts
+
+Every delegated task runs under a frozen acceptance contract, enforced by
+backend validators rather than prompt text:
+
+- Task-list entries carry acceptance criteria (`{id, text}` with binary,
+  testable conditions). Worker delegations for a known task without a contract
+  are rejected; later attempts to rewrite frozen criteria are ignored and
+  recorded durably.
+- Workers receive the contract as a prompt appendix and report back through a
+  `managed_task.result` control block (per-criterion evidence, tests run,
+  claimed files). The backend attests changed files from the worker worktree's
+  git status — the attested list is authoritative, and claimed-vs-attested
+  discrepancies are recorded.
+- Reviews are cite-only: a rejection counts as substantive only when it cites
+  frozen criterion ids; uncited objections become durable deferred findings
+  that cannot block the task.
+- After two substantive rejections (or three attempts), the backend refuses
+  identical-scope retries and requires the supervisor to split the failing
+  criteria into strictly narrower tasks with `parentTaskId` lineage — the
+  reviewer/coder ping-pong loop is structurally bounded.
+- Continuation prompts carry the durable task history (statuses, criterion
+  outcomes, rejection counts, lineage) so fresh continuations do not
+  re-decompose the goal from scratch.
+
 Direction anchors:
 
 - The backend owns spawn, workspace creation, persistence, merge checkpoints,

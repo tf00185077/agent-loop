@@ -51,7 +51,9 @@ export type WorktreeAttestor = (worktreePath: string) => string[];
  * instead of trusting the child's self-reported file list.
  */
 export function attestWorktreeFiles(worktreePath: string): string[] {
-  const result = spawnSync("git", ["status", "--porcelain"], {
+  // -uall lists untracked files individually instead of collapsing new
+  // directories, so attested paths compare cleanly with claimed paths.
+  const result = spawnSync("git", ["status", "--porcelain", "-uall"], {
     cwd: worktreePath,
     encoding: "utf8",
     windowsHide: true,
