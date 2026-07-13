@@ -219,6 +219,42 @@ backend validators rather than prompt text:
   outcomes, rejection counts, lineage) so fresh continuations do not
   re-decompose the goal from scratch.
 
+### Goal-Scale Decomposition (OpenSpec Change Plans)
+
+Oversized goals get a tier above the flat task list: the supervisor assesses
+scale at bootstrap and may declare an ordered change plan with a
+`managed_change.plan` control block (2–8 changes, unique ids, acyclic
+`dependsOn` — budgets enforced by backend validators, one plan per goal).
+Small goals skip the plan and keep the flat flow with zero new overhead.
+
+- **Backend-owned OpenSpec.** Accepting a plan scaffolds each change's
+  artifacts (`openspec/changes/<id>/`) in the goal workspace from internal
+  templates and commits them so child worktrees can see them. The `openspec`
+  CLI is a backend validator (strict validate as an acceptance gate, dated
+  archive moves); agents never run it. A missing CLI records a durable
+  `runtime.openspec_unavailable` downgrade and internal structural checks take
+  over — visible, never silent.
+- **Spec authoring is a contracted delegation.** Each planned change gets a
+  backend-registered `spec:<changeId>` task with frozen S1–S3 criteria
+  (validation passes; every requirement has a WHEN/THEN scenario; every task
+  carries acceptance criteria). Spec-writer workers get a provider-neutral
+  appendix (change context, target paths, filled markdown templates — never
+  the OpenSpec CLI workflow), author in their worktree, and their artifacts
+  are validated pre-merge; failures become substantive rejections citing the
+  failing criteria. Merged artifacts re-validate in the goal workspace before
+  the change moves `specifying → executing`.
+- **One active change at a time.** Task lists and delegations inherit the
+  active `changeId`; explicit mismatches (and tasks owned by an inactive
+  change) are rejected naming the active change. Delegation rows persist
+  `change_id`.
+- **Merged evidence gates archives.** A change archives only when all its
+  registered tasks are delivered and no attested worker file changes remain
+  unmerged (blocked archives record the missing-merge reason durably).
+  Archiving activates the next change; `managed_delegation.complete` is
+  rejected while unarchived planned changes remain.
+- Continuations render the durable change-plan history (statuses,
+  dependencies, the active change) alongside the task history.
+
 Direction anchors:
 
 - The backend owns spawn, workspace creation, persistence, merge checkpoints,

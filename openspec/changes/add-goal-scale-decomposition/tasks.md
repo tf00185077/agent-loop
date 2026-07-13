@@ -38,7 +38,7 @@
 
 ## 7. End-to-End + Verification
 
-- [ ] 7.1 Add a mock-adapter e2e test: plan (2 changes) → spec-writer contracted → validate gate → tasks under change 1 → merged evidence → archive → change 2 → completion accepted only after both archives; all reconstructable from durable events.
-- [ ] 7.2 Run typecheck and the full test suite; document any unrelated pre-existing failures.
-- [ ] 7.3 Update README (goal-scale decomposition section) and run `openspec validate add-goal-scale-decomposition --strict`.
+- [x] 7.1 Add a mock-adapter e2e test: plan (2 changes) → spec-writer contracted → validate gate → tasks under change 1 → merged evidence → archive → change 2 → completion accepted only after both archives; all reconstructable from durable events.
+- [x] 7.2 Run typecheck and the full test suite; document any unrelated pre-existing failures.
+- [x] 7.3 Update README (goal-scale decomposition section) and run `openspec validate add-goal-scale-decomposition --strict`.
 - [ ] 7.4 Live Codex smoke with a deliberately larger goal; capture change-plan behavior and findings in `verification.md`.

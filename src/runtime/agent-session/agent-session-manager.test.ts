@@ -2969,6 +2969,42 @@ test("gates change archives on merged evidence and goal completion on all change
   assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "completed");
   assert.ok(events.some((event) => event.type === "goal.completed"));
 
+  // Spec-writer delegations were contracted with the frozen S1-S3 criteria.
+  const specAccepted = eventOfType("delegation.accepted").filter((event) =>
+    String(event.data.taskId ?? "").startsWith("spec:"),
+  );
+  assert.deepEqual(
+    specAccepted.map((event) => event.data.taskId),
+    ["spec:change-one", "spec:change-two"],
+  );
+
+  // The whole change lifecycle is reconstructable from durable events alone.
+  const changeLifecycleTypes = new Set([
+    "supervisor.change_plan",
+    "change.activated",
+    "change.spec_approved",
+    "change.archive_blocked",
+    "change.archived",
+    "delegation.rejected",
+    "supervisor.completed",
+  ]);
+  const lifecycle = events
+    .filter((event) => changeLifecycleTypes.has(String(event.data.runtimeEventType)))
+    .map((event) => [event.data.runtimeEventType, event.data.changeId ?? null]);
+  assert.deepEqual(lifecycle, [
+    ["supervisor.change_plan", null],
+    ["change.activated", "change-one"],
+    ["change.spec_approved", "change-one"],
+    ["change.archive_blocked", "change-one"],
+    ["change.archived", "change-one"],
+    ["change.activated", "change-two"],
+    ["delegation.rejected", null],
+    ["change.spec_approved", "change-two"],
+    ["change.archived", "change-two"],
+    ["supervisor.completed", null],
+    ["supervisor.completed", null],
+  ]);
+
   fixture.db.close();
 });
 
