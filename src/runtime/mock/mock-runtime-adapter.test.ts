@@ -36,9 +36,15 @@ test("mock runtime adapter emits progress command approval child-session and com
       "approval.requested",
       "child_session.requested",
       "command.completed",
+      "progress",
       "session.completed",
     ],
   );
+  const completionControl = events.at(-2);
+  assert.deepEqual(completionControl?.metadata?.delegationControlEvent, {
+    type: "managed_delegation.complete",
+    summary: "Mock session completed.",
+  });
   assert.equal(events[0]?.sessionId, "session-1");
   assert.equal(events[0]?.goalId, "goal-1");
   assert.equal(events[0]?.runId, "run-1");

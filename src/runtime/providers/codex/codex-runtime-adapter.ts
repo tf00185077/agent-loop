@@ -10,6 +10,7 @@ import type {
 } from "../../../domain/index.js";
 import { resolveCodexModelArgument } from "../../../domain/index.js";
 import type { AgentObservation } from "../../../domain/index.js";
+import { extractControlBlocks } from "../../agent-session/control-block.js";
 import { createCodexJsonlParser, type CodexJsonlParsedResult } from "./codex-jsonl-parser.js";
 
 export interface CodexRuntimeAdapterOptions {
@@ -81,10 +82,12 @@ async function createCodexSessionHandle(
           }
 
           for (const observation of result.observations) {
-            yield observationToRuntimeEvent(input, observation);
-            if (cancelled) {
-              yield createRuntimeEvent(input, "session.cancelled", "Codex managed session cancelled.");
-              return;
+            for (const event of observationToRuntimeEvents(input, observation)) {
+              yield event;
+              if (cancelled) {
+                yield createRuntimeEvent(input, "session.cancelled", "Codex managed session cancelled.");
+                return;
+              }
             }
           }
 
@@ -180,23 +183,49 @@ function buildCodexManagedSessionArgs(input: CodexRuntimeSessionRunnerInput): st
   return args;
 }
 
-function observationToRuntimeEvent(input: AgentSessionStartInput, observation: AgentObservation): AgentRuntimeEvent {
+function observationToRuntimeEvents(input: AgentSessionStartInput, observation: AgentObservation): AgentRuntimeEvent[] {
   if (observation.kind === "command.started") {
-    return createRuntimeEvent(input, "command.started", observation.message, {
-      commandId: commandIdForObservation(observation),
-    });
+    return [
+      createRuntimeEvent(input, "command.started", observation.message, {
+        commandId: commandIdForObservation(observation),
+      }),
+    ];
   }
   if (observation.kind === "command.completed") {
-    return createRuntimeEvent(input, "command.completed", observation.message, {
-      commandId: commandIdForObservation(observation),
-    });
+    return [
+      createRuntimeEvent(input, "command.completed", observation.message, {
+        commandId: commandIdForObservation(observation),
+      }),
+    ];
   }
   if (observation.kind === "command.failed") {
-    return createRuntimeEvent(input, "command.failed", observation.message, {
-      commandId: commandIdForObservation(observation),
-    });
+    return [
+      createRuntimeEvent(input, "command.failed", observation.message, {
+        commandId: commandIdForObservation(observation),
+      }),
+    ];
   }
-  return createRuntimeEvent(input, "progress", observation.message);
+
+  const { blocks, strippedText } = extractControlBlocks(observation.message);
+  if (blocks.length === 0) {
+    return [createRuntimeEvent(input, "progress", observation.message)];
+  }
+
+  const events: AgentRuntimeEvent[] = [];
+  if (strippedText) {
+    events.push(createRuntimeEvent(input, "progress", strippedText));
+  }
+  for (const block of blocks) {
+    events.push(
+      createRuntimeEvent(input, "progress", "Control block received.", {
+        delegationControlEvent:
+          block.payload !== undefined
+            ? block.payload
+            : { type: "invalid_control_block", parseError: block.parseError ?? "unparseable" },
+      }),
+    );
+  }
+  return events;
 }
 
 function createRuntimeEvent(
@@ -250,7 +279,7 @@ export async function detectCodexRuntimeCapabilities(
       approval: result.approvalResume,
       cancellation: true,
       resume: result.approvalResume,
-      childSessions: false,
+      childSessions: true,
       unsupportedReasons: unsupportedReasonsForSupportedJsonMode(result),
     };
   } catch (err) {
@@ -296,9 +325,7 @@ async function defaultCodexRuntimeCapabilityProbe(commandPath: string): Promise<
 function unsupportedReasonsForSupportedJsonMode(
   result: CodexRuntimeCapabilityProbeResult,
 ): AgentRuntimeCapabilities["unsupportedReasons"] {
-  const unsupportedReasons: NonNullable<AgentRuntimeCapabilities["unsupportedReasons"]> = {
-    child_sessions: "Child-session scheduling is not enabled for Codex runtime sessions.",
-  };
+  const unsupportedReasons: NonNullable<AgentRuntimeCapabilities["unsupportedReasons"]> = {};
 
   if (!result.approvalResume) {
     unsupportedReasons.approval = "Codex capability probe did not verify backend-mediated approval resume.";

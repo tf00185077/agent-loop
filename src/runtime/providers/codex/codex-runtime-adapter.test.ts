@@ -33,7 +33,7 @@ test("detects Codex JSONL runtime capabilities with approval explicitly unsuppor
   assert.equal(capabilities.approval, false);
   assert.equal(capabilities.cancellation, true);
   assert.equal(capabilities.resume, false);
-  assert.equal(capabilities.childSessions, false);
+  assert.equal(capabilities.childSessions, true);
   assert.match(capabilities.unsupportedReasons?.approval ?? "", /approval resume/i);
 });
 
@@ -52,10 +52,8 @@ test("detects approval-supported Codex mode only when the probe verifies resume 
     approval: true,
     cancellation: true,
     resume: true,
-    childSessions: false,
-    unsupportedReasons: {
-      child_sessions: "Child-session scheduling is not enabled for Codex runtime sessions.",
-    },
+    childSessions: true,
+    unsupportedReasons: {},
   });
 });
 
@@ -90,6 +88,96 @@ test("reports sanitized startup failure capabilities without command secrets", a
   assert.equal(serialized.includes("sk-secret"), false);
   assert.equal(serialized.includes("hidden"), false);
   assert.match(capabilities.unsupportedReasons?.approval ?? "", /failed to start/i);
+});
+
+test("extracts control blocks from assistant messages into delegation control metadata", async () => {
+  const delegationPayload = {
+    type: "managed_delegation.request",
+    role: "worker",
+    taskId: "task-1",
+    prompt: "Implement matchmaking.",
+    summary: "Implement matchmaking.",
+  };
+  const adapter = createCodexRuntimeAdapter({
+    commandPath: "C:\\Tools\\codex.exe",
+    modelLabel: "gpt-5-codex",
+    probe: async () => ({ execJson: true, approvalResume: false }),
+    sessionRunner: async function* (): AsyncIterable<CodexJsonlParsedResult> {
+      yield {
+        observations: [
+          {
+            kind: "progress",
+            message: [
+              "I'll delegate the first task.",
+              "```auto-agent-control",
+              JSON.stringify(delegationPayload),
+              "```",
+            ].join("\n"),
+            metadata: { source: "jsonl", rawEventType: "agent_message" },
+          },
+          {
+            kind: "progress",
+            message: "Plain progress without control blocks.",
+            metadata: { source: "jsonl", rawEventType: "agent_message" },
+          },
+        ],
+      };
+    },
+  });
+
+  const handle = await adapter.startSession({
+    sessionId: "session-control",
+    goalId: "goal-control",
+    runId: "run-control",
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Supervise",
+  });
+  const events = [];
+  for await (const event of handle.events()) events.push(event);
+
+  const controlEvent = events.find((event) => event.metadata?.delegationControlEvent !== undefined);
+  assert.deepEqual(controlEvent?.metadata?.delegationControlEvent, delegationPayload);
+  const progressMessages = events
+    .filter((event) => event.type === "progress" && event.metadata?.delegationControlEvent === undefined)
+    .map((event) => event.message);
+  assert.ok(progressMessages.includes("I'll delegate the first task."));
+  assert.ok(progressMessages.includes("Plain progress without control blocks."));
+  assert.ok(!events.some((event) => event.message.includes("auto-agent-control")));
+});
+
+test("surfaces malformed control blocks as invalid control metadata", async () => {
+  const adapter = createCodexRuntimeAdapter({
+    commandPath: "C:\\Tools\\codex.exe",
+    modelLabel: "gpt-5-codex",
+    probe: async () => ({ execJson: true, approvalResume: false }),
+    sessionRunner: async function* (): AsyncIterable<CodexJsonlParsedResult> {
+      yield {
+        observations: [
+          {
+            kind: "progress",
+            message: ["```auto-agent-control", "{not json", "```"].join("\n"),
+            metadata: { source: "jsonl", rawEventType: "agent_message" },
+          },
+        ],
+      };
+    },
+  });
+
+  const handle = await adapter.startSession({
+    sessionId: "session-invalid-control",
+    goalId: "goal-invalid-control",
+    runId: "run-invalid-control",
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    prompt: "Supervise",
+  });
+  const events = [];
+  for await (const event of handle.events()) events.push(event);
+
+  const controlEvent = events.find((event) => event.metadata?.delegationControlEvent !== undefined);
+  const payload = controlEvent?.metadata?.delegationControlEvent as { type?: string } | undefined;
+  assert.equal(payload?.type, "invalid_control_block");
 });
 
 test("maps Codex JSONL runtime events into durable managed goal events", async () => {
@@ -134,7 +222,13 @@ test("maps Codex JSONL runtime events into durable managed goal events", async (
         observations: [
           {
             kind: "progress",
-            message: "Final answer",
+            message: [
+              "Final answer",
+              "",
+              "```auto-agent-control",
+              JSON.stringify({ type: "managed_delegation.complete", summary: "Final answer" }),
+              "```",
+            ].join("\n"),
             metadata: { source: "jsonl", rawEventType: "agent_message" },
           },
         ],

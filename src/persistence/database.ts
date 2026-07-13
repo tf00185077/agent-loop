@@ -142,6 +142,7 @@ function initializeSchema(db: AppDatabase): void {
       role TEXT NOT NULL,
       status TEXT NOT NULL,
       prompt_summary TEXT NOT NULL,
+      task_id TEXT,
       result_summary TEXT,
       detached_reason TEXT,
       created_at TEXT NOT NULL,
@@ -156,6 +157,7 @@ function initializeSchema(db: AppDatabase): void {
   // CREATE TABLE IF NOT EXISTS above does not alter an existing table.
   ensureColumn(db, "provider_settings", "claude_command_path", "TEXT");
   ensureColumn(db, "agent_sessions", "worktree", "TEXT");
+  ensureColumn(db, "agent_delegation_requests", "task_id", "TEXT");
 }
 
 function ensureColumn(db: AppDatabase, table: string, column: string, type: string): void {

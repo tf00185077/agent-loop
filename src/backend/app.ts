@@ -24,6 +24,11 @@ import { createClaudeCliProvider } from "../runtime/providers/claude/claude-cli-
 import { detectClaudeCliCommand } from "../runtime/providers/claude/claude-cli-detection.js";
 import { createCodexCliProvider } from "../runtime/providers/codex/codex-cli-provider.js";
 import { resolveCodexCommandPath } from "../runtime/providers/codex/codex-command-path.js";
+import {
+  createCodexRuntimeAdapter,
+  type CodexRuntimeCapabilityProbe,
+  type CodexRuntimeSessionRunner,
+} from "../runtime/providers/codex/codex-runtime-adapter.js";
 import { createOpenAICompatibleProvider } from "../runtime/providers/openai-compatible-provider.js";
 import { loadProviderConfig, type ProviderEnvironment } from "../runtime/providers/provider-config.js";
 import { createProviderRuntime } from "../runtime/providers/provider-runtime.js";
@@ -53,6 +58,10 @@ export interface CreateAppOptions {
   agentLoopMaxScopeAssessmentAttempts?: number;
   agentLoopMaxScopeRefinementRounds?: number;
   agentRuntimeAdapters?: Partial<Record<"codex-local" | "claude-local", AgentRuntimeAdapter>>;
+  /** Test seams for the server-constructed Codex runtime adapter. */
+  codexRuntimeCapabilityProbe?: CodexRuntimeCapabilityProbe;
+  codexRuntimeSessionRunner?: CodexRuntimeSessionRunner;
+  maxSupervisorContinuations?: number;
 }
 
 export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
@@ -71,6 +80,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     runRepo,
     eventRepo,
     agentSessionRepo,
+    maxSupervisorContinuations: options.maxSupervisorContinuations,
   });
   const runtime = createRuntimeFromSavedProviderSettings({
     env: options.env ?? process.env,
@@ -85,6 +95,8 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     claudeCliDetection: options.claudeCliDetection,
     detectClaudeCliCommand: options.detectClaudeCliCommand,
     claudeCliProviderTimeoutMs: options.claudeCliProviderTimeoutMs,
+    codexRuntimeCapabilityProbe: options.codexRuntimeCapabilityProbe,
+    codexRuntimeSessionRunner: options.codexRuntimeSessionRunner,
     agentLoopMaxSteps: options.agentLoopMaxSteps,
     agentLoopMaxDepth: options.agentLoopMaxDepth,
     agentLoopMaxScopeAssessmentAttempts: options.agentLoopMaxScopeAssessmentAttempts,
@@ -148,6 +160,8 @@ interface CreateRuntimeFromSavedProviderSettingsDeps extends CreateRuntimeFromEn
   claudeCliDetection?: CreateAppOptions["claudeCliDetection"];
   detectClaudeCliCommand?: CreateAppOptions["detectClaudeCliCommand"];
   claudeCliProviderTimeoutMs?: number;
+  codexRuntimeCapabilityProbe?: CreateAppOptions["codexRuntimeCapabilityProbe"];
+  codexRuntimeSessionRunner?: CreateAppOptions["codexRuntimeSessionRunner"];
   agentLoopMaxSteps?: number;
   agentLoopMaxDepth?: number;
   agentLoopMaxScopeAssessmentAttempts?: number;
@@ -242,7 +256,7 @@ function createRuntimeFromCodexLocalSettings(
         : undefined,
   });
 
-  return createProviderRuntime({
+  const oneShotRuntime = createProviderRuntime({
     goalRepo: deps.goalRepo,
     runRepo: deps.runRepo,
     stepRepo: deps.stepRepo,
@@ -255,6 +269,44 @@ function createRuntimeFromCodexLocalSettings(
       },
     }),
   });
+
+  // Managed supervisor sessions are the default execution path; fall back to
+  // the one-shot provider run with a durable downgrade event when the
+  // installed CLI cannot support managed session mode.
+  return {
+    async run(goalId: string) {
+      const adapter = createCodexRuntimeAdapter({
+        commandPath: resolved.commandPath ?? "",
+        modelLabel: settings.modelLabel,
+        probe: deps.codexRuntimeCapabilityProbe,
+        sessionRunner: deps.codexRuntimeSessionRunner,
+      });
+      const capabilities = await adapter.detectCapabilities();
+      if (capabilities.eventStreaming) {
+        return deps.agentSessionManager.startManagedSession({
+          goalId,
+          providerId: "codex-local",
+          modelLabel: settings.modelLabel,
+          adapter,
+        });
+      }
+
+      deps.eventRepo.create({
+        goalId,
+        type: "agent.progress",
+        message: "Managed session mode is unavailable for Codex Local; running the one-shot provider path.",
+        data: {
+          provider: "codex-local",
+          model: settings.modelLabel,
+          runtimeEventType: "runtime.managed_mode_downgraded",
+          reason:
+            capabilities.unsupportedReasons?.approval ??
+            "Codex managed session capability detection failed.",
+        },
+      });
+      return oneShotRuntime.run(goalId);
+    },
+  };
 }
 
 function createRuntimeFromClaudeLocalSettings(

@@ -93,6 +93,14 @@ function createMockSessionHandle(input: AgentSessionStartInput, options: MockRun
         return;
       }
 
+      // Follow the supervisor contract: goal completion is an explicit
+      // control signal, not just the session process ending.
+      yield createEvent(input, "progress", "Mock completion control block.", {
+        delegationControlEvent: {
+          type: "managed_delegation.complete",
+          summary: "Mock session completed.",
+        },
+      });
       yield createEvent(input, "session.completed", "Mock session completed.");
     },
     async send(message) {

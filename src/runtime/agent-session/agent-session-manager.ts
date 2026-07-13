@@ -11,7 +11,7 @@ import type {
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
 import { createDelegationCoordinator } from "./delegation-coordinator.js";
-import { validateDelegationControlEvent } from "./delegation-control-event.js";
+import { validateManagedControlEvent } from "./delegation-control-event.js";
 import { buildSupervisorPrompt } from "./supervisor-prompt.js";
 import type { ReviewMergeVerificationService } from "./review-merge-verification-service.js";
 import type { ReviewMergeWorkspaceService } from "./review-merge-workspace-service.js";
@@ -26,6 +26,11 @@ export interface AgentSessionManagerDeps {
   reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;
+  /**
+   * Maximum supervisor continuations started because a delegation-capable
+   * session ended without a completion signal, per goal.
+   */
+  maxSupervisorContinuations?: number;
 }
 
 export interface StartManagedSessionInput {
@@ -53,6 +58,12 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
   const activeHandles = new Map<string, AgentSessionHandle>();
   const deliveredControls = new Set<string>();
   const runtimeCommandIds = new Map<string, string>();
+  const state: SupervisorState = {
+    completedGoals: new Set(),
+    completionlessContinuations: new Map(),
+    lastRejectionReasons: new Map(),
+    maxSupervisorContinuations: deps.maxSupervisorContinuations ?? 10,
+  };
 
   return {
     async startManagedSession(input) {
@@ -98,24 +109,18 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
       activeHandles.set(session.id, handle);
       deps.agentSessionRepo.updateLifecycleState(session.id, "running");
 
-      try {
-        for await (const event of handle.events()) {
-          await persistRuntimeEvent(deps, {
-            event,
-            goalId: goal.id,
-            runId: run.id,
-            sessionId: session.id,
-            providerId: input.providerId,
-            modelLabel: input.modelLabel,
-            adapter: input.adapter,
-            activeHandles,
-            runtimeCommandIds,
-          });
-        }
-      } finally {
-        activeHandles.delete(session.id);
-        clearRuntimeCommandIds(runtimeCommandIds, session.id);
-      }
+      await runSessionEvents(deps, {
+        handle,
+        goalId: goal.id,
+        runId: run.id,
+        sessionId: session.id,
+        providerId: input.providerId,
+        modelLabel: input.modelLabel,
+        adapter: input.adapter,
+        activeHandles,
+        runtimeCommandIds,
+        state,
+      });
 
       return { session: deps.agentSessionRepo.getSession(session.id)! };
     },
@@ -184,8 +189,17 @@ async function deliverControl(
   return true;
 }
 
-interface PersistRuntimeEventInput {
-  event: AgentRuntimeEvent;
+interface SupervisorState {
+  /** Goals whose supervisor already emitted a completion signal. */
+  completedGoals: Set<string>;
+  /** Per-goal count of continuations started because a session ended without completing. */
+  completionlessContinuations: Map<string, number>;
+  /** Per-goal safe reason of the most recent rejected control block. */
+  lastRejectionReasons: Map<string, string>;
+  maxSupervisorContinuations: number;
+}
+
+interface SessionEventContext {
   goalId: string;
   runId: string;
   sessionId: string;
@@ -194,6 +208,25 @@ interface PersistRuntimeEventInput {
   adapter: AgentRuntimeAdapter;
   activeHandles: Map<string, AgentSessionHandle>;
   runtimeCommandIds: Map<string, string>;
+  state: SupervisorState;
+}
+
+interface PersistRuntimeEventInput extends SessionEventContext {
+  event: AgentRuntimeEvent;
+}
+
+async function runSessionEvents(
+  deps: AgentSessionManagerDeps,
+  input: SessionEventContext & { handle: AgentSessionHandle },
+): Promise<void> {
+  try {
+    for await (const event of input.handle.events()) {
+      await persistRuntimeEvent(deps, { ...input, event });
+    }
+  } finally {
+    input.activeHandles.delete(input.sessionId);
+    clearRuntimeCommandIds(input.runtimeCommandIds, input.sessionId);
+  }
 }
 
 async function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: PersistRuntimeEventInput): Promise<void> {
@@ -278,9 +311,17 @@ async function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: Persist
 
   if (input.event.type === "session.completed") {
     const finishedAt = new Date().toISOString();
+    const session = deps.agentSessionRepo.getSession(input.sessionId);
+    // Delegation-capable supervisors complete the goal only through an
+    // explicit completion control block; a session process exiting is just the
+    // end of one turn.
+    const supervisorContract = !session?.parent && session?.capabilities.childSessions === true;
+    if (supervisorContract && input.state.completedGoals.has(input.goalId)) {
+      deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
+      return;
+    }
     deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
     deps.runRepo.updateStatus(input.runId, "completed", { finishedAt });
-    deps.goalRepo.updateStatus(input.goalId, "completed", { completedAt: finishedAt });
     deps.eventRepo.create({
       goalId: input.goalId,
       runId: input.runId,
@@ -288,13 +329,26 @@ async function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: Persist
       message: "Managed agent session completed",
       data,
     });
-    deps.eventRepo.create({
-      goalId: input.goalId,
-      runId: input.runId,
-      type: "goal.completed",
-      message: "Goal completed successfully",
-      data: { ...data, goalId: input.goalId },
-    });
+
+    if (!supervisorContract) {
+      deps.goalRepo.updateStatus(input.goalId, "completed", { completedAt: finishedAt });
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        runId: input.runId,
+        type: "goal.completed",
+        message: "Goal completed successfully",
+        data: { ...data, goalId: input.goalId },
+      });
+      return;
+    }
+    const hasActiveDelegation = deps.agentSessionRepo
+      .listDelegationRequests(input.sessionId)
+      .some((request) => ["requested", "accepted", "running"].includes(request.status));
+    if (hasActiveDelegation) {
+      // The child outcome continuation will pick the supervisor back up.
+      return;
+    }
+    await startCompletionlessContinuation(deps, input, data);
     return;
   }
 
@@ -347,21 +401,60 @@ async function persistDelegationControlEvent(
     throw new Error(`Agent session not found: ${input.sessionId}`);
   }
 
-  const validation = validateDelegationControlEvent({
+  const validation = validateManagedControlEvent({
     controlEvent: input.event.metadata?.delegationControlEvent,
     parentSession,
   });
   if (!validation.ok) {
+    recordControlRejection(deps, input, data, validation.safeReason);
+    return;
+  }
+
+  if (validation.kind === "task_list") {
     deps.eventRepo.create({
       goalId: input.goalId,
       runId: input.runId,
       type: "agent.progress",
-      message: "Delegation request rejected.",
+      message: "Supervisor task list recorded.",
       data: {
         ...data,
         delegationControlEvent: undefined,
-        runtimeEventType: "delegation.rejected",
-        safeReason: validation.safeReason,
+        runtimeEventType: "supervisor.task_list",
+        taskList: validation.tasks,
+      },
+    });
+    return;
+  }
+
+  if (validation.kind === "completion") {
+    const finishedAt = new Date().toISOString();
+    input.state.completedGoals.add(input.goalId);
+    deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
+    deps.runRepo.updateStatus(input.runId, "completed", { finishedAt });
+    deps.goalRepo.updateStatus(input.goalId, "completed", { completedAt: finishedAt });
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "run.completed",
+      message: "Supervisor signalled goal completion.",
+      data: {
+        ...data,
+        delegationControlEvent: undefined,
+        runtimeEventType: "supervisor.completed",
+        safeSummary: validation.summary,
+      },
+    });
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "goal.completed",
+      message: validation.summary,
+      data: {
+        ...data,
+        delegationControlEvent: undefined,
+        runtimeEventType: "supervisor.completed",
+        goalId: input.goalId,
+        safeSummary: validation.summary,
       },
     });
     return;
@@ -375,6 +468,7 @@ async function persistDelegationControlEvent(
       role: validation.request.role,
       prompt: validation.request.prompt,
       promptSummary: validation.request.promptSummary,
+      taskId: validation.request.taskId,
       workerDelegationRequestId: validation.request.workerDelegationRequestId,
       adapter: input.adapter,
       eventData: data,
@@ -385,19 +479,113 @@ async function persistDelegationControlEvent(
     });
   } catch (err) {
     const safeReason = err instanceof Error ? err.message : "Delegation request rejected.";
+    recordControlRejection(deps, input, data, safeReason);
+  }
+}
+
+function recordControlRejection(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  data: Record<string, unknown>,
+  safeReason: string,
+): void {
+  input.state.lastRejectionReasons.set(input.goalId, safeReason);
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "agent.progress",
+    message: "Delegation request rejected.",
+    data: {
+      ...data,
+      delegationControlEvent: undefined,
+      runtimeEventType: "delegation.rejected",
+      safeReason,
+    },
+  });
+}
+
+async function startCompletionlessContinuation(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const goal = deps.goalRepo.getById(input.goalId);
+  if (!goal || ["completed", "failed", "blocked"].includes(goal.status)) {
+    return;
+  }
+
+  const count = input.state.completionlessContinuations.get(input.goalId) ?? 0;
+  if (count >= input.state.maxSupervisorContinuations) {
+    const finishedAt = new Date().toISOString();
+    const reason = `Supervisor reached ${input.state.maxSupervisorContinuations} continuations without a completion signal`;
+    deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
     deps.eventRepo.create({
       goalId: input.goalId,
       runId: input.runId,
-      type: "agent.progress",
-      message: "Delegation request rejected.",
+      type: "goal.blocked",
+      message: reason,
       data: {
         ...data,
         delegationControlEvent: undefined,
-        runtimeEventType: "delegation.rejected",
-        safeReason,
+        runtimeEventType: "supervisor.continuations_exhausted",
+        maxSupervisorContinuations: input.state.maxSupervisorContinuations,
+        reason,
       },
     });
+    return;
   }
+  input.state.completionlessContinuations.set(input.goalId, count + 1);
+
+  const rejectionReason = input.state.lastRejectionReasons.get(input.goalId);
+  input.state.lastRejectionReasons.delete(input.goalId);
+  const prompt = buildSupervisorPrompt({
+    goal,
+    phase: rejectionReason ? { kind: "rejection", safeReason: rejectionReason } : { kind: "nudge" },
+  });
+
+  const run = deps.runRepo.create({
+    goalId: input.goalId,
+    provider: input.providerId,
+    model: input.modelLabel ?? "unknown",
+  });
+  const session = deps.agentSessionRepo.createSession({
+    goalId: input.goalId,
+    runId: run.id,
+    providerId: input.providerId,
+    modelLabel: input.modelLabel,
+    lifecycleState: "starting",
+    capabilities: await input.adapter.detectCapabilities(),
+  });
+  const handle = await input.adapter.startSession({
+    sessionId: session.id,
+    goalId: input.goalId,
+    runId: run.id,
+    providerId: input.providerId,
+    modelLabel: input.modelLabel,
+    prompt,
+  });
+  input.activeHandles.set(session.id, handle);
+  deps.agentSessionRepo.updateLifecycleState(session.id, "running");
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: run.id,
+    type: "agent.progress",
+    message: "Supervisor continuation started.",
+    data: {
+      sessionId: session.id,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType: "delegation.continuation_started",
+      continuationMode: "fresh",
+      continuationReason: rejectionReason ? "control_rejected" : "completionless_exit",
+    },
+  });
+  void runSessionEvents(deps, {
+    ...input,
+    runId: run.id,
+    sessionId: session.id,
+    handle,
+  });
 }
 
 async function continueSupervisorAfterChild(
@@ -410,6 +598,7 @@ async function continueSupervisorAfterChild(
   const handle = input.activeHandles.get(input.sessionId);
   if (handle?.capabilities.resume) {
     await handle.send({ type: "resume", message });
+    deps.agentSessionRepo.updateLifecycleState(input.sessionId, "running");
     deps.eventRepo.create({
       goalId: input.goalId,
       runId: input.runId,
@@ -466,6 +655,12 @@ async function continueSupervisorAfterChild(
       continuationMode: "fresh",
       ...metadata,
     },
+  });
+  void runSessionEvents(deps, {
+    ...input,
+    runId: run.id,
+    sessionId: session.id,
+    handle: freshHandle,
   });
 }
 

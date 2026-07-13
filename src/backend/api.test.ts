@@ -1613,6 +1613,97 @@ describe("Backend API", () => {
       }
     });
 
+    it("starts codex-local goals as managed supervisor sessions without injected adapters", async () => {
+      const runnerPrompts: string[] = [];
+      const providerServer = await startServer(undefined, {
+        codexRuntimeCapabilityProbe: async () => ({ execJson: true, approvalResume: false }),
+        codexRuntimeSessionRunner: async function* (input: { prompt: string }) {
+          runnerPrompts.push(input.prompt);
+          yield {
+            observations: [
+              {
+                kind: "progress" as const,
+                message: [
+                  "Goal delivered.",
+                  "```auto-agent-control",
+                  JSON.stringify({ type: "managed_delegation.complete", summary: "Goal delivered." }),
+                  "```",
+                ].join("\n"),
+                metadata: { source: "provider" as const, rawEventType: "agent_message" },
+              },
+            ],
+            finalMessage: "Goal delivered.",
+          };
+        },
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5-codex",
+            codexCommandPath: "C:\\Tools\\codex.cmd",
+          }),
+        });
+
+        const goal = await startManagedGoal(providerServer.url, "Managed by default");
+        const { event, events } = await waitForEvent(providerServer.url, goal.id, "goal.completed");
+
+        assert.equal(event.message, "Goal delivered.");
+        assert.ok(events.some((e) => e.message === "Managed agent session started"));
+        assert.ok(runnerPrompts[0]?.includes("auto-agent-control"));
+        assert.ok(runnerPrompts[0]?.includes("Managed by default"));
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("downgrades to the one-shot provider path with a durable event when managed mode is unsupported", async () => {
+      const providerServer = await startServer(undefined, {
+        codexRuntimeCapabilityProbe: async () => ({
+          execJson: false,
+          approvalResume: false,
+          reason: "codex exec --json is not supported by this CLI.",
+        }),
+        detectCodexCliCommand: () => ({
+          detected: true,
+          commandPath: "C:\\Tools\\missing-codex.cmd",
+          source: "manual",
+          status: {
+            state: "detected",
+            detected: true,
+            checkedAt: null,
+            message: "Fake detection ok",
+          },
+        }),
+        codexCliProviderTimeoutMs: 2_000,
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "codex-local",
+            modelLabel: "gpt-5-codex",
+            codexCommandPath: "C:\\Tools\\missing-codex.cmd",
+          }),
+        });
+
+        const goal = await startManagedGoal(providerServer.url, "Downgraded run");
+        const { events } = await waitForEvent(providerServer.url, goal.id, "error");
+
+        const downgrade = events.find(
+          (e) => (e.data as Record<string, unknown> | undefined)?.runtimeEventType === "runtime.managed_mode_downgraded",
+        );
+        assert.ok(downgrade, "expected a durable managed-mode downgrade event");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
     it("forwards fixture-backed approve reject and cancel controls to an active managed adapter once", async () => {
       const controls: MockRuntimeAdapterControl[] = [];
       const providerServer = await startServer(undefined, {

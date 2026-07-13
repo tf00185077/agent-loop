@@ -82,6 +82,7 @@ export interface CreateAgentRuntimeDelegationRequestInput {
   parentSessionId: string;
   role: AgentRuntimeDelegationRole;
   promptSummary: string;
+  taskId?: string | null;
 }
 
 export interface AgentSessionRepositoryOptions {
@@ -563,6 +564,7 @@ export function createAgentSessionRepository(
         role: input.role,
         status: "requested",
         promptSummary: input.promptSummary,
+        taskId: input.taskId ?? null,
         resultSummary: null,
         detachedReason: null,
         createdAt: now,
@@ -580,6 +582,7 @@ export function createAgentSessionRepository(
           role,
           status,
           prompt_summary,
+          task_id,
           result_summary,
           detached_reason,
           created_at,
@@ -595,6 +598,7 @@ export function createAgentSessionRepository(
           @role,
           @status,
           @promptSummary,
+          @taskId,
           @resultSummary,
           @detachedReason,
           @createdAt,
@@ -899,6 +903,7 @@ function mapAgentRuntimeDelegationRequestRow(row: unknown): AgentRuntimeDelegati
     role: value.role as AgentRuntimeDelegationRole,
     status: value.status as AgentRuntimeDelegationRequestStatus,
     promptSummary: value.prompt_summary!,
+    taskId: value.task_id ?? null,
     resultSummary: value.result_summary ? (JSON.parse(value.result_summary) as AgentRuntimeDelegationSummary) : null,
     detachedReason: value.detached_reason,
     createdAt: value.created_at!,

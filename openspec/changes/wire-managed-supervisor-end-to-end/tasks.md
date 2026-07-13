@@ -15,20 +15,20 @@
 
 ## 3. Sequential Delegation + Explicit Completion (control plane)
 
-- [ ] 3.1 Add agent-session-manager tests: supervisor completes only on a valid completion control block; process exit without completion and without pending delegation starts a bounded continuation; bound exhaustion marks the goal blocked with a durable reason.
-- [ ] 3.2 Implement completion-signal handling and the `maxSupervisorContinuations` bound (config via `CreateAppOptions`, default 10).
-- [ ] 3.3 Add tests for multiple sequential delegations in one supervisor lifetime: worker A completes → supervisor continues → worker B accepted; one-active-child rejection still holds while a child runs.
-- [ ] 3.4 Implement sequential delegation support and persist `taskId` on delegation requests (additive nullable SQLite column + repository support).
-- [ ] 3.5 Add tests and implementation for durable task-list recording: supervisor task-list announcement persists an event with `taskList` metadata; delegation lifecycle events carry `taskId` when present.
-- [ ] 3.6 Add a mock-adapter end-to-end control-plane test: bootstrap → task list → worker 1 → continuation → worker 2 → review_merge → completion block → goal completed, all reconstructable from durable events.
+- [x] 3.1 Add agent-session-manager tests: supervisor completes only on a valid completion control block; process exit without completion and without pending delegation starts a bounded continuation; bound exhaustion marks the goal blocked with a durable reason.
+- [x] 3.2 Implement completion-signal handling and the `maxSupervisorContinuations` bound (config via `CreateAppOptions`, default 10).
+- [x] 3.3 Add tests for multiple sequential delegations in one supervisor lifetime: worker A completes → supervisor continues → worker B accepted; one-active-child rejection still holds while a child runs.
+- [x] 3.4 Implement sequential delegation support and persist `taskId` on delegation requests (additive nullable SQLite column + repository support).
+- [x] 3.5 Add tests and implementation for durable task-list recording: supervisor task-list announcement persists an event with `taskList` metadata; delegation lifecycle events carry `taskId` when present.
+- [x] 3.6 Add a mock-adapter end-to-end control-plane test: bootstrap → task list → worker 1 → continuation → worker 2 → review_merge → completion block → goal completed, all reconstructable from durable events.
 
 ## 4. Codex Adapter Wiring
 
-- [ ] 4.1 Add codex-runtime-adapter tests: `agent_message` items containing fenced control blocks emit events with `delegationControlEvent` / completion metadata and stripped progress text; prose-only messages behave unchanged.
-- [ ] 4.2 Implement control-block extraction in the Codex runtime adapter using the shared utility.
-- [ ] 4.3 Add app-level tests: starting a `codex-local` goal with saved settings (no injected adapter) constructs the Codex runtime adapter and starts a managed session; injected adapters still take precedence.
-- [ ] 4.4 Implement default Codex adapter construction in `selectRuntimeForSettings` from resolved command path and model label.
-- [ ] 4.5 Add tests and implementation for the visible downgrade path: when adapter capability detection reports managed mode unsupported, record a durable downgrade event and run the one-shot provider path.
+- [x] 4.1 Add codex-runtime-adapter tests: `agent_message` items containing fenced control blocks emit events with `delegationControlEvent` / completion metadata and stripped progress text; prose-only messages behave unchanged.
+- [x] 4.2 Implement control-block extraction in the Codex runtime adapter using the shared utility.
+- [x] 4.3 Add app-level tests: starting a `codex-local` goal with saved settings (no injected adapter) constructs the Codex runtime adapter and starts a managed session; injected adapters still take precedence.
+- [x] 4.4 Implement default Codex adapter construction in `selectRuntimeForSettings` from resolved command path and model label.
+- [x] 4.5 Add tests and implementation for the visible downgrade path: when adapter capability detection reports managed mode unsupported, record a durable downgrade event and run the one-shot provider path.
 
 ## 5. Claude Runtime Adapter
 

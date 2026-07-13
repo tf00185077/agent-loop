@@ -449,6 +449,7 @@ test("spawns worker children in isolated worktrees and records child failure wit
   });
   goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-07-03T00:00:00.000Z" });
   const starts: Array<{ sessionId: string; parentSessionId?: string | null; prompt: string; cwd?: string | null }> = [];
+  let supervisorStarted = false;
   const adapter: AgentRuntimeAdapter = {
     providerId: "codex-local",
     async detectCapabilities() {
@@ -479,6 +480,10 @@ test("spawns worker children in isolated worktrees and records child failure wit
           },
         ]);
       }
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
 
       return createHandle(input.sessionId, [
         {
@@ -521,6 +526,10 @@ test("spawns worker children in isolated worktrees and records child failure wit
     adapter,
   });
   await waitFor(() => agentSessionRepo.listDelegationRequests(result.session.id)[0]?.status === "failed");
+  await waitFor(() => starts.length === 3);
+  await waitFor(() =>
+    eventRepo.listForGoal(goal.id).some((event) => event.data.continuationMode === "fresh"),
+  );
   const delegations = agentSessionRepo.listDelegationRequests(result.session.id);
   const durableEvents = eventRepo.listForGoal(goal.id);
 
@@ -549,6 +558,7 @@ test("spawns review merge children only after a worker result exists", async () 
   const fixture = createManagerFixture("review merge request");
   const starts: Array<{ parent?: string | null; prompt: string; cwd?: string | null }> = [];
   let workerDelegationRequestId = "";
+  let supervisorStarted = false;
   const adapter: AgentRuntimeAdapter = {
     providerId: "codex-local",
     async detectCapabilities() {
@@ -556,7 +566,11 @@ test("spawns review merge children only after a worker result exists", async () 
     },
     async startSession(input) {
       starts.push({ parent: input.parent?.sessionId ?? null, prompt: input.prompt, cwd: input.cwd ?? null });
+      if (!input.parent?.sessionId && supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
       if (!input.parent?.sessionId) {
+        supervisorStarted = true;
         const childRun = fixture.runRepo.create({
           goalId: input.goalId,
           provider: "codex-local",
@@ -631,6 +645,9 @@ test("spawns review merge children only after a worker result exists", async () 
     adapter,
   });
   await waitFor(() => fixture.agentSessionRepo.listDelegationRequests(result.session.id)[1]?.status === "completed");
+  await waitFor(() =>
+    fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.continuationMode === "fresh"),
+  );
 
   const delegations = fixture.agentSessionRepo.listDelegationRequests(result.session.id);
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
@@ -689,6 +706,11 @@ test("rejects review merge requests when no worker result exists", async () => {
     ]),
   });
 
+  await waitFor(() =>
+    fixture.eventRepo
+      .listForGoal(fixture.goal.id)
+      .some((event) => event.data.runtimeEventType === "delegation.continuation_started"),
+  );
   const rejection = fixture.eventRepo
     .listForGoal(fixture.goal.id)
     .find((event) => event.data.runtimeEventType === "delegation.rejected");
@@ -761,6 +783,11 @@ test("records reverted and verification-failure outcomes from fixed test evidenc
       .listForGoal(failedFixture.goal.id)
       .some((event) => event.data.reviewMergeOutcome === "test_failed_reverted"),
   );
+  await waitFor(() =>
+    failedFixture.eventRepo
+      .listForGoal(failedFixture.goal.id)
+      .some((event) => event.data.continuationMode === "fresh"),
+  );
   const reverted = failedFixture.eventRepo
     .listForGoal(failedFixture.goal.id)
     .find((event) => event.data.reviewMergeOutcome === "test_failed_reverted");
@@ -796,6 +823,11 @@ test("records reverted and verification-failure outcomes from fixed test evidenc
       .listForGoal(verificationFixture.goal.id)
       .some((event) => event.data.reviewMergeOutcome === "verification_failed"),
   );
+  await waitFor(() =>
+    verificationFixture.eventRepo
+      .listForGoal(verificationFixture.goal.id)
+      .some((event) => event.data.continuationMode === "fresh"),
+  );
   verificationFixture.db.close();
 });
 
@@ -803,6 +835,7 @@ test("resumes a live supervisor after child completion when resume is supported"
   const fixture = createManagerFixture("resume supervisor");
   const resumed: string[] = [];
   let releaseParent!: () => void;
+  let supervisorStarted = false;
   const parentReleased = new Promise<void>((resolve) => {
     releaseParent = resolve;
   });
@@ -812,6 +845,12 @@ test("resumes a live supervisor after child completion when resume is supported"
       return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
     },
     async startSession(input) {
+      if (!input.parent?.sessionId && supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      if (!input.parent?.sessionId) {
+        supervisorStarted = true;
+      }
       if (input.parent?.sessionId) {
         return createHandle(input.sessionId, [
           {
@@ -858,12 +897,18 @@ test("resumes a live supervisor after child completion when resume is supported"
 
   assert.deepEqual(resumed, ["Worker result: Worker finished."]);
   assert.ok(fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.continuationMode === "resume"));
+  await waitFor(() =>
+    fixture.eventRepo
+      .listForGoal(fixture.goal.id)
+      .some((event) => event.data.continuationReason === "completionless_exit"),
+  );
   fixture.db.close();
 });
 
 test("starts a fresh supervisor continuation when true resume is unavailable", async () => {
   const fixture = createManagerFixture("fresh continuation");
   const starts: Array<{ parent?: string | null; prompt: string }> = [];
+  let supervisorStarted = false;
   const adapter: AgentRuntimeAdapter = {
     providerId: "codex-local",
     async detectCapabilities() {
@@ -883,6 +928,10 @@ test("starts a fresh supervisor continuation when true resume is unavailable", a
           },
         ]);
       }
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
       return createHandle(input.sessionId, [delegationRequestEvent(input.sessionId, input.goalId, input.runId)]);
     },
   };
@@ -896,10 +945,12 @@ test("starts a fresh supervisor continuation when true resume is unavailable", a
     adapter,
   });
   await waitFor(() => starts.length === 3);
+  await waitFor(() =>
+    fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.continuationMode === "fresh"),
+  );
 
   assert.ok(starts[2]?.prompt.includes("Worker result: Worker finished."));
   assert.ok(starts[2]?.prompt.includes("auto-agent-control"));
-  assert.ok(fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.continuationMode === "fresh"));
   fixture.db.close();
 });
 
@@ -964,6 +1015,296 @@ test("leaves children running after supervisor cancellation and detaches late ch
   fixture.db.close();
 });
 
+test("completes a managed goal only on a supervisor completion control block", async () => {
+  const fixture = createManagerFixture("explicit completion");
+  const manager = createAgentSessionManager(fixture);
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([
+      {
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: fixture.goal.id,
+        runId: "run-placeholder",
+        message: "Signalling completion.",
+        occurredAt: "2026-07-06T00:00:01.000Z",
+        metadata: {
+          delegationControlEvent: {
+            type: "managed_delegation.complete",
+            summary: "All tasks delivered.",
+          },
+        },
+      },
+      terminalEvent(fixture.goal.id),
+    ]),
+  });
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const completion = events.find((event) => event.type === "goal.completed");
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "completed");
+  assert.equal(completion?.message, "All tasks delivered.");
+  assert.equal(completion?.data.runtimeEventType, "supervisor.completed");
+  assert.ok(!events.some((event) => event.data.runtimeEventType === "delegation.continuation_started"));
+  fixture.db.close();
+});
+
+test("starts bounded nudge continuations and blocks the goal when exhausted", async () => {
+  const fixture = createManagerFixture("completionless supervisor");
+  const starts: string[] = [];
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      starts.push(input.prompt);
+      return createHandle(input.sessionId, [
+        {
+          type: "session.completed",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Turn ended without completion.",
+          occurredAt: "2026-07-06T00:00:01.000Z",
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager({ ...fixture, maxSupervisorContinuations: 2 });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  assert.equal(starts.length, 3);
+  assert.ok(/continue or complete/i.test(starts[1] ?? ""));
+  assert.equal(
+    events.filter((event) => event.data.continuationReason === "completionless_exit").length,
+    2,
+  );
+  const blocked = events.find((event) => event.type === "goal.blocked");
+  assert.equal(blocked?.data.runtimeEventType, "supervisor.continuations_exhausted");
+  assert.equal(blocked?.data.maxSupervisorContinuations, 2);
+  fixture.db.close();
+});
+
+test("runs sequential delegations across continuations and records durable task metadata", async () => {
+  const fixture = createManagerFixture("sequential tasks goal");
+  let supervisorTurn = 0;
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: `Worker finished: ${input.prompt}`,
+            occurredAt: "2026-07-06T00:00:02.000Z",
+          },
+        ]);
+      }
+      supervisorTurn += 1;
+      if (supervisorTurn === 1) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Planning tasks.",
+            occurredAt: "2026-07-06T00:00:01.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.task_list",
+                tasks: [
+                  { id: "task-1", title: "Implement matchmaking" },
+                  { id: "task-2", title: "Implement co-op mode" },
+                ],
+              },
+            },
+          },
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Delegating task one.",
+            occurredAt: "2026-07-06T00:00:01.500Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "worker",
+                taskId: "task-1",
+                prompt: "Implement matchmaking.",
+                summary: "Implement matchmaking.",
+              },
+            },
+          },
+        ]);
+      }
+      if (supervisorTurn === 2) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Delegating task two.",
+            occurredAt: "2026-07-06T00:00:03.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "worker",
+                taskId: "task-2",
+                prompt: "Implement co-op mode.",
+                summary: "Implement co-op mode.",
+              },
+            },
+          },
+        ]);
+      }
+      return createHandle(input.sessionId, [
+        {
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Completing goal.",
+          occurredAt: "2026-07-06T00:00:05.000Z",
+          metadata: {
+            delegationControlEvent: {
+              type: "managed_delegation.complete",
+              summary: "Both game modes delivered.",
+            },
+          },
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager(fixture);
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const taskListEvent = events.find((event) => event.data.runtimeEventType === "supervisor.task_list");
+  assert.deepEqual(taskListEvent?.data.taskList, [
+    { id: "task-1", title: "Implement matchmaking" },
+    { id: "task-2", title: "Implement co-op mode" },
+  ]);
+  const accepted = events.filter((event) => event.data.runtimeEventType === "delegation.accepted");
+  assert.deepEqual(
+    accepted.map((event) => event.data.taskId),
+    ["task-1", "task-2"],
+  );
+  const delegations = fixture.agentSessionRepo
+    .listSessionsForGoal(fixture.goal.id)
+    .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id));
+  assert.deepEqual(
+    delegations.map((request) => [request.taskId, request.status]),
+    [
+      ["task-1", "completed"],
+      ["task-2", "completed"],
+    ],
+  );
+  assert.equal(supervisorTurn, 3);
+  const completion = events.find((event) => event.type === "goal.completed");
+  assert.equal(completion?.message, "Both game modes delivered.");
+  fixture.db.close();
+});
+
+test("feeds control rejection reasons into the next supervisor continuation", async () => {
+  const fixture = createManagerFixture("rejected control block");
+  const starts: string[] = [];
+  let supervisorTurn = 0;
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      starts.push(input.prompt);
+      supervisorTurn += 1;
+      if (supervisorTurn === 1) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Trying to complete without a summary.",
+            occurredAt: "2026-07-06T00:00:01.000Z",
+            metadata: {
+              delegationControlEvent: { type: "managed_delegation.complete" },
+            },
+          },
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Turn ended.",
+            occurredAt: "2026-07-06T00:00:02.000Z",
+          },
+        ]);
+      }
+      return createHandle(input.sessionId, [
+        {
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Correcting completion.",
+          occurredAt: "2026-07-06T00:00:03.000Z",
+          metadata: {
+            delegationControlEvent: {
+              type: "managed_delegation.complete",
+              summary: "Corrected completion.",
+            },
+          },
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager(fixture);
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
+
+  assert.equal(starts.length, 2);
+  assert.ok(starts[1]?.includes("Completion summary must be a non-empty string."));
+  assert.ok(
+    fixture.eventRepo
+      .listForGoal(fixture.goal.id)
+      .some((event) => event.data.continuationReason === "control_rejected"),
+  );
+  fixture.db.close();
+});
+
 function createHandle(sessionId: string, events: AgentRuntimeEvent[]): AgentSessionHandle {
   return {
     sessionId,
@@ -985,6 +1326,7 @@ function createHandle(sessionId: string, events: AgentRuntimeEvent[]): AgentSess
 }
 
 function adapterWithEvents(events: AgentRuntimeEvent[]): AgentRuntimeAdapter {
+  let supervisorStarted = false;
   return {
     providerId: "codex-local",
     async detectCapabilities() {
@@ -1000,6 +1342,12 @@ function adapterWithEvents(events: AgentRuntimeEvent[]): AgentRuntimeAdapter {
       if (input.parent?.sessionId) {
         return createHandle(input.sessionId, []);
       }
+      // Continuation sessions get an inert handle so scripted supervisor
+      // events run exactly once.
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
       return createHandle(
         input.sessionId,
         events.map((event) => ({
@@ -1111,13 +1459,18 @@ function adapterWithSeededReviewMergeRequest(
   } = {},
 ): AgentRuntimeAdapter {
   let workerDelegationRequestId = "";
+  let supervisorStarted = false;
   return {
     providerId: "codex-local",
     async detectCapabilities() {
       return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
     },
     async startSession(input) {
+      if (!input.parent?.sessionId && supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
       if (!input.parent?.sessionId) {
+        supervisorStarted = true;
         const childRun = fixture.runRepo.create({
           goalId: input.goalId,
           provider: "codex-local",

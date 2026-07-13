@@ -39,6 +39,7 @@ export interface StartWorkerDelegationInput {
   role: AgentRuntimeDelegationRole;
   prompt: string;
   promptSummary: string;
+  taskId?: string | null;
   workerDelegationRequestId?: string | null;
   adapter: AgentRuntimeAdapter;
   eventData: Record<string, unknown>;
@@ -82,6 +83,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         promptSummary: workerResult
           ? `${input.promptSummary} (worker result: ${workerResult.resultSummary.safeSummary})`
           : input.promptSummary,
+        taskId: input.taskId ?? null,
       });
       const accepted = deps.agentSessionRepo.acceptDelegationRequest(request.id);
       deps.eventRepo.create({
@@ -95,6 +97,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           runtimeEventType: "delegation.accepted",
           delegationRequestId: accepted.id,
           delegationRole: accepted.role,
+          ...(accepted.taskId ? { taskId: accepted.taskId } : {}),
         },
       });
 
@@ -144,6 +147,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           runtimeEventType: "delegation.started",
           delegationRequestId: running.id,
           childSessionId: childSession.id,
+          ...(input.taskId ? { taskId: input.taskId } : {}),
           ...(childCwd.worktree ? { worktree: childCwd.worktree } : {}),
           ...(workerResult ? { workerDelegationRequestId: workerResult.id } : {}),
           ...(checkpoint ? { reviewMergeCheckpoint: checkpoint } : {}),
@@ -160,6 +164,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           runtimeEventType: "delegation.waiting_child",
           delegationRequestId: running.id,
           childSessionId: childSession.id,
+          ...(input.taskId ? { taskId: input.taskId } : {}),
           ...(childCwd.worktree ? { worktree: childCwd.worktree } : {}),
           ...(workerResult ? { workerDelegationRequestId: workerResult.id } : {}),
           ...(checkpoint ? { reviewMergeCheckpoint: checkpoint } : {}),
