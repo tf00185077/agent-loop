@@ -29,6 +29,11 @@ import {
   type CodexRuntimeCapabilityProbe,
   type CodexRuntimeSessionRunner,
 } from "../runtime/providers/codex/codex-runtime-adapter.js";
+import {
+  createClaudeRuntimeAdapter,
+  type ClaudeRuntimeCapabilityProbe,
+  type ClaudeRuntimeSessionRunner,
+} from "../runtime/providers/claude/claude-runtime-adapter.js";
 import { createOpenAICompatibleProvider } from "../runtime/providers/openai-compatible-provider.js";
 import { loadProviderConfig, type ProviderEnvironment } from "../runtime/providers/provider-config.js";
 import { createProviderRuntime } from "../runtime/providers/provider-runtime.js";
@@ -61,6 +66,9 @@ export interface CreateAppOptions {
   /** Test seams for the server-constructed Codex runtime adapter. */
   codexRuntimeCapabilityProbe?: CodexRuntimeCapabilityProbe;
   codexRuntimeSessionRunner?: CodexRuntimeSessionRunner;
+  /** Test seams for the server-constructed Claude runtime adapter. */
+  claudeRuntimeCapabilityProbe?: ClaudeRuntimeCapabilityProbe;
+  claudeRuntimeSessionRunner?: ClaudeRuntimeSessionRunner;
   maxSupervisorContinuations?: number;
 }
 
@@ -97,6 +105,8 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     claudeCliProviderTimeoutMs: options.claudeCliProviderTimeoutMs,
     codexRuntimeCapabilityProbe: options.codexRuntimeCapabilityProbe,
     codexRuntimeSessionRunner: options.codexRuntimeSessionRunner,
+    claudeRuntimeCapabilityProbe: options.claudeRuntimeCapabilityProbe,
+    claudeRuntimeSessionRunner: options.claudeRuntimeSessionRunner,
     agentLoopMaxSteps: options.agentLoopMaxSteps,
     agentLoopMaxDepth: options.agentLoopMaxDepth,
     agentLoopMaxScopeAssessmentAttempts: options.agentLoopMaxScopeAssessmentAttempts,
@@ -162,6 +172,8 @@ interface CreateRuntimeFromSavedProviderSettingsDeps extends CreateRuntimeFromEn
   claudeCliProviderTimeoutMs?: number;
   codexRuntimeCapabilityProbe?: CreateAppOptions["codexRuntimeCapabilityProbe"];
   codexRuntimeSessionRunner?: CreateAppOptions["codexRuntimeSessionRunner"];
+  claudeRuntimeCapabilityProbe?: CreateAppOptions["claudeRuntimeCapabilityProbe"];
+  claudeRuntimeSessionRunner?: CreateAppOptions["claudeRuntimeSessionRunner"];
   agentLoopMaxSteps?: number;
   agentLoopMaxDepth?: number;
   agentLoopMaxScopeAssessmentAttempts?: number;
@@ -329,7 +341,7 @@ function createRuntimeFromClaudeLocalSettings(
         : undefined,
   });
 
-  return createProviderRuntime({
+  const oneShotRuntime = createProviderRuntime({
     goalRepo: deps.goalRepo,
     runRepo: deps.runRepo,
     stepRepo: deps.stepRepo,
@@ -342,6 +354,44 @@ function createRuntimeFromClaudeLocalSettings(
       },
     }),
   });
+
+  // Managed supervisor sessions are the default execution path; fall back to
+  // the one-shot provider run with a durable downgrade event when the
+  // installed CLI cannot support managed print mode.
+  return {
+    async run(goalId: string) {
+      const adapter = createClaudeRuntimeAdapter({
+        commandPath: resolved.commandPath ?? "",
+        modelLabel: settings.modelLabel,
+        probe: deps.claudeRuntimeCapabilityProbe,
+        sessionRunner: deps.claudeRuntimeSessionRunner,
+      });
+      const capabilities = await adapter.detectCapabilities();
+      if (capabilities.eventStreaming) {
+        return deps.agentSessionManager.startManagedSession({
+          goalId,
+          providerId: "claude-local",
+          modelLabel: settings.modelLabel,
+          adapter,
+        });
+      }
+
+      deps.eventRepo.create({
+        goalId,
+        type: "agent.progress",
+        message: "Managed session mode is unavailable for Claude Local; running the one-shot provider path.",
+        data: {
+          provider: "claude-local",
+          model: settings.modelLabel,
+          runtimeEventType: "runtime.managed_mode_downgraded",
+          reason:
+            capabilities.unsupportedReasons?.approval ??
+            "Claude managed session capability detection failed.",
+        },
+      });
+      return oneShotRuntime.run(goalId);
+    },
+  };
 }
 
 function createRuntimeFromEnvironment(deps: CreateRuntimeFromEnvironmentDeps) {

@@ -1660,6 +1660,53 @@ describe("Backend API", () => {
       }
     });
 
+    it("starts claude-local goals as managed supervisor sessions without injected adapters", async () => {
+      const runnerPrompts: string[] = [];
+      const providerServer = await startServer(undefined, {
+        claudeRuntimeCapabilityProbe: async () => ({ printMode: true }),
+        claudeRuntimeSessionRunner: async (input: { prompt: string }) => {
+          runnerPrompts.push(input.prompt);
+          return [
+            "Goal delivered by Claude.",
+            "```auto-agent-control",
+            JSON.stringify({ type: "managed_delegation.complete", summary: "Goal delivered by Claude." }),
+            "```",
+          ].join("\n");
+        },
+        detectClaudeCliCommand: () => ({
+          detected: true,
+          commandPath: "C:\\Tools\\claude.cmd",
+          source: "manual",
+          status: {
+            state: "detected",
+            detected: true,
+            checkedAt: null,
+            message: "Fake detection ok",
+          },
+        }),
+      });
+
+      try {
+        await fetch(`${providerServer.url}/api/provider-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "claude-local",
+            modelLabel: "claude-sonnet-4",
+            claudeCommandPath: "C:\\Tools\\claude.cmd",
+          }),
+        });
+
+        const goal = await startManagedGoal(providerServer.url, "Managed by Claude");
+        const { event } = await waitForEvent(providerServer.url, goal.id, "goal.completed");
+
+        assert.equal(event.message, "Goal delivered by Claude.");
+        assert.ok(runnerPrompts[0]?.includes("auto-agent-control"));
+      } finally {
+        await providerServer.close();
+      }
+    });
+
     it("downgrades to the one-shot provider path with a durable event when managed mode is unsupported", async () => {
       const providerServer = await startServer(undefined, {
         codexRuntimeCapabilityProbe: async () => ({

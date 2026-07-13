@@ -32,9 +32,9 @@
 
 ## 5. Claude Runtime Adapter
 
-- [ ] 5.1 Add tests for `createClaudeRuntimeAdapter`: session start spawns Claude CLI in print mode with the prompt, progress and terminal events are emitted, capabilities report `resume: false`, cancel terminates the process, startup failure emits a sanitized terminal failure.
-- [ ] 5.2 Implement the Claude runtime adapter in `src/runtime/providers/claude/claude-runtime-adapter.ts`, including control-block extraction from stdout text.
-- [ ] 5.3 Wire `claude-local` into default adapter construction in `selectRuntimeForSettings` with the same downgrade fallback, and verify fresh-continuation supervisor flow with a Claude-shaped fake adapter.
+- [x] 5.1 Add tests for `createClaudeRuntimeAdapter`: session start spawns Claude CLI in print mode with the prompt, progress and terminal events are emitted, capabilities report `resume: false`, cancel terminates the process, startup failure emits a sanitized terminal failure.
+- [x] 5.2 Implement the Claude runtime adapter in `src/runtime/providers/claude/claude-runtime-adapter.ts`, including control-block extraction from stdout text.
+- [x] 5.3 Wire `claude-local` into default adapter construction in `selectRuntimeForSettings` with the same downgrade fallback, and verify fresh-continuation supervisor flow with a Claude-shaped fake adapter.
 
 ## 6. Agent-Loop Spec Conformance (mock path)
 
