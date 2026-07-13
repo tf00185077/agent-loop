@@ -543,7 +543,8 @@ test("spawns worker children in isolated worktrees and records child failure wit
     path: `C:\\worktrees\\${starts[1]?.sessionId}`,
     label: `child-${starts[1]?.sessionId}`,
   });
-  assert.equal(agentSessionRepo.getSession(result.session.id)?.lifecycleState, "waiting_child");
+  // The fresh continuation session supersedes the original supervisor session.
+  assert.equal(agentSessionRepo.getSession(result.session.id)?.lifecycleState, "completed");
   assert.equal(delegations[0]?.status, "failed");
   assert.equal(delegations[0]?.resultSummary?.safeSummary, "Worker could not complete focused tests.");
   assert.deepEqual(delegations.map((delegation) => delegation.role), ["worker"]);
@@ -1229,6 +1230,92 @@ test("runs sequential delegations across continuations and records durable task 
   assert.equal(supervisorTurn, 3);
   const completion = events.find((event) => event.type === "goal.completed");
   assert.equal(completion?.message, "Both game modes delivered.");
+  fixture.db.close();
+});
+
+test("continues the supervisor when its process exits while a child is still running", async () => {
+  const fixture = createManagerFixture("supervisor exits while child runs");
+  let releaseChild!: () => void;
+  const childReleased = new Promise<void>((resolve) => {
+    releaseChild = resolve;
+  });
+  const starts: Array<{ parent?: string | null; prompt: string }> = [];
+  let supervisorTurn = 0;
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      starts.push({ parent: input.parent?.sessionId ?? null, prompt: input.prompt });
+      if (input.parent?.sessionId) {
+        return {
+          ...createHandle(input.sessionId, []),
+          async *events() {
+            await childReleased;
+            yield {
+              type: "session.completed",
+              sessionId: input.sessionId,
+              goalId: input.goalId,
+              runId: input.runId,
+              message: "Worker delivered the task.",
+              occurredAt: "2026-07-13T00:00:02.000Z",
+            } satisfies AgentRuntimeEvent;
+          },
+        };
+      }
+      supervisorTurn += 1;
+      if (supervisorTurn === 1) {
+        // Fresh-continuation providers exit their process after delegating.
+        return createHandle(input.sessionId, [
+          delegationRequestEvent(input.sessionId, input.goalId, input.runId),
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Supervisor turn ended while waiting.",
+            occurredAt: "2026-07-13T00:00:01.000Z",
+          },
+        ]);
+      }
+      return createHandle(input.sessionId, [
+        {
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Completing after worker result.",
+          occurredAt: "2026-07-13T00:00:03.000Z",
+          metadata: {
+            delegationControlEvent: {
+              type: "managed_delegation.complete",
+              summary: "Task delivered by worker.",
+            },
+          },
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager(fixture);
+
+  const result = await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+
+  // Supervisor process exited but its delegation is still active.
+  assert.equal(fixture.agentSessionRepo.getSession(result.session.id)?.lifecycleState, "waiting_child");
+  releaseChild();
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
+
+  const delegations = fixture.agentSessionRepo.listDelegationRequests(result.session.id);
+  assert.equal(delegations[0]?.status, "completed");
+  assert.notEqual(delegations[0]?.status, "detached");
+  assert.ok(starts[2]?.prompt.includes("Worker result: Worker delivered the task."));
+  assert.equal(fixture.agentSessionRepo.getSession(result.session.id)?.lifecycleState, "completed");
   fixture.db.close();
 });
 

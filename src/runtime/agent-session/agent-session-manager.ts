@@ -320,7 +320,17 @@ async function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: Persist
       deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
       return;
     }
-    deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
+    const hasActiveDelegation =
+      supervisorContract &&
+      deps.agentSessionRepo
+        .listDelegationRequests(input.sessionId)
+        .some((request) => ["requested", "accepted", "running"].includes(request.status));
+    if (!hasActiveDelegation) {
+      // A supervisor whose process exits while its child is still running must
+      // stay in waiting_child: marking it completed would detach the child
+      // result and strand the goal.
+      deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
+    }
     deps.runRepo.updateStatus(input.runId, "completed", { finishedAt });
     deps.eventRepo.create({
       goalId: input.goalId,
@@ -341,9 +351,7 @@ async function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: Persist
       });
       return;
     }
-    const hasActiveDelegation = deps.agentSessionRepo
-      .listDelegationRequests(input.sessionId)
-      .some((request) => ["requested", "accepted", "running"].includes(request.status));
+
     if (hasActiveDelegation) {
       // The child outcome continuation will pick the supervisor back up.
       return;
@@ -642,6 +650,12 @@ async function continueSupervisorAfterChild(
   });
   input.activeHandles.set(session.id, freshHandle);
   deps.agentSessionRepo.updateLifecycleState(session.id, "running");
+  const replacedSession = deps.agentSessionRepo.getSession(input.sessionId);
+  if (replacedSession && !["cancelled", "failed", "completed"].includes(replacedSession.lifecycleState)) {
+    // The fresh continuation session supersedes the exited supervisor session;
+    // close the old one out so restart recovery does not mark it stalled.
+    deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
+  }
   deps.eventRepo.create({
     goalId: input.goalId,
     runId: run.id,

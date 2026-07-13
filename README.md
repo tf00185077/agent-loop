@@ -149,12 +149,37 @@ not the final product boundary: auto-agent should keep a provider adapter model
 so other commercial model adapters can be added after the core workflow is
 stable.
 
-The current direction is split across two OpenSpec changes:
+The managed supervisor loop is implemented by the
+`wire-managed-supervisor-end-to-end` change (see `openspec/changes/`), building
+on the archived `add-managed-delegation-core` and `harden-codex-managed-runtime`
+changes.
 
-- `add-managed-delegation-continuations` defines the product/control-plane
-  behavior for supervised child agents.
-- `harden-codex-managed-runtime` strengthens the Codex adapter using lessons
-  from Paperclip-style Codex execution.
+### Managed Supervisor Flow
+
+Starting a `codex-local` (or `claude-local`) goal now runs a managed supervisor
+session by default:
+
+1. The backend builds a supervisor bootstrap prompt from the goal: decompose
+   into an ordered task list first, delegate exactly one `worker` task at a
+   time, request a `review_merge` child after workers that changed files, and
+   signal completion explicitly.
+2. The supervisor communicates control intent through fenced
+   ` ```auto-agent-control ` JSON blocks in its output:
+   `managed_delegation.task_list`, `managed_delegation.request`, and
+   `managed_delegation.complete`. Only fenced blocks are honored; the
+   surrounding prose is recorded as sanitized progress.
+3. Worker children run in isolated git worktrees; `review_merge` children
+   apply/revert changes in the supervisor workspace behind the fixed-test gate.
+4. Child outcomes return to the supervisor as observations. Providers with true
+   resume continue in place; others get a fresh continuation prompt that
+   re-carries the full contract.
+5. A managed goal completes only on a `managed_delegation.complete` block. A
+   session that exits without completing (and with no pending delegation)
+   triggers a bounded "continue or complete" continuation (default 10 per
+   goal); exhausting the bound marks the goal `blocked`.
+6. If the installed CLI cannot support managed session mode, the backend
+   records a durable `runtime.managed_mode_downgraded` event and falls back to
+   the previous one-shot provider run — visible, never silent.
 
 Direction anchors:
 
