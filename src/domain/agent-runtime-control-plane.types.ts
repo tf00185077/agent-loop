@@ -217,6 +217,8 @@ export interface ManagedTaskListEntry {
   id: string;
   title: string;
   acceptance?: TaskAcceptanceCriterion[] | null;
+  /** Set on narrower tasks split from a failed parent task. */
+  parentTaskId?: string | null;
 }
 
 export interface ManagedTaskListControlEvent {

@@ -149,7 +149,16 @@ function validateTaskList(tasks: unknown): ManagedControlEventValidationResult {
     if (!acceptance.ok) {
       return { ok: false, safeReason: acceptance.safeReason };
     }
-    entries.push({ id: task.id.trim(), title: task.title.trim(), acceptance: acceptance.criteria });
+    const parentTaskId =
+      typeof task.parentTaskId === "string" && task.parentTaskId.trim().length > 0
+        ? task.parentTaskId.trim()
+        : null;
+    entries.push({
+      id: task.id.trim(),
+      title: task.title.trim(),
+      acceptance: acceptance.criteria,
+      parentTaskId,
+    });
   }
   return { ok: true, kind: "task_list", tasks: entries };
 }

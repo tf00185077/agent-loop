@@ -1132,8 +1132,16 @@ test("runs sequential delegations across continuations and records durable task 
               delegationControlEvent: {
                 type: "managed_delegation.task_list",
                 tasks: [
-                  { id: "task-1", title: "Implement matchmaking" },
-                  { id: "task-2", title: "Implement co-op mode" },
+                  {
+                    id: "task-1",
+                    title: "Implement matchmaking",
+                    acceptance: [{ id: "A1", text: "Players can be matched into a lobby." }],
+                  },
+                  {
+                    id: "task-2",
+                    title: "Implement co-op mode",
+                    acceptance: [{ id: "B1", text: "Two players can play the co-op mission." }],
+                  },
                 ],
               },
             },
@@ -1209,8 +1217,18 @@ test("runs sequential delegations across continuations and records durable task 
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   const taskListEvent = events.find((event) => event.data.runtimeEventType === "supervisor.task_list");
   assert.deepEqual(taskListEvent?.data.taskList, [
-    { id: "task-1", title: "Implement matchmaking" },
-    { id: "task-2", title: "Implement co-op mode" },
+    {
+      id: "task-1",
+      title: "Implement matchmaking",
+      acceptance: [{ id: "A1", text: "Players can be matched into a lobby." }],
+      parentTaskId: null,
+    },
+    {
+      id: "task-2",
+      title: "Implement co-op mode",
+      acceptance: [{ id: "B1", text: "Two players can play the co-op mission." }],
+      parentTaskId: null,
+    },
   ]);
   const accepted = events.filter((event) => event.data.runtimeEventType === "delegation.accepted");
   assert.deepEqual(
@@ -1317,6 +1335,388 @@ test("continues the supervisor when its process exits while a child is still run
   assert.ok(starts[2]?.prompt.includes("Worker result: Worker delivered the task."));
   assert.equal(fixture.agentSessionRepo.getSession(result.session.id)?.lifecycleState, "completed");
   fixture.db.close();
+});
+
+test("enforces acceptance contracts on worker delegations", async () => {
+  const fixture = createManagerFixture("acceptance contract enforcement");
+  const manager = createAgentSessionManager(fixture);
+
+  const result = await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([
+      {
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: fixture.goal.id,
+        runId: "run-placeholder",
+        message: "Announcing tasks.",
+        occurredAt: "2026-07-13T01:00:00.000Z",
+        metadata: {
+          delegationControlEvent: {
+            type: "managed_delegation.task_list",
+            tasks: [{ id: "task-1", title: "No contract yet" }],
+          },
+        },
+      },
+      {
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: fixture.goal.id,
+        runId: "run-placeholder",
+        message: "Delegating without a contract.",
+        occurredAt: "2026-07-13T01:00:01.000Z",
+        metadata: {
+          delegationControlEvent: {
+            type: "managed_delegation.request",
+            role: "worker",
+            taskId: "task-1",
+            prompt: "Do the task.",
+          },
+        },
+      },
+      {
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: fixture.goal.id,
+        runId: "run-placeholder",
+        message: "Ad-hoc delegation.",
+        occurredAt: "2026-07-13T01:00:02.000Z",
+        metadata: {
+          delegationControlEvent: {
+            type: "managed_delegation.request",
+            role: "worker",
+            prompt: "Quick side errand.",
+          },
+        },
+      },
+      {
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: fixture.goal.id,
+        runId: "run-placeholder",
+        message: "Completing.",
+        occurredAt: "2026-07-13T01:00:03.000Z",
+        metadata: {
+          delegationControlEvent: { type: "managed_delegation.complete", summary: "Done." },
+        },
+      },
+      terminalEvent(fixture.goal.id),
+    ]),
+  });
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const rejection = events.find((event) => event.data.runtimeEventType === "delegation.rejected");
+  assert.match(String(rejection?.data.safeReason), /no acceptance contract/i);
+  const accepted = events.filter((event) => event.data.runtimeEventType === "delegation.accepted");
+  assert.equal(accepted.length, 1);
+  assert.equal(accepted[0]?.data.uncontracted, true);
+  const requests = fixture.agentSessionRepo.listDelegationRequests(result.session.id);
+  assert.equal(requests.length, 1);
+  fixture.db.close();
+});
+
+test("refuses the third identical-scope retry and accepts a narrower split", async () => {
+  const fixture = createManagerFixture("narrowing rule");
+  let supervisorTurn = 0;
+  const acceptance = [{ id: "A1", text: "Second player can join the lobby." }];
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Worker claims the task is done.",
+            occurredAt: "2026-07-13T02:00:02.000Z",
+          },
+        ]);
+      }
+      supervisorTurn += 1;
+      if (supervisorTurn === 1) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Planning.",
+            occurredAt: "2026-07-13T02:00:00.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.task_list",
+                tasks: [{ id: "task-1", title: "Lobby join", acceptance }],
+              },
+            },
+          },
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "First attempt.",
+            occurredAt: "2026-07-13T02:00:01.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "worker",
+                taskId: "task-1",
+                prompt: "Implement lobby join.",
+              },
+            },
+          },
+        ]);
+      }
+      if (supervisorTurn === 2 || supervisorTurn === 3) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: `Retry ${supervisorTurn}.`,
+            occurredAt: "2026-07-13T02:00:03.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "worker",
+                taskId: "task-1",
+                prompt: "Retry: criterion A1 is still failing — the second player cannot join.",
+              },
+            },
+          },
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Turn ended.",
+            occurredAt: "2026-07-13T02:00:04.000Z",
+          },
+        ]);
+      }
+      if (supervisorTurn === 4) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Splitting the failed task.",
+            occurredAt: "2026-07-13T02:00:05.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.task_list",
+                tasks: [
+                  {
+                    id: "task-1a",
+                    title: "Second player join only",
+                    acceptance,
+                    parentTaskId: "task-1",
+                  },
+                ],
+              },
+            },
+          },
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Delegating the narrower task.",
+            occurredAt: "2026-07-13T02:00:06.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "worker",
+                taskId: "task-1a",
+                prompt: "Only make the second player join work.",
+              },
+            },
+          },
+        ]);
+      }
+      return createHandle(input.sessionId, [
+        {
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Completing.",
+          occurredAt: "2026-07-13T02:00:07.000Z",
+          metadata: {
+            delegationControlEvent: { type: "managed_delegation.complete", summary: "Narrow task landed." },
+          },
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager(fixture);
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const rejections = events.filter((event) => event.data.runtimeEventType === "task.rejection_recorded");
+  assert.equal(rejections.length, 2);
+  assert.deepEqual(rejections[0]?.data.citedCriteria, ["A1"]);
+  const refusal = events.find(
+    (event) =>
+      event.data.runtimeEventType === "delegation.rejected" && /split/i.test(String(event.data.safeReason)),
+  );
+  assert.ok(refusal, "expected the third identical-scope retry to be refused with a split instruction");
+  const acceptedTaskIds = events
+    .filter((event) => event.data.runtimeEventType === "delegation.accepted")
+    .map((event) => event.data.taskId);
+  assert.deepEqual(acceptedTaskIds, ["task-1", "task-1", "task-1a"]);
+  const splitList = events.filter((event) => event.data.runtimeEventType === "supervisor.task_list").at(-1);
+  assert.equal(
+    (splitList?.data.taskList as Array<{ parentTaskId?: string | null }>)[0]?.parentTaskId,
+    "task-1",
+  );
+  fixture.db.close();
+});
+
+test("classifies review rejections as substantive or deferred by criterion citation", async () => {
+  for (const [reviewMessage, expectation] of [
+    ["Rejected: criterion A1 unmet — lobby denies the second player.", "task.rejection_recorded"],
+    ["I would prefer different naming conventions here.", "task.deferred_finding"],
+  ] as const) {
+    const fixture = createManagerFixture(`review classification ${expectation}`);
+    let workerDelegationRequestId = "";
+    let supervisorStarted = false;
+    const adapter: AgentRuntimeAdapter = {
+      providerId: "codex-local",
+      async detectCapabilities() {
+        return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+      },
+      async startSession(input) {
+        if (input.parent?.sessionId) {
+          return createHandle(input.sessionId, [
+            {
+              type: "session.completed",
+              sessionId: input.sessionId,
+              goalId: input.goalId,
+              runId: input.runId,
+              message: reviewMessage,
+              occurredAt: "2026-07-13T03:00:04.000Z",
+              metadata: {
+                reviewMergeApplyOutcome: { status: "rejected", safeSummary: reviewMessage },
+              },
+            },
+          ]);
+        }
+        if (supervisorStarted) {
+          return createHandle(input.sessionId, []);
+        }
+        supervisorStarted = true;
+        const childRun = fixture.runRepo.create({
+          goalId: input.goalId,
+          provider: "codex-local",
+          model: "gpt-5-codex",
+        });
+        const child = fixture.agentSessionRepo.createSession({
+          goalId: input.goalId,
+          runId: childRun.id,
+          providerId: "codex-local",
+          modelLabel: "gpt-5-codex",
+          lifecycleState: "completed",
+          capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: false },
+          parent: { sessionId: input.sessionId },
+        });
+        const request = fixture.agentSessionRepo.createDelegationRequest({
+          parentSessionId: input.sessionId,
+          role: "worker",
+          promptSummary: "Implement lobby join.",
+          taskId: "task-1",
+          acceptance: [{ id: "A1", text: "Second player can join the lobby." }],
+        });
+        fixture.agentSessionRepo.acceptDelegationRequest(request.id);
+        fixture.agentSessionRepo.startDelegationRequest(request.id, child.id);
+        workerDelegationRequestId = fixture.agentSessionRepo.completeDelegationRequest(request.id, {
+          kind: "success",
+          safeSummary: "Worker produced a patch.",
+        }).id;
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Announcing task.",
+            occurredAt: "2026-07-13T03:00:00.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.task_list",
+                tasks: [
+                  {
+                    id: "task-1",
+                    title: "Lobby join",
+                    acceptance: [{ id: "A1", text: "Second player can join the lobby." }],
+                  },
+                ],
+              },
+            },
+          },
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Requesting review.",
+            occurredAt: "2026-07-13T03:00:01.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "review_merge",
+                prompt: "Review and merge worker output.",
+                workerDelegationRequestId,
+              },
+            },
+          },
+        ]);
+      },
+    };
+    const manager = createAgentSessionManager({ ...fixture, supervisorCwd: "C:\\supervisor" });
+
+    await manager.startManagedSession({
+      goalId: fixture.goal.id,
+      providerId: "codex-local",
+      modelLabel: "gpt-5-codex",
+      adapter,
+    });
+    await waitFor(() =>
+      fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.runtimeEventType === expectation),
+    );
+
+    const recorded = fixture.eventRepo
+      .listForGoal(fixture.goal.id)
+      .find((event) => event.data.runtimeEventType === expectation);
+    assert.equal(recorded?.data.taskId, "task-1");
+    if (expectation === "task.rejection_recorded") {
+      assert.deepEqual(recorded?.data.citedCriteria, ["A1"]);
+    } else {
+      assert.match(String(recorded?.data.finding), /naming conventions/);
+    }
+    await waitFor(() =>
+      fixture.eventRepo
+        .listForGoal(fixture.goal.id)
+        .some((event) => event.data.runtimeEventType === "delegation.continuation_started"),
+    );
+    fixture.db.close();
+  }
 });
 
 test("feeds control rejection reasons into the next supervisor continuation", async () => {

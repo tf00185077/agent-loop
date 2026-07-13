@@ -13,12 +13,12 @@
 
 ## 3. Task Registry + Backend Enforcement
 
-- [ ] 3.1 Add session-manager tests: task registry built from task_list events (criteria frozen; restated criteria ignored with durable note); worker delegation for known task without criteria → `delegation.rejected` naming the missing contract; ad-hoc delegation (no taskId) accepted and marked uncontracted.
-- [ ] 3.2 Implement the per-goal task registry and dispatch-time validators in the session manager (frozen-copy injection into coordinator dispatch).
-- [ ] 3.3 Add tests: substantive rejection counting — verdicts citing frozen criterion IDs increment the count; uncited objections recorded as `deferred_finding` events without status change.
-- [ ] 3.4 Implement verdict classification (parse cited criterion IDs from review/rejection outcomes) and deferred-finding recording.
-- [ ] 3.5 Add tests: third identical-scope delegation after 2 substantive rejections → `delegation.rejected` with split instruction; narrower split tasks (fewer criteria, parent lineage) accepted; lineage durable.
-- [ ] 3.6 Implement the narrowing rule and split-lineage tracking.
+- [x] 3.1 Add session-manager tests: task registry built from task_list events (criteria frozen; restated criteria ignored with durable note); worker delegation for known task without criteria → `delegation.rejected` naming the missing contract; ad-hoc delegation (no taskId) accepted and marked uncontracted.
+- [x] 3.2 Implement the per-goal task registry and dispatch-time validators in the session manager (frozen-copy injection into coordinator dispatch).
+- [x] 3.3 Add tests: substantive rejection counting — verdicts citing frozen criterion IDs increment the count; uncited objections recorded as `deferred_finding` events without status change.
+- [x] 3.4 Implement verdict classification (parse cited criterion IDs from review/rejection outcomes) and deferred-finding recording.
+- [x] 3.5 Add tests: third identical-scope delegation after 2 substantive rejections → `delegation.rejected` with split instruction; narrower split tasks (fewer criteria, parent lineage) accepted; lineage durable.
+- [x] 3.6 Implement the narrowing rule and split-lineage tracking.
 
 ## 4. Structured Results + Worktree Attestation
 

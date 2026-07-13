@@ -10,9 +10,10 @@ import type {
   EventRepository,
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
-import { createDelegationCoordinator } from "./delegation-coordinator.js";
+import { createDelegationCoordinator, type SupervisorContinuationInput } from "./delegation-coordinator.js";
 import { validateManagedControlEvent } from "./delegation-control-event.js";
 import { buildSupervisorPrompt } from "./supervisor-prompt.js";
+import { GoalTaskRegistry } from "./task-registry.js";
 import type { ReviewMergeVerificationService } from "./review-merge-verification-service.js";
 import type { ReviewMergeWorkspaceService } from "./review-merge-workspace-service.js";
 import type { WorktreeService } from "./worktree-service.js";
@@ -62,6 +63,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     completedGoals: new Set(),
     completionlessContinuations: new Map(),
     lastRejectionReasons: new Map(),
+    taskRegistries: new Map(),
     maxSupervisorContinuations: deps.maxSupervisorContinuations ?? 10,
   };
 
@@ -196,7 +198,18 @@ interface SupervisorState {
   completionlessContinuations: Map<string, number>;
   /** Per-goal safe reason of the most recent rejected control block. */
   lastRejectionReasons: Map<string, string>;
+  /** Per-goal frozen acceptance-contract registry. */
+  taskRegistries: Map<string, GoalTaskRegistry>;
   maxSupervisorContinuations: number;
+}
+
+function getTaskRegistry(state: SupervisorState, goalId: string): GoalTaskRegistry {
+  let registry = state.taskRegistries.get(goalId);
+  if (!registry) {
+    registry = new GoalTaskRegistry();
+    state.taskRegistries.set(goalId, registry);
+  }
+  return registry;
 }
 
 interface SessionEventContext {
@@ -419,6 +432,8 @@ async function persistDelegationControlEvent(
   }
 
   if (validation.kind === "task_list") {
+    const registry = getTaskRegistry(input.state, input.goalId);
+    const registered = registry.registerTaskList(validation.tasks);
     deps.eventRepo.create({
       goalId: input.goalId,
       runId: input.runId,
@@ -429,6 +444,9 @@ async function persistDelegationControlEvent(
         delegationControlEvent: undefined,
         runtimeEventType: "supervisor.task_list",
         taskList: validation.tasks,
+        ...(registered.ignoredMutations.length > 0
+          ? { ignoredCriteriaMutations: registered.ignoredMutations }
+          : {}),
       },
     });
     return;
@@ -484,6 +502,45 @@ async function persistDelegationControlEvent(
     return;
   }
 
+  const registry = getTaskRegistry(input.state, input.goalId);
+  let dispatchAcceptance = validation.request.acceptance ?? null;
+  let uncontracted = false;
+  if (validation.request.role === "worker") {
+    const task = validation.request.taskId ? registry.getTask(validation.request.taskId) : undefined;
+    if (task && task.attemptCount > 0) {
+      // Re-delegating a task implies its previous attempt was rejected. The
+      // rejection is substantive only when the supervisor cites frozen
+      // criterion ids; otherwise it is just the next attempt.
+      const verdict = registry.classifyVerdict(
+        task.id,
+        `${validation.request.prompt} ${validation.request.promptSummary}`,
+      );
+      if (verdict.substantive) {
+        deps.eventRepo.create({
+          goalId: input.goalId,
+          runId: input.runId,
+          type: "agent.progress",
+          message: "Substantive task rejection recorded.",
+          data: {
+            ...data,
+            delegationControlEvent: undefined,
+            runtimeEventType: "task.rejection_recorded",
+            taskId: task.id,
+            citedCriteria: verdict.citedCriteria,
+            rejectionCount: task.substantiveRejections,
+          },
+        });
+      }
+    }
+    const gate = registry.gateWorkerDelegation(validation.request.taskId ?? null, dispatchAcceptance);
+    if (!gate.ok) {
+      recordControlRejection(deps, input, data, gate.safeReason);
+      return;
+    }
+    dispatchAcceptance = gate.acceptance;
+    uncontracted = gate.uncontracted;
+  }
+
   try {
     await createDelegationCoordinator(deps).acceptAndStartWorker({
       parentSessionId: input.sessionId,
@@ -493,18 +550,78 @@ async function persistDelegationControlEvent(
       prompt: validation.request.prompt,
       promptSummary: validation.request.promptSummary,
       taskId: validation.request.taskId,
+      acceptance: dispatchAcceptance,
       workerDelegationRequestId: validation.request.workerDelegationRequestId,
       adapter: input.adapter,
-      eventData: data,
-      onChildOutcome: (outcome) => continueSupervisorAfterChild(deps, input, outcome.observation, {
-        delegationRequestId: outcome.delegationRequestId,
-        childSessionId: outcome.childSessionId,
-      }),
+      eventData: { ...data, ...(uncontracted ? { uncontracted: true } : {}) },
+      onChildOutcome: async (outcome) => {
+        recordChildOutcomeInRegistry(deps, input, outcome);
+        await continueSupervisorAfterChild(deps, input, outcome.observation, {
+          delegationRequestId: outcome.delegationRequestId,
+          childSessionId: outcome.childSessionId,
+        });
+      },
     });
   } catch (err) {
     const safeReason = err instanceof Error ? err.message : "Delegation request rejected.";
     recordControlRejection(deps, input, data, safeReason);
   }
+}
+
+const REVIEW_REJECTION_OUTCOMES = new Set(["rejected", "test_failed_reverted", "verification_failed"]);
+
+function recordChildOutcomeInRegistry(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  outcome: SupervisorContinuationInput,
+): void {
+  const registry = getTaskRegistry(input.state, input.goalId);
+  if (outcome.role === "worker" && outcome.taskId) {
+    registry.recordOutcome(outcome.taskId, outcome.resultSummary);
+    return;
+  }
+  if (outcome.role !== "review_merge" || !outcome.workerTaskId) {
+    return;
+  }
+  const rejecting =
+    (outcome.reviewMergeOutcome !== null && REVIEW_REJECTION_OUTCOMES.has(outcome.reviewMergeOutcome)) ||
+    outcome.resultSummary.kind === "failure";
+  if (!rejecting) {
+    return;
+  }
+  const verdict = registry.classifyVerdict(outcome.workerTaskId, outcome.observation);
+  if (verdict.substantive) {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: "Substantive task rejection recorded from review.",
+      data: {
+        sessionId: input.sessionId,
+        provider: input.providerId,
+        model: input.modelLabel,
+        runtimeEventType: "task.rejection_recorded",
+        taskId: outcome.workerTaskId,
+        citedCriteria: verdict.citedCriteria,
+        rejectionCount: registry.getTask(outcome.workerTaskId)?.substantiveRejections,
+      },
+    });
+    return;
+  }
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "agent.progress",
+    message: "Review objection recorded as a deferred finding.",
+    data: {
+      sessionId: input.sessionId,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType: "task.deferred_finding",
+      taskId: outcome.workerTaskId,
+      finding: verdict.deferredFinding,
+    },
+  });
 }
 
 function recordControlRejection(
