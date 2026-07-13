@@ -29,9 +29,9 @@
 
 ## 5. Prompt Contract + Continuation Task History
 
-- [ ] 5.1 Add prompt tests: bootstrap documents per-task acceptance requirement, frozen-ID/cite-only rules, worker `managed_task.result` format; task-history section renders task statuses, criterion outcomes, rejection counts, and split lineage.
-- [ ] 5.2 Implement prompt sections and the task-history renderer fed from the registry; wire into continuation/nudge prompt builds.
-- [ ] 5.3 Include the acceptance contract and result-block format in worker delegation prompts (criteria appended to the child prompt at dispatch).
+- [x] 5.1 Add prompt tests: bootstrap documents per-task acceptance requirement, frozen-ID/cite-only rules, worker `managed_task.result` format; task-history section renders task statuses, criterion outcomes, rejection counts, and split lineage.
+- [x] 5.2 Implement prompt sections and the task-history renderer fed from the registry; wire into continuation/nudge prompt builds.
+- [x] 5.3 Include the acceptance contract and result-block format in worker delegation prompts (criteria appended to the child prompt at dispatch).
 
 ## 6. End-to-End + Verification
 

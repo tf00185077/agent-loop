@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildSupervisorPrompt } from "./supervisor-prompt.js";
+import {
+  buildSupervisorPrompt,
+  buildWorkerContractAppendix,
+  renderTaskHistory,
+} from "./supervisor-prompt.js";
+import type { TaskRecord } from "./task-registry.js";
 
 const goal = {
   title: "Build a shooter game",
@@ -60,6 +65,86 @@ test("nudge prompt asks the supervisor to continue or complete", () => {
 
   assert.ok(/continue or complete/i.test(prompt));
   assert.ok(prompt.includes("managed_delegation.complete"));
+});
+
+test("bootstrap prompt documents the acceptance-contract rules", () => {
+  const prompt = buildSupervisorPrompt({ goal, phase: { kind: "bootstrap" } });
+
+  assert.ok(prompt.includes("acceptance criteria"));
+  assert.ok(/frozen/i.test(prompt));
+  assert.ok(/cite/i.test(prompt));
+  assert.ok(/deferred findings/i.test(prompt));
+  assert.ok(/parentTaskId/.test(prompt));
+  assert.ok(prompt.includes('"acceptance"'), "task_list example must show acceptance criteria");
+});
+
+const historyFixture: TaskRecord[] = [
+  {
+    id: "task-1",
+    title: "Lobby join",
+    acceptance: [
+      { id: "A1", text: "Second player can join." },
+      { id: "A2", text: "Third player is rejected." },
+    ],
+    status: "split",
+    attemptCount: 2,
+    substantiveRejections: 2,
+    lastCitedCriteria: ["A1"],
+    criterionOutcomes: { A1: "failed", A2: "passed" },
+    parentTaskId: null,
+    lastOutcomeSummary: "Worker claims done.",
+  },
+  {
+    id: "task-1a",
+    title: "Second player join only",
+    acceptance: [{ id: "A1", text: "Second player can join." }],
+    status: "pending",
+    attemptCount: 0,
+    substantiveRejections: 0,
+    lastCitedCriteria: [],
+    criterionOutcomes: { A1: "unknown" },
+    parentTaskId: "task-1",
+    lastOutcomeSummary: null,
+  },
+];
+
+test("task history renders statuses criterion outcomes rejections and lineage", () => {
+  const history = renderTaskHistory(historyFixture);
+
+  assert.ok(history.includes('task-1 "Lobby join" [split] attempts=2, rejections=2 citing [A1]'));
+  assert.ok(history.includes("A1: failed, A2: passed"));
+  assert.ok(history.includes('task-1a "Second player join only" (split from task-1) [pending]'));
+  assert.ok(history.includes("last: Worker claims done."));
+});
+
+test("continuation and nudge prompts carry the task history when present", () => {
+  const continuation = buildSupervisorPrompt({
+    goal,
+    phase: { kind: "continuation", observation: "Worker finished." },
+    taskHistory: historyFixture,
+  });
+  const nudge = buildSupervisorPrompt({ goal, phase: { kind: "nudge" }, taskHistory: historyFixture });
+  const bootstrap = buildSupervisorPrompt({ goal, phase: { kind: "bootstrap" }, taskHistory: historyFixture });
+
+  assert.ok(continuation.includes("## Task history"));
+  assert.ok(nudge.includes("## Task history"));
+  assert.ok(!bootstrap.includes("## Task history"));
+});
+
+test("worker contract appendix lists criteria and the result-block format", () => {
+  const appendix = buildWorkerContractAppendix(
+    [
+      { id: "A1", text: "Second player can join." },
+      { id: "A2", text: "Third player is rejected." },
+    ],
+    "task-1",
+  );
+
+  assert.ok(appendix.includes("- A1: Second player can join."));
+  assert.ok(appendix.includes("- A2: Third player is rejected."));
+  assert.ok(appendix.includes("managed_task.result"));
+  assert.ok(appendix.includes('"taskId": "task-1"'));
+  assert.ok(appendix.includes("auto-agent-control"));
 });
 
 test("rejection prompt carries the safe rejection reason", () => {

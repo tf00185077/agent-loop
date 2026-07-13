@@ -14,6 +14,7 @@ import type {
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
 import { validateManagedTaskResult, type ManagedTaskResult } from "./delegation-control-event.js";
+import { buildWorkerContractAppendix } from "./supervisor-prompt.js";
 import {
   attestWorktreeFiles,
   createGitWorktreeService,
@@ -139,13 +140,17 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         input.role === "worker"
           ? await createWorkerCwd(worktreeService, supervisorCwd, childSession.id, deps.agentSessionRepo)
           : { path: supervisorCwd, worktree: null };
+      const childPrompt =
+        input.role === "worker" && input.acceptance && input.acceptance.length > 0
+          ? `${input.prompt}\n\n${buildWorkerContractAppendix(input.acceptance, input.taskId ?? null)}`
+          : input.prompt;
       const handle = await input.adapter.startSession({
         sessionId: childSession.id,
         goalId: parent.goalId,
         runId: childRun.id,
         providerId: input.providerId,
         modelLabel: input.modelLabel,
-        prompt: input.prompt,
+        prompt: childPrompt,
         parent: { sessionId: parent.id },
         cwd: childCwd.path,
       });

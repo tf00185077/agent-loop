@@ -683,6 +683,7 @@ async function startCompletionlessContinuation(
   const prompt = buildSupervisorPrompt({
     goal,
     phase: rejectionReason ? { kind: "rejection", safeReason: rejectionReason } : { kind: "nudge" },
+    taskHistory: getTaskRegistry(input.state, input.goalId).listTasks(),
   });
 
   const run = deps.runRepo.create({
@@ -779,7 +780,11 @@ async function continueSupervisorAfterChild(
     providerId: input.providerId,
     modelLabel: input.modelLabel,
     prompt: goal
-      ? buildSupervisorPrompt({ goal, phase: { kind: "continuation", observation } })
+      ? buildSupervisorPrompt({
+          goal,
+          phase: { kind: "continuation", observation },
+          taskHistory: getTaskRegistry(input.state, input.goalId).listTasks(),
+        })
       : message,
   });
   input.activeHandles.set(session.id, freshHandle);

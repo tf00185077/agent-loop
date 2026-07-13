@@ -1420,6 +1420,8 @@ test("enforces acceptance contracts on worker delegations", async () => {
 test("refuses the third identical-scope retry and accepts a narrower split", async () => {
   const fixture = createManagerFixture("narrowing rule");
   let supervisorTurn = 0;
+  const workerPrompts: string[] = [];
+  const supervisorPrompts: string[] = [];
   const acceptance = [{ id: "A1", text: "Second player can join the lobby." }];
   const adapter: AgentRuntimeAdapter = {
     providerId: "codex-local",
@@ -1427,6 +1429,11 @@ test("refuses the third identical-scope retry and accepts a narrower split", asy
       return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
     },
     async startSession(input) {
+      if (input.parent?.sessionId) {
+        workerPrompts.push(input.prompt);
+      } else {
+        supervisorPrompts.push(input.prompt);
+      }
       if (input.parent?.sessionId) {
         return createHandle(input.sessionId, [
           {
@@ -1586,6 +1593,15 @@ test("refuses the third identical-scope retry and accepts a narrower split", asy
     (splitList?.data.taskList as Array<{ parentTaskId?: string | null }>)[0]?.parentTaskId,
     "task-1",
   );
+  // Workers receive the frozen contract appendix with the result-block format.
+  assert.ok(workerPrompts[0]?.includes("- A1: Second player can join the lobby."));
+  assert.ok(workerPrompts[0]?.includes("managed_task.result"));
+  // The post-refusal nudge continuation carries the durable task history.
+  const historyPrompts = supervisorPrompts.filter((prompt) => prompt.includes("## Task history"));
+  assert.ok(historyPrompts.length > 0, "expected continuation prompts carrying the task history");
+  const nudgePrompt = historyPrompts.at(-1);
+  assert.ok(nudgePrompt?.includes("task-1"));
+  assert.ok(nudgePrompt?.includes("rejections=2"));
   fixture.db.close();
 });
 
