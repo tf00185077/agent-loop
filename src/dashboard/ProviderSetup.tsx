@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from "react";
 import {
+  agentAssignableRoles,
   detectCodexCli,
   getProviderSettings,
   loadCodexModelCatalog,
   saveProviderSettings,
   testCodexLocalConnection,
+  type AgentAssignableRole,
   type CodexModelCatalogResult,
   type ProviderSettings,
+  type RoleAssignments,
   type SaveProviderSettingsInput,
   type StartGoalProviderOverride,
 } from "./api";
@@ -28,6 +31,8 @@ interface ProviderSetupPanelProps {
   onModelLabelChange: (value: string) => void;
   onCodexCommandPathChange: (value: string) => void;
   onClaudeCommandPathChange: (value: string) => void;
+  roleAssignments?: RoleAssignments;
+  onRoleAssignmentsChange?: (assignments: RoleAssignments) => void;
   onSave: () => void;
   onDetect: () => void;
   onTestConnection: () => void;
@@ -48,6 +53,7 @@ export default function ProviderSetup({ onProviderOverrideChange }: ProviderSetu
   const [error, setError] = useState<string | null>(null);
   const [modelCatalog, setModelCatalog] = useState<CodexModelCatalogResult | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
+  const [roleAssignments, setRoleAssignments] = useState<RoleAssignments>({});
 
   useEffect(() => {
     onProviderOverrideChange?.(
@@ -126,6 +132,7 @@ export default function ProviderSetup({ onProviderOverrideChange }: ProviderSetu
     setClaudeCommandPath(
       nextSettings.provider === "claude-local" ? nextSettings.claudeCommandPath ?? "" : "",
     );
+    setRoleAssignments(nextSettings.roleAssignments ?? {});
   }
 
   async function handleSave() {
@@ -137,6 +144,7 @@ export default function ProviderSetup({ onProviderOverrideChange }: ProviderSetu
         modelLabel,
         codexCommandPath,
         claudeCommandPath,
+        roleAssignments,
       })));
     } catch (err) {
       setError(String(err));
@@ -200,6 +208,8 @@ export default function ProviderSetup({ onProviderOverrideChange }: ProviderSetu
       error={error}
       modelCatalog={modelCatalog}
       catalogBusy={catalogBusy}
+      roleAssignments={roleAssignments}
+      onRoleAssignmentsChange={setRoleAssignments}
       onProviderChange={handleProviderChange}
       onModelLabelChange={setModelLabel}
       onCodexCommandPathChange={setCodexCommandPath}
@@ -217,6 +227,7 @@ interface SaveProviderSettingsDraft {
   modelLabel: string;
   codexCommandPath: string;
   claudeCommandPath: string;
+  roleAssignments?: RoleAssignments;
 }
 
 export function toStartGoalProviderOverride(
@@ -256,7 +267,13 @@ function toDetectProviderInput(
 }
 
 function toSaveProviderSettingsInput(draft: SaveProviderSettingsDraft): SaveProviderSettingsInput {
-  if (draft.draftProvider === "mock") return { provider: "mock" };
+  const roleAssignments =
+    draft.roleAssignments && Object.keys(draft.roleAssignments).length > 0
+      ? draft.roleAssignments
+      : undefined;
+  if (draft.draftProvider === "mock") {
+    return { provider: "mock", ...(roleAssignments ? { roleAssignments } : {}) };
+  }
 
   if (draft.draftProvider === "claude-local") {
     return {
@@ -264,6 +281,7 @@ function toSaveProviderSettingsInput(draft: SaveProviderSettingsDraft): SaveProv
       provider: "claude-local",
       modelLabel: draft.modelLabel.trim(),
       claudeCommandPath: draft.claudeCommandPath.trim() || null,
+      ...(roleAssignments ? { roleAssignments } : {}),
     };
   }
 
@@ -273,7 +291,101 @@ function toSaveProviderSettingsInput(draft: SaveProviderSettingsDraft): SaveProv
     provider: "codex-local",
     modelLabel: draft.modelLabel.trim(),
     codexCommandPath: draft.codexCommandPath.trim() || null,
+    ...(roleAssignments ? { roleAssignments } : {}),
   };
+}
+
+const roleDisplayNames: Record<AgentAssignableRole, string> = {
+  worker: "Worker (implementation)",
+  spec_writer: "Spec writer",
+  review_merge: "Review merge",
+};
+
+interface RoleAssignmentsEditorProps {
+  roleAssignments: RoleAssignments;
+  onChange: (assignments: RoleAssignments) => void;
+}
+
+export function RoleAssignmentsEditor({ roleAssignments, onChange }: RoleAssignmentsEditorProps) {
+  function updateRole(role: AgentAssignableRole, provider: string) {
+    const next = { ...roleAssignments };
+    if (provider === "inherit") {
+      delete next[role];
+    } else {
+      const existing = next[role];
+      next[role] = {
+        provider: provider as "mock" | "codex-local" | "claude-local",
+        modelLabel: existing?.modelLabel ?? "",
+        commandPath: existing?.commandPath ?? null,
+      };
+    }
+    onChange(next);
+  }
+
+  function updateField(role: AgentAssignableRole, field: "modelLabel" | "commandPath", value: string) {
+    const existing = roleAssignments[role];
+    if (!existing) return;
+    onChange({
+      ...roleAssignments,
+      [role]: { ...existing, [field]: field === "commandPath" ? value || null : value },
+    });
+  }
+
+  return (
+    <details style={troubleshootingStyle} data-testid="role-assignments">
+      <summary style={troubleshootingSummaryStyle}>Child agent roles</summary>
+      <p style={troubleshootingTextStyle}>
+        Assign which agent runs each child role. Roles left on "Inherit" use the goal provider above.
+        If an assigned agent is unavailable at run time, the goal provider is used and a downgrade
+        event is recorded.
+      </p>
+      {agentAssignableRoles.map((role) => {
+        const assignment = roleAssignments[role];
+        return (
+          <div key={role} style={roleRowStyle}>
+            <label style={roleSelectLabelStyle}>
+              {roleDisplayNames[role]}
+              <select
+                aria-label={`${roleDisplayNames[role]} provider`}
+                value={assignment?.provider ?? "inherit"}
+                onChange={(event) => updateRole(role, event.target.value)}
+                style={inputStyle}
+              >
+                <option value="inherit">Inherit goal provider</option>
+                <option value="codex-local">Codex Local</option>
+                <option value="claude-local">Claude Local</option>
+                <option value="mock">Mock</option>
+              </select>
+            </label>
+            {assignment && assignment.provider !== "mock" && (
+              <>
+                <label style={roleFieldLabelStyle}>
+                  Model
+                  <input
+                    aria-label={`${roleDisplayNames[role]} model`}
+                    value={assignment.modelLabel}
+                    onChange={(event) => updateField(role, "modelLabel", event.target.value)}
+                    placeholder="Provider default"
+                    style={inputStyle}
+                  />
+                </label>
+                <label style={roleFieldLabelStyle}>
+                  Command path
+                  <input
+                    aria-label={`${roleDisplayNames[role]} command path`}
+                    value={assignment.commandPath ?? ""}
+                    onChange={(event) => updateField(role, "commandPath", event.target.value)}
+                    placeholder="Auto-detect"
+                    style={inputStyle}
+                  />
+                </label>
+              </>
+            )}
+          </div>
+        );
+      })}
+    </details>
+  );
 }
 
 export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
@@ -287,6 +399,8 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
     error,
     modelCatalog,
     catalogBusy,
+    roleAssignments = {},
+    onRoleAssignmentsChange = () => undefined,
     onProviderChange,
     onModelLabelChange,
     onCodexCommandPathChange,
@@ -490,6 +604,15 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
         </div>
       )}
 
+      <RoleAssignmentsEditor roleAssignments={roleAssignments} onChange={onRoleAssignmentsChange} />
+      {Object.keys(roleAssignments).length > 0 && (
+        <div style={actionRowStyle}>
+          <button type="button" onClick={onSave} disabled={busy !== null} style={secondaryButtonStyle}>
+            {busy === "save" ? "Saving..." : "Save role assignments"}
+          </button>
+        </div>
+      )}
+
       {(codexSelected || claudeSelected) && (
         <div style={statusBoxStyle(statusView.color)}>
           <strong>{statusView.label}</strong>
@@ -634,6 +757,32 @@ const troubleshootingTextStyle: React.CSSProperties = {
 const troubleshootingLabelStyle: React.CSSProperties = {
   ...labelStyle,
   marginBottom: 10,
+};
+
+const roleRowStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 10,
+  alignItems: "flex-end",
+  marginBottom: 10,
+};
+
+const roleSelectLabelStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  fontSize: 13,
+  fontWeight: 500,
+  minWidth: 220,
+};
+
+const roleFieldLabelStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  fontSize: 13,
+  fontWeight: 400,
+  minWidth: 160,
 };
 
 const secondaryButtonStyle: React.CSSProperties = {

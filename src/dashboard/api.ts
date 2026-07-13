@@ -66,39 +66,57 @@ export interface ProviderStatus {
   message: string | null;
 }
 
+export const agentAssignableRoles = ["worker", "spec_writer", "review_merge"] as const;
+
+export type AgentAssignableRole = (typeof agentAssignableRoles)[number];
+
+export interface AgentRoleAssignment {
+  provider: "mock" | "codex-local" | "claude-local";
+  modelLabel: string;
+  commandPath: string | null;
+}
+
+export type RoleAssignments = Partial<Record<AgentAssignableRole, AgentRoleAssignment>>;
+
 export type ProviderSettings =
   | {
       provider: "mock";
       modelLabel: "mock-v1";
       codexCommandPath: null;
       status: ProviderStatus;
+      roleAssignments?: RoleAssignments;
     }
   | {
       provider: "codex-local";
       modelLabel: string;
       codexCommandPath: string | null;
       status: ProviderStatus;
+      roleAssignments?: RoleAssignments;
     }
   | {
       provider: "claude-local";
       modelLabel: string;
       claudeCommandPath: string | null;
       status: ProviderStatus;
+      roleAssignments?: RoleAssignments;
     };
 
 export type SaveProviderSettingsInput =
   | {
       provider: "mock";
+      roleAssignments?: RoleAssignments;
     }
   | {
       provider: "codex-local";
       modelLabel: string;
       codexCommandPath: string | null;
+      roleAssignments?: RoleAssignments;
     }
   | {
       provider: "claude-local";
       modelLabel: string;
       claudeCommandPath: string | null;
+      roleAssignments?: RoleAssignments;
     };
 
 export type StartGoalProviderOverride =

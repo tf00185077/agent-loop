@@ -20,8 +20,8 @@
 
 ## 4. Dashboard Controls
 
-- [ ] 4.1 Add per-role assignment controls to provider setup (inherit toggle, provider picker, model label, command path) wired to the settings API.
-- [ ] 4.2 Add/adjust dashboard tests for the new controls and payload.
+- [x] 4.1 Add per-role assignment controls to provider setup (inherit toggle, provider picker, model label, command path) wired to the settings API.
+- [x] 4.2 Add/adjust dashboard tests for the new controls and payload.
 
 ## 5. Verification
 

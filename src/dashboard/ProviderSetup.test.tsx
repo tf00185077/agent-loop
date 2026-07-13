@@ -275,6 +275,61 @@ test("provider setup panel does not display raw catalog metadata or status messa
   assert.equal(html.includes("sk-catalog-secret"), false);
 });
 
+test("provider setup panel renders role assignment controls", () => {
+  const html = renderToStaticMarkup(
+    <ProviderSetupPanel
+      settings={{
+        provider: "codex-local",
+        modelLabel: "gpt-5.5",
+        codexCommandPath: "C:\\Tools\\codex.exe",
+        status: { state: "detected", detected: true, checkedAt: null, message: null },
+      }}
+      busy={null}
+      error={null}
+      modelCatalog={null}
+      catalogBusy={false}
+      draftProvider="codex-local"
+      modelLabel="gpt-5.5"
+      codexCommandPath="C:\\Tools\\codex.exe"
+      roleAssignments={{
+        worker: { provider: "claude-local", modelLabel: "claude-sonnet-4", commandPath: null },
+      }}
+      onRoleAssignmentsChange={() => undefined}
+      onProviderChange={() => undefined}
+      onModelLabelChange={() => undefined}
+      onCodexCommandPathChange={() => undefined}
+      onSave={() => undefined}
+      onDetect={() => undefined}
+      onTestConnection={() => undefined}
+      onReloadCatalog={() => undefined}
+    />,
+  );
+
+  assert.match(html, /Child agent roles/);
+  assert.match(html, /Worker \(implementation\)/);
+  assert.match(html, /Spec writer/);
+  assert.match(html, /Review merge/);
+  assert.match(html, /Inherit goal provider/);
+  // The assigned worker row exposes model and command-path fields.
+  assert.match(html, /aria-label="Worker \(implementation\) model"/);
+  assert.match(html, /value="claude-sonnet-4"/);
+  assert.match(html, /Save role assignments/);
+  // Unassigned roles show only the provider picker.
+  assert.doesNotMatch(html, /aria-label="Spec writer model"/);
+});
+
+test("provider setup panel hides the role save button when nothing is assigned", () => {
+  const html = renderProviderSetupPanel({
+    provider: "codex-local",
+    modelLabel: "gpt-5.5",
+    codexCommandPath: "C:\\Tools\\codex.exe",
+    status: { state: "detected", detected: true, checkedAt: null, message: null },
+  });
+
+  assert.match(html, /Child agent roles/);
+  assert.doesNotMatch(html, /Save role assignments/);
+});
+
 function renderCatalogPanel(
   modelCatalog: CodexModelCatalogResult | null,
   overrides?: { modelLabel?: string },
