@@ -2,6 +2,9 @@ import type {
   AgentRuntimeDelegationRole,
   AgentRuntimeSession,
   ManagedTaskListEntry,
+  TaskAcceptanceCriterion,
+  TaskCriterionEvidence,
+  TaskTestEvidence,
 } from "../../domain/index.js";
 
 export interface DelegationControlEventRequest {
@@ -9,7 +12,15 @@ export interface DelegationControlEventRequest {
   prompt: string;
   promptSummary: string;
   taskId?: string | null;
+  acceptance?: TaskAcceptanceCriterion[] | null;
   workerDelegationRequestId?: string | null;
+}
+
+export interface ManagedTaskResult {
+  taskId: string | null;
+  criterionEvidence: TaskCriterionEvidence[];
+  tests: TaskTestEvidence[];
+  claimedFiles: string[];
 }
 
 export type DelegationControlEventValidationResult =
@@ -58,6 +69,10 @@ export function validateDelegationControlEvent(
     typeof input.controlEvent.taskId === "string" && input.controlEvent.taskId.trim().length > 0
       ? input.controlEvent.taskId.trim()
       : null;
+  const acceptance = validateAcceptanceCriteria(input.controlEvent.acceptance);
+  if (!acceptance.ok) {
+    return { ok: false, safeReason: acceptance.safeReason };
+  }
 
   return {
     ok: true,
@@ -66,6 +81,7 @@ export function validateDelegationControlEvent(
       prompt: input.controlEvent.prompt.trim(),
       promptSummary,
       taskId,
+      acceptance: acceptance.criteria,
       workerDelegationRequestId,
     },
   };
@@ -75,6 +91,7 @@ export type ManagedControlEventValidationResult =
   | { ok: true; kind: "delegation"; request: DelegationControlEventRequest }
   | { ok: true; kind: "completion"; summary: string }
   | { ok: true; kind: "task_list"; tasks: ManagedTaskListEntry[] }
+  | { ok: true; kind: "task_result"; result: ManagedTaskResult }
   | { ok: false; safeReason: string };
 
 export function validateManagedControlEvent(
@@ -103,6 +120,10 @@ export function validateManagedControlEvent(
     return validateTaskList(input.controlEvent.tasks);
   }
 
+  if (input.controlEvent.type === "managed_task.result") {
+    return validateTaskResult(input.controlEvent);
+  }
+
   return {
     ok: false,
     safeReason: `Unsupported control event type: ${String(input.controlEvent.type)}.`,
@@ -124,9 +145,107 @@ function validateTaskList(tasks: unknown): ManagedControlEventValidationResult {
     ) {
       return { ok: false, safeReason: "Task list entries require non-empty id and title strings." };
     }
-    entries.push({ id: task.id.trim(), title: task.title.trim() });
+    const acceptance = validateAcceptanceCriteria(task.acceptance);
+    if (!acceptance.ok) {
+      return { ok: false, safeReason: acceptance.safeReason };
+    }
+    entries.push({ id: task.id.trim(), title: task.title.trim(), acceptance: acceptance.criteria });
   }
   return { ok: true, kind: "task_list", tasks: entries };
+}
+
+type AcceptanceValidation =
+  | { ok: true; criteria: TaskAcceptanceCriterion[] | null }
+  | { ok: false; safeReason: string };
+
+function validateAcceptanceCriteria(value: unknown): AcceptanceValidation {
+  if (value === undefined || value === null) {
+    return { ok: true, criteria: null };
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    return { ok: false, safeReason: "Acceptance criteria must be a non-empty list when present." };
+  }
+  const criteria: TaskAcceptanceCriterion[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.id !== "string" ||
+      entry.id.trim().length === 0 ||
+      typeof entry.text !== "string" ||
+      entry.text.trim().length === 0
+    ) {
+      return { ok: false, safeReason: "Acceptance criteria require non-empty id and text strings." };
+    }
+    const id = entry.id.trim();
+    if (seen.has(id)) {
+      return { ok: false, safeReason: "Acceptance criterion ids must be unique within a task." };
+    }
+    seen.add(id);
+    criteria.push({ id, text: entry.text.trim() });
+  }
+  return { ok: true, criteria };
+}
+
+function validateTaskResult(controlEvent: Record<string, unknown>): ManagedControlEventValidationResult {
+  const taskId =
+    typeof controlEvent.taskId === "string" && controlEvent.taskId.trim().length > 0
+      ? controlEvent.taskId.trim()
+      : null;
+
+  const criterionEvidence: TaskCriterionEvidence[] = [];
+  if (controlEvent.criterionEvidence !== undefined) {
+    if (!Array.isArray(controlEvent.criterionEvidence)) {
+      return { ok: false, safeReason: "Criterion evidence must be a list when present." };
+    }
+    for (const entry of controlEvent.criterionEvidence) {
+      if (
+        !isRecord(entry) ||
+        typeof entry.criterionId !== "string" ||
+        entry.criterionId.trim().length === 0 ||
+        typeof entry.evidence !== "string" ||
+        entry.evidence.trim().length === 0
+      ) {
+        return {
+          ok: false,
+          safeReason: "Criterion evidence entries require non-empty criterionId and evidence strings.",
+        };
+      }
+      criterionEvidence.push({ criterionId: entry.criterionId.trim(), evidence: entry.evidence.trim() });
+    }
+  }
+
+  const tests: TaskTestEvidence[] = [];
+  if (controlEvent.tests !== undefined) {
+    if (!Array.isArray(controlEvent.tests)) {
+      return { ok: false, safeReason: "Test evidence must be a list when present." };
+    }
+    for (const entry of controlEvent.tests) {
+      if (!isRecord(entry) || typeof entry.command !== "string" || entry.command.trim().length === 0) {
+        return { ok: false, safeReason: "Test evidence entries require a non-empty command string." };
+      }
+      tests.push({
+        command: entry.command.trim(),
+        exitCode: typeof entry.exitCode === "number" ? entry.exitCode : null,
+        summary: typeof entry.summary === "string" ? entry.summary : null,
+      });
+    }
+  }
+
+  const claimedFiles: string[] = [];
+  if (controlEvent.claimedFiles !== undefined) {
+    if (!Array.isArray(controlEvent.claimedFiles)) {
+      return { ok: false, safeReason: "Claimed files must be a list when present." };
+    }
+    for (const entry of controlEvent.claimedFiles) {
+      if (typeof entry !== "string" || entry.trim().length === 0) {
+        return { ok: false, safeReason: "Claimed file entries must be non-empty strings." };
+      }
+      claimedFiles.push(entry.trim());
+    }
+  }
+
+  return { ok: true, kind: "task_result", result: { taskId, criterionEvidence, tests, claimedFiles } };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -468,6 +468,22 @@ async function persistDelegationControlEvent(
     return;
   }
 
+  if (validation.kind === "task_result") {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: "Task result recorded.",
+      data: {
+        ...data,
+        delegationControlEvent: undefined,
+        runtimeEventType: "task.result",
+        taskResult: validation.result,
+      },
+    });
+    return;
+  }
+
   try {
     await createDelegationCoordinator(deps).acceptAndStartWorker({
       parentSessionId: input.sessionId,

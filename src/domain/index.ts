@@ -81,6 +81,10 @@ export type {
   ManagedDelegationRequestControlEvent,
   ManagedTaskListControlEvent,
   ManagedTaskListEntry,
+  ManagedTaskResultControlEvent,
+  TaskAcceptanceCriterion,
+  TaskCriterionEvidence,
+  TaskTestEvidence,
 } from "./agent-runtime-control-plane.types.js";
 export {
   agentRuntimeCapabilityNames,

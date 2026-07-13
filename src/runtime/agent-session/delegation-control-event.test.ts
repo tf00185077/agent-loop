@@ -175,6 +175,123 @@ test("routes delegation requests through the managed umbrella", () => {
   assert.equal(result.ok && result.kind === "delegation" ? result.request.taskId : null, "task-1");
 });
 
+test("validates acceptance criteria on task lists and delegation requests", () => {
+  const validList = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_delegation.task_list",
+      tasks: [
+        {
+          id: "task-1",
+          title: "Implement matchmaking",
+          acceptance: [
+            { id: "A1", text: "Two players can join the same lobby." },
+            { id: "A2", text: "Lobby rejects a third player." },
+          ],
+        },
+        { id: "task-2", title: "Docs only" },
+      ],
+    },
+    parentSession: supervisorSession(),
+  });
+  const duplicateIds = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_delegation.task_list",
+      tasks: [
+        {
+          id: "task-1",
+          title: "Implement matchmaking",
+          acceptance: [
+            { id: "A1", text: "First." },
+            { id: "A1", text: "Duplicate id." },
+          ],
+        },
+      ],
+    },
+    parentSession: supervisorSession(),
+  });
+  const blankText = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_delegation.task_list",
+      tasks: [{ id: "task-1", title: "t", acceptance: [{ id: "A1", text: "  " }] }],
+    },
+    parentSession: supervisorSession(),
+  });
+  const requestWithAcceptance = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_delegation.request",
+      role: "worker",
+      prompt: "Do task one.",
+      taskId: "task-1",
+      acceptance: [{ id: "A1", text: "Two players can join the same lobby." }],
+    },
+    parentSession: supervisorSession(),
+  });
+
+  assert.equal(validList.ok, true);
+  assert.deepEqual(
+    validList.ok && validList.kind === "task_list" ? validList.tasks[0]?.acceptance : null,
+    [
+      { id: "A1", text: "Two players can join the same lobby." },
+      { id: "A2", text: "Lobby rejects a third player." },
+    ],
+  );
+  assert.equal(
+    validList.ok && validList.kind === "task_list" ? validList.tasks[1]?.acceptance : "x",
+    null,
+  );
+  assert.deepEqual(duplicateIds, {
+    ok: false,
+    safeReason: "Acceptance criterion ids must be unique within a task.",
+  });
+  assert.deepEqual(blankText, {
+    ok: false,
+    safeReason: "Acceptance criteria require non-empty id and text strings.",
+  });
+  assert.equal(requestWithAcceptance.ok, true);
+  assert.deepEqual(
+    requestWithAcceptance.ok && requestWithAcceptance.kind === "delegation"
+      ? requestWithAcceptance.request.acceptance
+      : null,
+    [{ id: "A1", text: "Two players can join the same lobby." }],
+  );
+});
+
+test("validates managed task result control events", () => {
+  const valid = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_task.result",
+      taskId: "task-1",
+      criterionEvidence: [{ criterionId: "A1", evidence: "Joined two players in test lobby." }],
+      tests: [{ command: "npm test -- lobby", exitCode: 0, summary: "3 passing" }],
+      claimedFiles: ["src/lobby.ts"],
+    },
+    parentSession: supervisorSession(),
+  });
+  const malformedEvidence = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_task.result",
+      criterionEvidence: [{ criterionId: "A1" }],
+    },
+    parentSession: supervisorSession(),
+  });
+  const minimal = validateManagedControlEvent({
+    controlEvent: { type: "managed_task.result" },
+    parentSession: supervisorSession(),
+  });
+
+  assert.equal(valid.ok, true);
+  assert.equal(valid.ok ? valid.kind : null, "task_result");
+  assert.deepEqual(
+    valid.ok && valid.kind === "task_result" ? valid.result.criterionEvidence : null,
+    [{ criterionId: "A1", evidence: "Joined two players in test lobby." }],
+  );
+  assert.deepEqual(malformedEvidence, {
+    ok: false,
+    safeReason: "Criterion evidence entries require non-empty criterionId and evidence strings.",
+  });
+  assert.equal(minimal.ok, true);
+});
+
 test("rejects unknown managed control event types with a safe reason", () => {
   const result = validateManagedControlEvent({
     controlEvent: { type: "managed_delegation.pause" },

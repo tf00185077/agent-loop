@@ -170,15 +170,33 @@ export interface AgentRuntimeDelegationSummary {
   kind: AgentRuntimeDelegationTerminalOutcome;
   safeSummary: string;
   safeDetails?: string | null;
+  /** Per-criterion evidence reported by the child via managed_task.result. */
+  criterionEvidence?: TaskCriterionEvidence[];
+  /** Tests the child reports having executed. */
+  tests?: TaskTestEvidence[];
+  /** Files the child claims it changed. Advisory only. */
+  claimedFiles?: string[];
+  /** Files attested by the backend from the worker worktree. Authoritative. */
+  attestedFiles?: string[];
+  /** True when claimedFiles and attestedFiles disagree. */
+  filesDiscrepancy?: boolean;
 }
 
 export const managedControlEventTypes = [
   "managed_delegation.request",
   "managed_delegation.complete",
   "managed_delegation.task_list",
+  "managed_task.result",
 ] as const;
 
 export type ManagedControlEventType = (typeof managedControlEventTypes)[number];
+
+export interface TaskAcceptanceCriterion {
+  /** Immutable criterion identifier, unique within its task (e.g. "A1"). */
+  id: string;
+  /** Binary, testable condition text. */
+  text: string;
+}
 
 export interface ManagedDelegationRequestControlEvent {
   type: "managed_delegation.request";
@@ -186,6 +204,7 @@ export interface ManagedDelegationRequestControlEvent {
   prompt: string;
   summary?: string | null;
   taskId?: string | null;
+  acceptance?: TaskAcceptanceCriterion[] | null;
   workerDelegationRequestId?: string | null;
 }
 
@@ -197,6 +216,7 @@ export interface ManagedDelegationCompleteControlEvent {
 export interface ManagedTaskListEntry {
   id: string;
   title: string;
+  acceptance?: TaskAcceptanceCriterion[] | null;
 }
 
 export interface ManagedTaskListControlEvent {
@@ -204,10 +224,30 @@ export interface ManagedTaskListControlEvent {
   tasks: ManagedTaskListEntry[];
 }
 
+export interface TaskCriterionEvidence {
+  criterionId: string;
+  evidence: string;
+}
+
+export interface TaskTestEvidence {
+  command: string;
+  exitCode: number | null;
+  summary?: string | null;
+}
+
+export interface ManagedTaskResultControlEvent {
+  type: "managed_task.result";
+  taskId?: string | null;
+  criterionEvidence?: TaskCriterionEvidence[];
+  tests?: TaskTestEvidence[];
+  claimedFiles?: string[];
+}
+
 export type ManagedControlEvent =
   | ManagedDelegationRequestControlEvent
   | ManagedDelegationCompleteControlEvent
-  | ManagedTaskListControlEvent;
+  | ManagedTaskListControlEvent
+  | ManagedTaskResultControlEvent;
 
 export interface AgentRuntimeDelegationRequest {
   id: string;
@@ -217,6 +257,8 @@ export interface AgentRuntimeDelegationRequest {
   status: AgentRuntimeDelegationRequestStatus;
   promptSummary: string;
   taskId?: string | null;
+  /** Frozen acceptance criteria snapshot in force at dispatch. */
+  acceptance?: TaskAcceptanceCriterion[] | null;
   resultSummary: AgentRuntimeDelegationSummary | null;
   detachedReason: string | null;
   createdAt: string;

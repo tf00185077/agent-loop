@@ -2,9 +2,9 @@
 
 ## 1. Contract Types + Control-Event Validation
 
-- [ ] 1.1 Add domain types: `TaskAcceptanceCriterion {id, text}`, acceptance on task-list entries and delegation control events, `managed_task.result` control event (criterionEvidence, tests, claimedFiles), structured fields on `AgentRuntimeDelegationSummary` (criterionEvidence, tests, claimedFiles, attestedFiles).
-- [ ] 1.2 Add tests + implementation in `validateManagedControlEvent`: task_list entries accept optional `acceptance` (validated shape, non-empty ids/text, unique ids); delegation requests accept optional `acceptance`; new `managed_task.result` kind validated.
-- [ ] 1.3 Run focused validation tests and typecheck.
+- [x] 1.1 Add domain types: `TaskAcceptanceCriterion {id, text}`, acceptance on task-list entries and delegation control events, `managed_task.result` control event (criterionEvidence, tests, claimedFiles), structured fields on `AgentRuntimeDelegationSummary` (criterionEvidence, tests, claimedFiles, attestedFiles).
+- [x] 1.2 Add tests + implementation in `validateManagedControlEvent`: task_list entries accept optional `acceptance` (validated shape, non-empty ids/text, unique ids); delegation requests accept optional `acceptance`; new `managed_task.result` kind validated.
+- [x] 1.3 Run focused validation tests and typecheck.
 
 ## 2. Persistence
 
