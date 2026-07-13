@@ -1,4 +1,8 @@
-import type { ManagedChangePlanEntry, ManagedChangeStatus } from "../../domain/index.js";
+import type {
+  ManagedChangePlanEntry,
+  ManagedChangeStatus,
+  TaskAcceptanceCriterion,
+} from "../../domain/index.js";
 import type { GoalTaskRegistry } from "./task-registry.js";
 
 export interface ChangeRecord {
@@ -21,6 +25,22 @@ export type ChangeIdResolution =
 
 export function specTaskId(changeId: string): string {
   return `spec:${changeId}`;
+}
+
+/**
+ * Backend-authored acceptance contract for spec-writer tasks. Frozen at plan
+ * acceptance; supervisors cannot replace it (the task registry ignores
+ * criteria mutations on contracted tasks).
+ */
+export function specTaskAcceptance(changeId: string): TaskAcceptanceCriterion[] {
+  return [
+    {
+      id: "S1",
+      text: `OpenSpec validation passes for change ${changeId} (strict CLI validate or the degraded structural checks).`,
+    },
+    { id: "S2", text: "Every requirement in the change's specs has at least one WHEN/THEN scenario." },
+    { id: "S3", text: "Every task in the change's tasks.md carries acceptance criteria." },
+  ];
 }
 
 /**

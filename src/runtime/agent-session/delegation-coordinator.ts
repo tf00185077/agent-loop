@@ -50,6 +50,7 @@ export interface StartWorkerDelegationInput {
   prompt: string;
   promptSummary: string;
   taskId?: string | null;
+  changeId?: string | null;
   acceptance?: TaskAcceptanceCriterion[] | null;
   workerDelegationRequestId?: string | null;
   adapter: AgentRuntimeAdapter;
@@ -101,6 +102,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           ? `${input.promptSummary} (worker result: ${workerResult.resultSummary.safeSummary})`
           : input.promptSummary,
         taskId: input.taskId ?? null,
+        changeId: input.changeId ?? null,
         acceptance: input.acceptance ?? null,
       });
       const accepted = deps.agentSessionRepo.acceptDelegationRequest(request.id);
@@ -116,6 +118,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           delegationRequestId: accepted.id,
           delegationRole: accepted.role,
           ...(accepted.taskId ? { taskId: accepted.taskId } : {}),
+          ...(accepted.changeId ? { changeId: accepted.changeId } : {}),
         },
       });
 

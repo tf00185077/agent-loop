@@ -11,7 +11,7 @@ import type {
   EventRepository,
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
-import { GoalChangeRegistry, specTaskId } from "./change-registry.js";
+import { GoalChangeRegistry, specTaskAcceptance, specTaskId } from "./change-registry.js";
 import { createDelegationCoordinator, type SupervisorContinuationInput } from "./delegation-coordinator.js";
 import { validateManagedControlEvent } from "./delegation-control-event.js";
 import {
@@ -244,6 +244,15 @@ function getTaskRegistry(state: SupervisorState, goalId: string): GoalTaskRegist
   return registry;
 }
 
+function getChangeRegistry(state: SupervisorState, goalId: string): GoalChangeRegistry {
+  let registry = state.changeRegistries.get(goalId);
+  if (!registry) {
+    registry = new GoalChangeRegistry();
+    state.changeRegistries.set(goalId, registry);
+  }
+  return registry;
+}
+
 interface SessionEventContext {
   goalId: string;
   runId: string;
@@ -464,8 +473,19 @@ async function persistDelegationControlEvent(
   }
 
   if (validation.kind === "task_list") {
+    const changeRegistry = getChangeRegistry(input.state, input.goalId);
+    const changeResolution = changeRegistry.resolveChangeId(validation.changeId);
+    if (!changeResolution.ok) {
+      recordControlRejection(deps, input, data, changeResolution.safeReason);
+      return;
+    }
     const registry = getTaskRegistry(input.state, input.goalId);
     const registered = registry.registerTaskList(validation.tasks);
+    if (changeResolution.changeId) {
+      for (const task of validation.tasks) {
+        changeRegistry.registerTask(changeResolution.changeId, task.id);
+      }
+    }
     deps.eventRepo.create({
       goalId: input.goalId,
       runId: input.runId,
@@ -476,6 +496,7 @@ async function persistDelegationControlEvent(
         delegationControlEvent: undefined,
         runtimeEventType: "supervisor.task_list",
         taskList: validation.tasks,
+        ...(changeResolution.changeId ? { changeId: changeResolution.changeId } : {}),
         ...(registered.ignoredMutations.length > 0
           ? { ignoredCriteriaMutations: registered.ignoredMutations }
           : {}),
@@ -519,6 +540,61 @@ async function persistDelegationControlEvent(
   }
 
   if (validation.kind === "change_plan") {
+    const changeRegistry = getChangeRegistry(input.state, input.goalId);
+    const planGate = changeRegistry.registerPlan(validation.plan.changes);
+    if (!planGate.ok) {
+      recordControlRejection(deps, input, data, planGate.safeReason);
+      return;
+    }
+
+    if (input.state.openSpec.mode() === "degraded" && !input.state.openspecDowngradeReported.has(input.goalId)) {
+      input.state.openspecDowngradeReported.add(input.goalId);
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        runId: input.runId,
+        type: "agent.progress",
+        message: "OpenSpec CLI unavailable; using internal templates and structural checks.",
+        data: {
+          ...data,
+          delegationControlEvent: undefined,
+          runtimeEventType: "runtime.openspec_unavailable",
+        },
+      });
+    }
+
+    const orderedChanges = changeRegistry.listChanges();
+    const scaffolds = orderedChanges.map((change) => {
+      const scaffold = input.state.openSpec.scaffoldChange({
+        cwd: input.state.supervisorCwd,
+        change: {
+          id: change.id,
+          title: change.title,
+          rationale: change.rationale,
+          dependsOn: change.dependsOn.length > 0 ? change.dependsOn : null,
+        },
+      });
+      return {
+        changeId: change.id,
+        ok: scaffold.ok,
+        committed: scaffold.committed,
+        ...(scaffold.safeReason ? { safeReason: scaffold.safeReason } : {}),
+      };
+    });
+
+    const specTasks = orderedChanges.map((change) => ({
+      taskId: specTaskId(change.id),
+      changeId: change.id,
+      acceptance: specTaskAcceptance(change.id),
+    }));
+    getTaskRegistry(input.state, input.goalId).registerTaskList(
+      specTasks.map((task) => ({
+        id: task.taskId,
+        title: `Author OpenSpec artifacts for change ${task.changeId}`,
+        acceptance: task.acceptance,
+        parentTaskId: null,
+      })),
+    );
+
     deps.eventRepo.create({
       goalId: input.goalId,
       runId: input.runId,
@@ -529,8 +605,26 @@ async function persistDelegationControlEvent(
         delegationControlEvent: undefined,
         runtimeEventType: "supervisor.change_plan",
         changePlan: validation.plan.changes,
+        specTasks,
+        openspecScaffolds: scaffolds,
       },
     });
+
+    const active = changeRegistry.activeChange();
+    if (active) {
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        runId: input.runId,
+        type: "agent.progress",
+        message: `Change ${active.id} activated.`,
+        data: {
+          ...data,
+          delegationControlEvent: undefined,
+          runtimeEventType: "change.activated",
+          changeId: active.id,
+        },
+      });
+    }
     return;
   }
 
@@ -548,6 +642,16 @@ async function persistDelegationControlEvent(
       },
     });
     return;
+  }
+
+  const changeRegistry = getChangeRegistry(input.state, input.goalId);
+  const changeResolution = changeRegistry.resolveChangeId(validation.request.changeId ?? null);
+  if (!changeResolution.ok) {
+    recordControlRejection(deps, input, data, changeResolution.safeReason);
+    return;
+  }
+  if (changeResolution.changeId && validation.request.taskId) {
+    changeRegistry.registerTask(changeResolution.changeId, validation.request.taskId);
   }
 
   const registry = getTaskRegistry(input.state, input.goalId);
@@ -600,6 +704,7 @@ async function persistDelegationControlEvent(
       prompt: validation.request.prompt,
       promptSummary: validation.request.promptSummary,
       taskId: validation.request.taskId,
+      changeId: changeResolution.changeId,
       acceptance: dispatchAcceptance,
       workerDelegationRequestId: validation.request.workerDelegationRequestId,
       adapter: childAgent.adapter,
