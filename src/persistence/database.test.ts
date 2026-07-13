@@ -148,6 +148,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "status",
     "prompt_summary",
     "task_id",
+    "acceptance",
     "result_summary",
     "detached_reason",
     "created_at",

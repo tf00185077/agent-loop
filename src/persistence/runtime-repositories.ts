@@ -25,6 +25,7 @@ import type {
   RunStatus,
   Step,
   StepStatus,
+  TaskAcceptanceCriterion,
   UpdateStepInput,
 } from "../domain/index.js";
 import type { AppDatabase } from "./database.js";
@@ -83,6 +84,7 @@ export interface CreateAgentRuntimeDelegationRequestInput {
   role: AgentRuntimeDelegationRole;
   promptSummary: string;
   taskId?: string | null;
+  acceptance?: TaskAcceptanceCriterion[] | null;
 }
 
 export interface AgentSessionRepositoryOptions {
@@ -565,6 +567,7 @@ export function createAgentSessionRepository(
         status: "requested",
         promptSummary: input.promptSummary,
         taskId: input.taskId ?? null,
+        acceptance: input.acceptance ?? null,
         resultSummary: null,
         detachedReason: null,
         createdAt: now,
@@ -583,6 +586,7 @@ export function createAgentSessionRepository(
           status,
           prompt_summary,
           task_id,
+          acceptance,
           result_summary,
           detached_reason,
           created_at,
@@ -599,6 +603,7 @@ export function createAgentSessionRepository(
           @status,
           @promptSummary,
           @taskId,
+          @acceptance,
           @resultSummary,
           @detachedReason,
           @createdAt,
@@ -609,6 +614,7 @@ export function createAgentSessionRepository(
         )
       `).run({
         ...request,
+        acceptance: request.acceptance ? JSON.stringify(request.acceptance) : null,
         resultSummary: null,
       });
       touchSession(input.parentSessionId);
@@ -904,6 +910,7 @@ function mapAgentRuntimeDelegationRequestRow(row: unknown): AgentRuntimeDelegati
     status: value.status as AgentRuntimeDelegationRequestStatus,
     promptSummary: value.prompt_summary!,
     taskId: value.task_id ?? null,
+    acceptance: value.acceptance ? (JSON.parse(value.acceptance) as TaskAcceptanceCriterion[]) : null,
     resultSummary: value.result_summary ? (JSON.parse(value.result_summary) as AgentRuntimeDelegationSummary) : null,
     detachedReason: value.detached_reason,
     createdAt: value.created_at!,

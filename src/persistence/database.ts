@@ -143,6 +143,7 @@ function initializeSchema(db: AppDatabase): void {
       status TEXT NOT NULL,
       prompt_summary TEXT NOT NULL,
       task_id TEXT,
+      acceptance TEXT,
       result_summary TEXT,
       detached_reason TEXT,
       created_at TEXT NOT NULL,
@@ -158,6 +159,7 @@ function initializeSchema(db: AppDatabase): void {
   ensureColumn(db, "provider_settings", "claude_command_path", "TEXT");
   ensureColumn(db, "agent_sessions", "worktree", "TEXT");
   ensureColumn(db, "agent_delegation_requests", "task_id", "TEXT");
+  ensureColumn(db, "agent_delegation_requests", "acceptance", "TEXT");
 }
 
 function ensureColumn(db: AppDatabase, table: string, column: string, type: string): void {

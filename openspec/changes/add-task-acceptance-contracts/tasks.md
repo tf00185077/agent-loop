@@ -8,8 +8,8 @@
 
 ## 2. Persistence
 
-- [ ] 2.1 Add tests + implementation: delegation requests persist `acceptance` (criteria snapshot JSON) and structured `resultSummary` fields via additive `ensureColumn` migration; repository read/write round-trips.
-- [ ] 2.2 Update database schema test for new columns.
+- [x] 2.1 Add tests + implementation: delegation requests persist `acceptance` (criteria snapshot JSON) and structured `resultSummary` fields via additive `ensureColumn` migration; repository read/write round-trips.
+- [x] 2.2 Update database schema test for new columns.
 
 ## 3. Task Registry + Backend Enforcement
 

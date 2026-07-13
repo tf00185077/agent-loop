@@ -409,10 +409,19 @@ test("records durable delegation request transitions and active child constraint
     parentSessionId: parent.id,
     role: "worker",
     promptSummary: "Run focused persistence tests.",
+    taskId: "task-1",
+    acceptance: [
+      { id: "A1", text: "Focused persistence tests pass." },
+      { id: "A2", text: "No unrelated files change." },
+    ],
   });
   const accepted = sessions.acceptDelegationRequest(requested.id);
   const running = sessions.startDelegationRequest(accepted.id, child.id);
 
+  assert.deepEqual(sessions.listDelegationRequests(parent.id)[0]?.acceptance, [
+    { id: "A1", text: "Focused persistence tests pass." },
+    { id: "A2", text: "No unrelated files change." },
+  ]);
   assert.equal(requested.status, "requested");
   assert.equal(accepted.status, "accepted");
   assert.equal(running.status, "running");
@@ -430,9 +439,18 @@ test("records durable delegation request transitions and active child constraint
   const completed = sessions.completeDelegationRequest(running.id, {
     kind: "success",
     safeSummary: "Worker finished the tests.",
+    criterionEvidence: [{ criterionId: "A1", evidence: "Focused suite passed 12/12." }],
+    tests: [{ command: "npm test -- persistence", exitCode: 0, summary: "12 passing" }],
+    claimedFiles: ["src/persistence/runtime-repositories.ts"],
+    attestedFiles: ["src/persistence/runtime-repositories.ts"],
+    filesDiscrepancy: false,
   });
   assert.equal(completed.status, "completed");
   assert.equal(completed.resultSummary?.kind, "success");
+  assert.deepEqual(completed.resultSummary?.criterionEvidence, [
+    { criterionId: "A1", evidence: "Focused suite passed 12/12." },
+  ]);
+  assert.deepEqual(completed.resultSummary?.attestedFiles, ["src/persistence/runtime-repositories.ts"]);
   assert.deepEqual(sessions.listDelegationRequests(parent.id), [completed]);
 
   db.close();
