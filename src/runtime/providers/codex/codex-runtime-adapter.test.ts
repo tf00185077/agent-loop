@@ -303,6 +303,11 @@ test("starts Codex exec JSONL process and completes from streamed final message"
   assert.ok(captured.args.includes("exec"));
   assert.ok(captured.args.includes("--json"));
   assert.ok(captured.args.includes("--skip-git-repo-check"));
+  // Managed sessions must be able to write inside their own cwd (workers run
+  // in isolated worktrees); the invocation pins the sandbox rather than
+  // depending on the machine's codex config defaults.
+  const sandboxIndex = captured.args.indexOf("--sandbox");
+  assert.equal(captured.args[sandboxIndex + 1], "workspace-write");
   const modelIndex = captured.args.indexOf("--model");
   assert.equal(captured.args[modelIndex + 1], "gpt-5-codex");
   assert.equal(captured.args.at(-1), "-");

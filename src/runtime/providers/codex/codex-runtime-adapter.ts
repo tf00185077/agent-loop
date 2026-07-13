@@ -174,7 +174,11 @@ async function* runCodexJsonlSession(input: CodexRuntimeSessionRunnerInput): Asy
 }
 
 function buildCodexManagedSessionArgs(input: CodexRuntimeSessionRunnerInput): string[] {
-  const args = ["exec", "--skip-git-repo-check", "--json"];
+  // Pin the sandbox instead of inheriting machine config defaults: managed
+  // sessions must write inside their own cwd (workers in isolated worktrees,
+  // review merges in the supervisor workspace), and a read-only default
+  // silently strands every file-producing delegation.
+  const args = ["exec", "--skip-git-repo-check", "--json", "--sandbox", "workspace-write"];
   const modelArgument = resolveCodexModelArgument(input.modelLabel);
   if (modelArgument) {
     args.push("--model", modelArgument);

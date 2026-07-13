@@ -483,7 +483,12 @@ async function persistDelegationControlEvent(
     const registered = registry.registerTaskList(validation.tasks);
     if (changeResolution.changeId) {
       for (const task of validation.tasks) {
-        changeRegistry.registerTask(changeResolution.changeId, task.id);
+        // Tasks already owned by another change (e.g. a later change's spec
+        // task in a plan-wide announcement) keep their ownership; inheriting
+        // them here would dilute one-active-change sequencing.
+        if (!changeRegistry.findChangeByTask(task.id)) {
+          changeRegistry.registerTask(changeResolution.changeId, task.id);
+        }
       }
     }
     deps.eventRepo.create({
@@ -691,10 +696,14 @@ async function persistDelegationControlEvent(
   let uncontracted = false;
   if (validation.request.role === "worker") {
     const task = validation.request.taskId ? registry.getTask(validation.request.taskId) : undefined;
-    if (task && task.attemptCount > 0) {
+    if (task && task.attemptCount > 0 && !specChange) {
       // Re-delegating a task implies its previous attempt was rejected. The
       // rejection is substantive only when the supervisor cites frozen
-      // criterion ids; otherwise it is just the next attempt.
+      // criterion ids; otherwise it is just the next attempt. Spec tasks are
+      // exempt: the backend already records their validation rejections
+      // deterministically, and the corrective re-delegation is expected to
+      // cite the failing criteria — counting it again would double-charge
+      // one failure against the retry budget.
       const verdict = registry.classifyVerdict(
         task.id,
         `${validation.request.prompt} ${validation.request.promptSummary}`,
@@ -718,6 +727,13 @@ async function persistDelegationControlEvent(
     }
     const gate = registry.gateWorkerDelegation(validation.request.taskId ?? null, dispatchAcceptance);
     if (!gate.ok) {
+      if (specChange && registry.getTask(specTaskId(specChange.id))?.status === "split") {
+        // Narrowing cannot apply to a backend-registered spec task: its S1-S3
+        // contract is frozen and change approval keys on this exact task id.
+        // Exhausting the spec budget blocks the change — and the goal (v1).
+        blockChangeAndGoal(deps, input, specChange.id, "spec authoring exhausted its retry budget");
+        return;
+      }
       recordControlRejection(deps, input, data, gate.safeReason);
       return;
     }
@@ -1082,6 +1098,46 @@ function tryArchiveActiveChange(deps: AgentSessionManagerDeps, input: PersistRun
       data: { ...baseData, runtimeEventType: "change.activated", changeId: next.id },
     });
   }
+}
+
+/** v1 rule: a blocked change blocks the goal, durably and visibly. */
+function blockChangeAndGoal(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  changeId: string,
+  reason: string,
+): void {
+  getChangeRegistry(input.state, input.goalId).markBlocked(changeId);
+  const finishedAt = new Date().toISOString();
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "agent.progress",
+    message: `Change ${changeId} blocked: ${reason}.`,
+    data: {
+      sessionId: input.sessionId,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType: "change.blocked",
+      changeId,
+      safeReason: reason,
+    },
+  });
+  deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "goal.blocked",
+    message: `Goal blocked: change ${changeId} ${reason}.`,
+    data: {
+      sessionId: input.sessionId,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType: "goal.blocked",
+      changeId,
+      safeReason: reason,
+    },
+  });
 }
 
 function recordControlRejection(

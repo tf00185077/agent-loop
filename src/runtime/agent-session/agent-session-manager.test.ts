@@ -2312,6 +2312,73 @@ test("tags task lists and delegations with the active change and persists change
   fixture.db.close();
 });
 
+test("keeps spec tasks owned by their own change when a task list spans changes", async () => {
+  const fixture = createManagerFixture("cross-change task list goal");
+  const openSpec = recordingOpenSpecService("cli");
+  const adapter = adapterWithEvents([
+    changePlanEvent([
+      { id: "change-one", title: "Change one", rationale: "First slice." },
+      { id: "change-two", title: "Change two", rationale: "Second slice.", dependsOn: ["change-one"] },
+    ]),
+    {
+      type: "progress",
+      sessionId: "session-placeholder",
+      goalId: fixture.goal.id,
+      runId: "run-placeholder",
+      message: "Announcing tasks across both changes.",
+      occurredAt: "2026-07-13T00:00:02.000Z",
+      metadata: {
+        delegationControlEvent: {
+          type: "managed_delegation.task_list",
+          tasks: [
+            { id: "task-1", title: "Implement change one", acceptance: [{ id: "A1", text: "Works." }] },
+            { id: "spec:change-two", title: "Author change two specs" },
+          ],
+        },
+      },
+    },
+    {
+      // The later change's spec task must stay owned by change-two: delegating
+      // it while change-one is active is out-of-order work.
+      type: "progress",
+      sessionId: "session-placeholder",
+      goalId: fixture.goal.id,
+      runId: "run-placeholder",
+      message: "Delegating the later spec task early.",
+      occurredAt: "2026-07-13T00:00:03.000Z",
+      metadata: {
+        delegationControlEvent: {
+          type: "managed_delegation.request",
+          role: "worker",
+          taskId: "spec:change-two",
+          prompt: "Author the change-two specs.",
+          summary: "Author the change-two specs.",
+        },
+      },
+    },
+  ]);
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  const result = await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const rejection = events.find((event) => event.data.runtimeEventType === "delegation.rejected");
+  assert.ok(rejection, "expected the early cross-change spec delegation to be rejected");
+  assert.match(String(rejection.data.safeReason), /change-two is not active/i);
+  assert.equal(fixture.agentSessionRepo.listDelegationRequests(result.session.id).length, 0);
+
+  fixture.db.close();
+});
+
 test("rejects task lists and delegations referencing a change that is not active", async () => {
   const fixture = createManagerFixture("out-of-order change goal");
   const openSpec = recordingOpenSpecService("cli");
@@ -2581,6 +2648,231 @@ test("rejects spec-writer results whose worktree artifacts fail validation citin
   assert.equal(openSpec.validated[0]!.changeId, "change-one");
   assert.match(openSpec.validated[0]!.cwd, /^C:\\worktrees\\/);
   assert.ok(!events.some((event) => event.data.runtimeEventType === "change.spec_approved"));
+
+  fixture.db.close();
+});
+
+test("does not double-count a backend validation rejection when the supervisor re-delegates citing criteria", async () => {
+  const fixture = createManagerFixture("spec retry goal");
+  const openSpec = recordingOpenSpecService("cli", {
+    validateFailures: [["tasks.md contains no tasks"]],
+  });
+  let supervisorStarted = false;
+  let releaseParent!: () => void;
+  const parentReleased = new Promise<void>((resolve) => {
+    releaseParent = resolve;
+  });
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Spec artifacts authored.",
+            occurredAt: "2026-07-13T00:00:03.000Z",
+          },
+        ]);
+      }
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
+      return {
+        ...createHandle(input.sessionId, []),
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true },
+        async *events() {
+          yield {
+            ...changePlanEvent([
+              { id: "change-one", title: "Change one", rationale: "First slice." },
+              { id: "change-two", title: "Change two", rationale: "Second slice." },
+            ]),
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+          } satisfies AgentRuntimeEvent;
+          yield {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Delegating spec authoring.",
+            occurredAt: "2026-07-13T00:00:02.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "worker",
+                taskId: "spec:change-one",
+                prompt: "Author the OpenSpec artifacts.",
+                summary: "Author change-one specs.",
+              },
+            },
+          } satisfies AgentRuntimeEvent;
+          await parentReleased;
+          // The corrective re-delegation cites the failing criteria, as the
+          // rejection prompt teaches. It must not burn a second rejection.
+          yield {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Retrying spec authoring.",
+            occurredAt: "2026-07-13T00:00:05.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "worker",
+                taskId: "spec:change-one",
+                prompt: "S1 and S3 failed: tasks.md had no tasks. Author every artifact this time.",
+                summary: "Retry change-one specs fixing S1/S3.",
+              },
+            },
+          } satisfies AgentRuntimeEvent;
+        },
+        async send() {
+          releaseParent();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  const result = await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(
+    () =>
+      fixture.agentSessionRepo
+        .listDelegationRequests(result.session.id)
+        .filter((request) => request.taskId === "spec:change-one").length === 2,
+  );
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const rejections = events.filter((event) => event.data.runtimeEventType === "task.rejection_recorded");
+  assert.equal(rejections.length, 1, "only the backend validation rejection should be recorded");
+  assert.ok(!events.some((event) => event.data.runtimeEventType === "delegation.rejected"));
+  const requests = fixture.agentSessionRepo
+    .listDelegationRequests(result.session.id)
+    .filter((request) => request.taskId === "spec:change-one");
+  assert.equal(requests.length, 2, "the corrective re-delegation must dispatch");
+
+  fixture.db.close();
+});
+
+test("blocks the change and goal when spec authoring exhausts its retry budget", async () => {
+  const fixture = createManagerFixture("spec budget goal");
+  const openSpec = recordingOpenSpecService("cli", {
+    validateFailures: [["tasks.md contains no tasks"], ["tasks.md contains no tasks"]],
+  });
+  let supervisorStarted = false;
+  const gates = Array.from({ length: 2 }, () => {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  });
+  let sendCount = 0;
+  const specDelegation = (
+    input: { sessionId: string; goalId: string; runId: string },
+    at: string,
+  ): AgentRuntimeEvent => ({
+    type: "progress",
+    sessionId: input.sessionId,
+    goalId: input.goalId,
+    runId: input.runId,
+    message: "Delegating spec authoring.",
+    occurredAt: at,
+    metadata: {
+      delegationControlEvent: {
+        type: "managed_delegation.request",
+        role: "worker",
+        taskId: "spec:change-one",
+        prompt: "Author the OpenSpec artifacts.",
+        summary: "Author change-one specs.",
+      },
+    },
+  });
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Spec artifacts authored.",
+            occurredAt: "2026-07-13T00:00:03.000Z",
+          },
+        ]);
+      }
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
+      return {
+        ...createHandle(input.sessionId, []),
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true },
+        async *events() {
+          yield {
+            ...changePlanEvent([
+              { id: "change-one", title: "Change one", rationale: "First slice." },
+              { id: "change-two", title: "Change two", rationale: "Second slice." },
+            ]),
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+          } satisfies AgentRuntimeEvent;
+          yield specDelegation(input, "2026-07-13T00:00:02.000Z");
+          await gates[0]!.promise;
+          yield specDelegation(input, "2026-07-13T00:00:05.000Z");
+          await gates[1]!.promise;
+          yield specDelegation(input, "2026-07-13T00:00:08.000Z");
+        },
+        async send() {
+          gates[sendCount++]?.release();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const blocked = events.find((event) => event.data.runtimeEventType === "change.blocked");
+  assert.ok(blocked, "expected a durable change.blocked event");
+  assert.equal(blocked.data.changeId, "change-one");
+  assert.ok(events.some((event) => event.type === "goal.blocked"));
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "blocked");
 
   fixture.db.close();
 });
