@@ -181,6 +181,19 @@ session by default:
    records a durable `runtime.managed_mode_downgraded` event and falls back to
    the previous one-shot provider run — visible, never silent.
 
+### Role Agent Assignments
+
+Provider setup can assign a different agent per child role — `worker`,
+`spec_writer`, and `review_merge` — each with its own provider, model label,
+and optional command path (auto-detected when blank). Roles left on inherit
+use the goal's selected provider, which also remains the supervisor's agent.
+Assignments are user policy resolved by the backend at dispatch: supervisor
+output cannot select providers. If an assigned agent is unavailable or cannot
+support managed execution, the backend records a durable
+`role_assignment.downgraded` event and the child runs on the goal provider.
+Child runs and delegation events record the provider/model that actually
+executed each role.
+
 ### Task Acceptance Contracts
 
 Every delegated task runs under a frozen acceptance contract, enforced by

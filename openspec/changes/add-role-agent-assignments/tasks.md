@@ -25,6 +25,6 @@
 
 ## 5. Verification
 
-- [ ] 5.1 Run typecheck and the full test suite; document any unrelated pre-existing failures.
-- [ ] 5.2 Update README (role assignment section) and run `openspec validate add-role-agent-assignments --strict`.
-- [ ] 5.3 Live mixed-provider smoke when both CLIs are available (Codex supervisor + Claude worker); capture resolved-agent evidence in `verification.md`.
+- [x] 5.1 Run typecheck and the full test suite; document any unrelated pre-existing failures. (384 tests, 0 failures; typecheck clean.)
+- [x] 5.2 Update README (role assignment section) and run `openspec validate add-role-agent-assignments --strict`.
+- [x] 5.3 Live mixed-provider smoke when both CLIs are available (Codex supervisor + Claude worker); capture resolved-agent evidence in `verification.md`. (Claude worker flake triggered the narrowing rule live; narrowed task succeeded on Claude.)
