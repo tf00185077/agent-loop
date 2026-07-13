@@ -110,7 +110,9 @@ export function createMockRuntime(deps: MockRuntimeDeps): MockRuntime {
     },
     gate: {
       async vote(input) {
-        const isDone = input.implementation.step === "Execute mock result";
+        const isDone =
+          input.implementation.step === "Execute mock result" ||
+          input.implementation.step === "Proceed with the first mock sub-step";
         const ballots = isDone
           ? [
               {

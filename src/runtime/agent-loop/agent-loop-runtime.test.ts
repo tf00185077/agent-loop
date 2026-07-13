@@ -23,7 +23,31 @@ function setup() {
   return { db, goalRepo, runRepo, stepRepo, eventRepo };
 }
 
-test("agent loop persists planner decision and closes a direct step without a gate vote", async () => {
+function gateVote(decision: "done" | "not_done", reason: string) {
+  const isDone = decision === "done";
+  return {
+    proposition: "Does the current result satisfy the goal?",
+    decision,
+    isDone,
+    tally: {
+      done: isDone ? 2 : 1,
+      notDone: isDone ? 1 : 2,
+      abstain: 0,
+      total: 3,
+      majorityReached: isDone,
+    },
+    ballots: [
+      {
+        voterId: "codex-local",
+        providerKind: "codex-local",
+        decision,
+        reason,
+      },
+    ],
+  };
+}
+
+test("agent loop persists planner decision and closes a direct step with a done gate vote", async () => {
   const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
   const goal = goalRepo.create({
     title: "Ship the loop",
@@ -59,8 +83,10 @@ test("agent loop persists planner decision and closes a direct step without a ga
       },
     },
     gate: {
-      async vote() {
-        throw new Error("Gate should not run for direct implementation");
+      async vote(input) {
+        assert.equal(input.step.title, "Write the first loop step");
+        assert.equal(input.implementation.result, "Implemented the first loop step");
+        return gateVote("done", "The direct step satisfies the goal.");
       },
     },
   });
@@ -76,6 +102,7 @@ test("agent loop persists planner decision and closes a direct step without a ga
       "agent.decision",
       "agent.message",
       "step.completed",
+      "gate.voted",
       "run.completed",
       "goal.completed",
     ],
@@ -105,7 +132,9 @@ test("agent loop persists planner decision and closes a direct step without a ga
     step: "Write the first loop step",
   });
 
-  assert.equal(events.some((event) => event.type === "gate.voted"), false);
+  const gateEvent = events.find((event) => event.type === "gate.voted");
+  assert.equal(gateEvent?.data.isDone, true);
+  assert.equal(Array.isArray(gateEvent?.data.ballots), true);
   assert.equal(events.some((event) => event.type === "scope.voted"), false);
 
   db.close();
@@ -283,7 +312,7 @@ test("agent loop carries planner and voter reasons into the next refinement roun
     },
     gate: {
       async vote() {
-        throw new Error("Completion gate should not run for direct implementation");
+        return gateVote("done", "The narrowed step satisfies the goal.");
       },
     },
     scopeGate: {
@@ -364,8 +393,9 @@ test("agent loop proceeds directly to implementation when scope voters reject re
       },
     },
     gate: {
-      async vote() {
-        throw new Error("Completion gate should not run for accepted scope");
+      async vote(input) {
+        assert.equal(input.step.title, "Implement accepted broad step");
+        return gateVote("done", "The accepted broad step satisfies the goal.");
       },
     },
     scopeGate: {
@@ -466,6 +496,176 @@ test("agent loop blocks when scope refinement rounds are exhausted", async () =>
     reason: "Scope refinement exhausted after 1 rounds",
     maxScopeRefinementRounds: 1,
   });
+
+  db.close();
+});
+
+test("agent loop continues past a not_done gate vote and records every vote durably", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const goal = goalRepo.create({
+    title: "Iterate until done",
+    description: "The gate decides completion, not the first implemented step",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+  let plannerCalls = 0;
+
+  const runtime = createAgentLoopRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    metadata: { provider: "fake-loop", model: "fake-model" },
+    maxSteps: 3,
+    planner: {
+      async plan(input) {
+        plannerCalls += 1;
+        assert.equal(input.priorSteps.length, plannerCalls - 1);
+        return {
+          decision: "IMPLEMENT_DIRECTLY",
+          nextStep: `Step ${plannerCalls}`,
+          reason: "Keep iterating",
+        };
+      },
+    },
+    implementer: {
+      async implement(input) {
+        return { step: input.step, result: `Did ${input.step}` };
+      },
+    },
+    gate: {
+      async vote(input) {
+        return input.step.title === "Step 2"
+          ? gateVote("done", "The second step finished the goal.")
+          : gateVote("not_done", "More work remains.");
+      },
+    },
+  });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  const gateEvents = events.filter((event) => event.type === "gate.voted");
+  assert.equal(plannerCalls, 2);
+  assert.equal(gateEvents.length, 2);
+  assert.equal(gateEvents[0]?.data.isDone, false);
+  assert.equal(gateEvents[1]?.data.isDone, true);
+  const runId = events[0]?.runId;
+  assert.ok(runId);
+  assert.equal(stepRepo.listForRun(runId).length, 2);
+  assert.equal(goalRepo.getById(goal.id)?.status, "completed");
+
+  db.close();
+});
+
+test("agent loop blocks at maxSteps when the gate never judges the goal done", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const goal = goalRepo.create({
+    title: "Never done",
+    description: "Bounds terminate the loop when the gate never approves",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+
+  const runtime = createAgentLoopRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    metadata: { provider: "fake-loop", model: "fake-model" },
+    maxSteps: 2,
+    planner: {
+      async plan(input) {
+        return {
+          decision: "IMPLEMENT_DIRECTLY",
+          nextStep: `Step ${input.priorSteps.length + 1}`,
+          reason: "Keep iterating",
+        };
+      },
+    },
+    implementer: {
+      async implement(input) {
+        return { step: input.step, result: `Did ${input.step}` };
+      },
+    },
+    gate: {
+      async vote() {
+        return gateVote("not_done", "Never satisfied.");
+      },
+    },
+  });
+
+  await runtime.run(goal.id);
+
+  const events = eventRepo.listForGoal(goal.id);
+  const runId = events[0]?.runId;
+  assert.ok(runId);
+  assert.equal(stepRepo.listForRun(runId).length, 2);
+  assert.equal(goalRepo.getById(goal.id)?.status, "blocked");
+  assert.deepEqual(events.at(-1)?.data, {
+    goalId: goal.id,
+    runId,
+    terminalState: "bounded",
+    bound: "maxSteps",
+    maxSteps: 2,
+  });
+
+  db.close();
+});
+
+test("agent loop enqueues decomposition sub-steps and consumes them in order", async () => {
+  const { db, goalRepo, runRepo, stepRepo, eventRepo } = setup();
+  const goal = goalRepo.create({
+    title: "Queue sub-steps",
+    description: "DECOMPOSE enqueues work instead of only re-planning",
+  });
+  goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
+  let plannerCalls = 0;
+  const implemented: string[] = [];
+
+  const runtime = createAgentLoopRuntime({
+    goalRepo,
+    runRepo,
+    stepRepo,
+    eventRepo,
+    metadata: { provider: "fake-loop", model: "fake-model" },
+    maxSteps: 4,
+    maxDepth: 1,
+    planner: {
+      async plan() {
+        plannerCalls += 1;
+        return {
+          decision: "DECOMPOSE",
+          subSteps: ["First sub-step", "Second sub-step"],
+          reason: "Split into two children",
+        };
+      },
+    },
+    implementer: {
+      async implement(input) {
+        implemented.push(input.step);
+        return { step: input.step, result: `Did ${input.step}` };
+      },
+    },
+    gate: {
+      async vote(input) {
+        return input.step.title === "Second sub-step"
+          ? gateVote("done", "Both sub-steps landed.")
+          : gateVote("not_done", "One sub-step remains.");
+      },
+    },
+  });
+
+  await runtime.run(goal.id);
+
+  assert.equal(plannerCalls, 1);
+  assert.deepEqual(implemented, ["First sub-step", "Second sub-step"]);
+  const runId = eventRepo.listForGoal(goal.id)[0]?.runId;
+  assert.ok(runId);
+  const steps = stepRepo.listForRun(runId);
+  assert.deepEqual(steps.map((step) => [step.title, step.order]), [
+    ["First sub-step", 1],
+    ["Second sub-step", 2],
+  ]);
+  assert.equal(goalRepo.getById(goal.id)?.status, "completed");
 
   db.close();
 });

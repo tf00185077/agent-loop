@@ -15,7 +15,7 @@ import type {
 import type { Implementer } from "./agent-implementer.js";
 import type { Planner, PlannerScopeRefinementContext } from "./agent-planner.js";
 import type { ModelProviderMetadata } from "../providers/model-provider.js";
-import { buildScopeVotedEventData } from "./quorum-voters.js";
+import { buildGateVotedEventData, buildScopeVotedEventData } from "./quorum-voters.js";
 
 export interface CompletionGateInput {
   goal: Goal;
@@ -96,144 +96,122 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
       let scopeAssessmentAttempt = 0;
       let scopeRefinementRound = 0;
       let scopeRefinementContext: PlannerScopeRefinementContext | undefined;
+      const queuedSubSteps: string[] = [];
       while (order <= maxSteps) {
-        const priorSteps = stepRepo.listForRun(run.id);
-        const decision = await planner.plan({ goal, priorSteps, scopeRefinementContext });
+        let stepTitle: string;
+        let stepDescription: string;
+        let plannedDecision: PlannerResult | null = null;
 
-        if (decision.decision === "DECOMPOSE") {
-          eventRepo.create({
-            goalId,
-            runId: run.id,
-            type: "agent.decision",
-            message: `Planner decision: ${decision.decision}`,
-            data: plannerDecisionData(decision),
-          });
-          if (decision.scopeAssessment === "too_large") {
-            scopeAssessmentAttempt += 1;
-            if (scopeAssessmentAttempt < maxScopeAssessmentAttempts) {
-              continue;
-            }
-            const vote = await runScopeGate({
-              goal,
-              decision,
-              assessmentAttempt: scopeAssessmentAttempt,
-              refinementRound: scopeRefinementRound,
-              scopeGate,
-            });
+        if (queuedSubSteps.length > 0) {
+          stepTitle = queuedSubSteps.shift()!;
+          stepDescription = "Queued sub-step from decomposition";
+        } else {
+          const priorSteps = stepRepo.listForRun(run.id);
+          const decision = await planner.plan({ goal, priorSteps, scopeRefinementContext });
+
+          if (decision.decision === "DECOMPOSE") {
             eventRepo.create({
               goalId,
               runId: run.id,
-              type: "scope.voted",
-              message: `Scope voted: ${vote.decision}`,
-              data: buildScopeVotedEventData(vote),
+              type: "agent.decision",
+              message: `Planner decision: ${decision.decision}`,
+              data: plannerDecisionData(decision),
             });
-            if (vote.shouldRefine) {
-              scopeRefinementRound += 1;
-              if (scopeRefinementRound >= maxScopeRefinementRounds) {
-                finishScopeRefinementExhausted({
-                  goalId,
-                  runId: run.id,
-                  maxScopeRefinementRounds,
-                  goalRepo,
-                  runRepo,
-                  eventRepo,
-                });
-                return;
+            if (decision.scopeAssessment === "too_large") {
+              scopeAssessmentAttempt += 1;
+              if (scopeAssessmentAttempt < maxScopeAssessmentAttempts) {
+                continue;
               }
-              scopeAssessmentAttempt = 0;
-              scopeRefinementContext = {
+              const vote = await runScopeGate({
+                goal,
+                decision,
                 assessmentAttempt: scopeAssessmentAttempt,
                 refinementRound: scopeRefinementRound,
-                previousPlannerReason: decision.reason,
-                previousVoterReason: scopeVoteReason(vote),
-              };
+                scopeGate,
+              });
+              eventRepo.create({
+                goalId,
+                runId: run.id,
+                type: "scope.voted",
+                message: `Scope voted: ${vote.decision}`,
+                data: buildScopeVotedEventData(vote),
+              });
+              if (vote.shouldRefine) {
+                scopeRefinementRound += 1;
+                if (scopeRefinementRound >= maxScopeRefinementRounds) {
+                  finishScopeRefinementExhausted({
+                    goalId,
+                    runId: run.id,
+                    maxScopeRefinementRounds,
+                    goalRepo,
+                    runRepo,
+                    eventRepo,
+                  });
+                  return;
+                }
+                scopeAssessmentAttempt = 0;
+                scopeRefinementContext = {
+                  assessmentAttempt: scopeAssessmentAttempt,
+                  refinementRound: scopeRefinementRound,
+                  previousPlannerReason: decision.reason,
+                  previousVoterReason: scopeVoteReason(vote),
+                };
+                continue;
+              }
+              scopeAssessmentAttempt = 0;
+              queuedSubSteps.push(...decision.subSteps);
               continue;
             }
-            const acceptedStep = decision.subSteps[0] ?? decision.reason;
-            const step = stepRepo.create({
-              goalId,
-              runId: run.id,
-              title: acceptedStep,
-              description: decision.reason,
-              order,
-            });
-            eventRepo.create({
-              goalId,
-              runId: run.id,
-              stepId: step.id,
-              type: "step.started",
-              message: `Step started: ${step.title}`,
-              data: { stepId: step.id },
-            });
-            const implementation = await implementer.implement({ goal, step: acceptedStep });
-            eventRepo.create({
-              goalId,
-              runId: run.id,
-              stepId: step.id,
-              type: "agent.message",
-              message: implementation.result,
-              data: {
-                stepId: step.id,
-                role: "implementer",
-                step: implementation.step,
-              },
-            });
-            stepRepo.update(step.id, { status: "completed", result: implementation.result });
-            eventRepo.create({
-              goalId,
-              runId: run.id,
-              stepId: step.id,
-              type: "step.completed",
-              message: `Step completed: ${step.title}`,
-              data: { stepId: step.id },
-            });
-            finishCompleted({ goalId, runId: run.id, metadata, goalRepo, runRepo, eventRepo });
-            return;
+            if (depth >= maxDepth) {
+              finishBounded({
+                goalId,
+                runId: run.id,
+                bound: "maxDepth",
+                value: maxDepth,
+                goalRepo,
+                runRepo,
+                eventRepo,
+              });
+              return;
+            }
+            depth += 1;
+            queuedSubSteps.push(...decision.subSteps);
+            continue;
           }
-          if (depth >= maxDepth) {
-            finishBounded({
+
+          if (decision.decision === "BLOCKED") {
+            eventRepo.create({
               goalId,
               runId: run.id,
-              bound: "maxDepth",
-              value: maxDepth,
+              type: "agent.decision",
+              message: `Planner decision: ${decision.decision}`,
+              data: plannerDecisionData(decision),
+            });
+            finishBlocked({
+              goalId,
+              runId: run.id,
+              reason: decision.reason,
               goalRepo,
               runRepo,
               eventRepo,
             });
             return;
           }
-          depth += 1;
-          continue;
-        }
 
-        if (decision.decision === "BLOCKED") {
-          eventRepo.create({
-            goalId,
-            runId: run.id,
-            type: "agent.decision",
-            message: `Planner decision: ${decision.decision}`,
-            data: plannerDecisionData(decision),
-          });
-          finishBlocked({
-            goalId,
-            runId: run.id,
-            reason: decision.reason,
-            goalRepo,
-            runRepo,
-            eventRepo,
-          });
-          return;
-        }
+          if (decision.decision !== "IMPLEMENT_DIRECTLY") {
+            throw new Error(`Unsupported loop decision for this step: ${decision.decision}`);
+          }
 
-        if (decision.decision !== "IMPLEMENT_DIRECTLY") {
-          throw new Error(`Unsupported loop decision for this step: ${decision.decision}`);
+          stepTitle = decision.nextStep;
+          stepDescription = decision.reason;
+          plannedDecision = decision;
         }
 
         const step = stepRepo.create({
           goalId,
           runId: run.id,
-          title: decision.nextStep,
-          description: decision.reason,
+          title: stepTitle,
+          description: stepDescription,
           order,
         });
 
@@ -246,16 +224,18 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
           data: { stepId: step.id },
         });
 
-        eventRepo.create({
-          goalId,
-          runId: run.id,
-          stepId: step.id,
-          type: "agent.decision",
-          message: `Planner decision: ${decision.decision}`,
-          data: plannerDecisionData(decision),
-        });
+        if (plannedDecision) {
+          eventRepo.create({
+            goalId,
+            runId: run.id,
+            stepId: step.id,
+            type: "agent.decision",
+            message: `Planner decision: ${plannedDecision.decision}`,
+            data: plannerDecisionData(plannedDecision),
+          });
+        }
 
-        const implementation = await implementer.implement({ goal, step: decision.nextStep });
+        const implementation = await implementer.implement({ goal, step: stepTitle });
         eventRepo.create({
           goalId,
           runId: run.id,
@@ -269,7 +249,10 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
           },
         });
 
-        stepRepo.update(step.id, { status: "completed", result: implementation.result });
+        const completedStep = stepRepo.update(step.id, {
+          status: "completed",
+          result: implementation.result,
+        });
         eventRepo.create({
           goalId,
           runId: run.id,
@@ -279,8 +262,20 @@ export function createAgentLoopRuntime(deps: AgentLoopRuntimeDeps): AgentLoopRun
           data: { stepId: step.id },
         });
 
-        finishCompleted({ goalId, runId: run.id, metadata, goalRepo, runRepo, eventRepo });
-        return;
+        const vote = await deps.gate.vote({ goal, step: completedStep, implementation });
+        eventRepo.create({
+          goalId,
+          runId: run.id,
+          stepId: step.id,
+          type: "gate.voted",
+          message: `Completion gate voted: ${vote.decision}`,
+          data: buildGateVotedEventData(vote),
+        });
+        if (vote.isDone) {
+          finishCompleted({ goalId, runId: run.id, metadata, goalRepo, runRepo, eventRepo });
+          return;
+        }
+        order += 1;
       }
 
       finishBounded({

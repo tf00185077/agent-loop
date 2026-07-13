@@ -1391,9 +1391,11 @@ describe("Backend API", () => {
         });
         assert.equal(res.status, 200);
 
-        const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
+        // With maxSteps=1 the gate judges the first step not done, so the
+        // loop terminates at the bound instead of silently completing.
+        const { events } = await waitForEvent(providerServer.url, created.id, "goal.blocked");
         assert.equal(events.filter((candidate) => candidate.type === "step.completed").length, 1);
-        assert.equal(events.some((candidate) => candidate.type === "gate.voted"), false);
+        assert.equal(events.filter((candidate) => candidate.type === "gate.voted").length, 1);
       } finally {
         await providerServer.close();
       }
@@ -1461,18 +1463,18 @@ describe("Backend API", () => {
 
         const { events } = await waitForEvent(providerServer.url, created.id, "goal.completed");
         const types = events.map((event) => event.type);
-        assert.equal(types.filter((type) => type === "step.completed").length, 1);
+        assert.equal(types.filter((type) => type === "step.completed").length, 2);
         assert.deepEqual(
           events
             .filter((event) => event.type === "agent.decision")
             .map((event) => (event.data as Record<string, unknown>).nextStep),
-          ["Analyze goal"],
+          ["Analyze goal", "Execute mock result"],
         );
         assert.deepEqual(
           events.filter((event) => event.type === "agent.message").map((event) => event.message),
-          ["Completed: Analyze goal"],
+          ["Completed: Analyze goal", "Completed: Execute mock result"],
         );
-        assert.equal(events.some((event) => event.type === "gate.voted"), false);
+        assert.equal(types.filter((type) => type === "gate.voted").length, 2);
         assert.equal(events.some((event) => event.type === "scope.voted"), false);
         assert.equal(types.at(-1), "goal.completed");
       } finally {

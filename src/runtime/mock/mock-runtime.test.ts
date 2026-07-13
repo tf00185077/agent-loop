@@ -68,7 +68,7 @@ test("happy path event timeline covers full lifecycle", async () => {
   db.close();
 });
 
-test("mock runtime drives a deterministic direct work item", async () => {
+test("mock runtime drives a deterministic two-step gated loop", async () => {
   const { db, goalRepo, eventRepo, runtime } = setup();
 
   const goal = goalRepo.create({ title: "Loop deterministically", description: "Use the mock loop" });
@@ -85,30 +85,39 @@ test("mock runtime drives a deterministic direct work item", async () => {
     "agent.decision",
     "agent.message",
     "step.completed",
+    "gate.voted",
+    "step.started",
+    "agent.decision",
+    "agent.message",
+    "step.completed",
+    "gate.voted",
     "run.completed",
     "goal.completed",
   ]);
   assert.deepEqual(
     events.filter((event) => event.type === "agent.decision").map((event) => event.data.nextStep),
-    ["Analyze goal"],
+    ["Analyze goal", "Execute mock result"],
   );
-  assert.equal(events.some((event) => event.type === "gate.voted"), false);
   assert.equal(events.some((event) => event.type === "scope.voted"), false);
   assert.equal(goalRepo.getById(goal.id)?.status, "completed");
 
   db.close();
 });
 
-test("mock runtime does not record gate voter ballots after direct implementation", async () => {
+test("mock runtime records gate voter ballots for every implemented step", async () => {
   const { db, goalRepo, eventRepo, runtime } = setup();
 
-  const goal = goalRepo.create({ title: "Record mock voters", description: "Direct implementation should not vote" });
+  const goal = goalRepo.create({ title: "Record mock voters", description: "Each implemented step is gated" });
   goalRepo.updateStatus(goal.id, "running", { startedAt: new Date().toISOString() });
 
   await runtime.run(goal.id);
 
   const gateVotes = eventRepo.listForGoal(goal.id).filter((event) => event.type === "gate.voted");
-  assert.equal(gateVotes.length, 0);
+  assert.equal(gateVotes.length, 2);
+  assert.equal(gateVotes[0]?.data.isDone, false);
+  assert.equal(gateVotes[1]?.data.isDone, true);
+  assert.equal(Array.isArray(gateVotes[0]?.data.ballots), true);
+  assert.equal((gateVotes[0]?.data.ballots as unknown[]).length, 3);
 
   db.close();
 });

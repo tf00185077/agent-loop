@@ -38,10 +38,10 @@
 
 ## 6. Agent-Loop Spec Conformance (mock path)
 
-- [ ] 6.1 Add agent-loop tests: completion gate is invoked after each implemented step; `not_done` majority continues the loop within bounds; `done` majority completes; each vote is recorded durably.
-- [ ] 6.2 Implement gate invocation in `agent-loop-runtime.ts` and remove the unconditional finish-after-first-step behavior.
-- [ ] 6.3 Add tests and implementation for `DECOMPOSE` sub-step queueing: sub-steps are enqueued and consumed in order instead of only re-planning.
-- [ ] 6.4 Update mock runtime defaults/tests so the deterministic demo path still terminates predictably.
+- [x] 6.1 Add agent-loop tests: completion gate is invoked after each implemented step; `not_done` majority continues the loop within bounds; `done` majority completes; each vote is recorded durably.
+- [x] 6.2 Implement gate invocation in `agent-loop-runtime.ts` and remove the unconditional finish-after-first-step behavior.
+- [x] 6.3 Add tests and implementation for `DECOMPOSE` sub-step queueing: sub-steps are enqueued and consumed in order instead of only re-planning.
+- [x] 6.4 Update mock runtime defaults/tests so the deterministic demo path still terminates predictably.
 
 ## 7. Docs + Verification
 
