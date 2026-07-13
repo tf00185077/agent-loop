@@ -766,8 +766,11 @@ async function persistDelegationControlEvent(
       adapter: childAgent.adapter,
       eventData: { ...data, ...(uncontracted ? { uncontracted: true } : {}) },
       onChildOutcome: async (outcome) => {
-        recordChildOutcomeInRegistry(deps, input, outcome);
-        await continueSupervisorAfterChild(deps, input, outcome.observation, {
+        const backendRejection = recordChildOutcomeInRegistry(deps, input, outcome);
+        const observation = backendRejection
+          ? `${outcome.observation}\n\nBackend validation rejected this result. Failing checks: ${backendRejection}`
+          : outcome.observation;
+        await continueSupervisorAfterChild(deps, input, observation, {
           delegationRequestId: outcome.delegationRequestId,
           childSessionId: outcome.childSessionId,
         });
@@ -844,16 +847,24 @@ async function resolveChildAgent(
 
 const REVIEW_REJECTION_OUTCOMES = new Set(["rejected", "test_failed_reverted", "verification_failed"]);
 
+/**
+ * Returns the backend rejection summary when the child result was rejected by
+ * a deterministic gate (so the supervisor's continuation can carry it), or
+ * null when the outcome was recorded as-is.
+ */
 function recordChildOutcomeInRegistry(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
   outcome: SupervisorContinuationInput,
-): void {
+): string | null {
   const registry = getTaskRegistry(input.state, input.goalId);
   const changeRegistry = getChangeRegistry(input.state, input.goalId);
   if (outcome.role === "worker" && outcome.taskId) {
-    if (outcome.resultSummary.kind === "success" && rejectInvalidSpecResult(deps, input, outcome, registry)) {
-      return;
+    if (outcome.resultSummary.kind === "success") {
+      const specRejection = rejectInvalidSpecResult(deps, input, outcome, registry);
+      if (specRejection) {
+        return specRejection;
+      }
     }
     if (outcome.resultSummary.kind === "success" && (outcome.resultSummary.attestedFiles?.length ?? 0) > 0) {
       const change = changeRegistry.findChangeByTask(outcome.taskId);
@@ -861,10 +872,10 @@ function recordChildOutcomeInRegistry(
     }
     registry.recordOutcome(outcome.taskId, outcome.resultSummary);
     tryArchiveActiveChange(deps, input);
-    return;
+    return null;
   }
   if (outcome.role !== "review_merge" || !outcome.workerTaskId) {
-    return;
+    return null;
   }
   const rejecting =
     (outcome.reviewMergeOutcome !== null && REVIEW_REJECTION_OUTCOMES.has(outcome.reviewMergeOutcome)) ||
@@ -880,7 +891,7 @@ function recordChildOutcomeInRegistry(
         tryArchiveActiveChange(deps, input);
       }
     }
-    return;
+    return null;
   }
   const verdict = registry.classifyVerdict(outcome.workerTaskId, outcome.observation);
   if (verdict.substantive) {
@@ -899,7 +910,7 @@ function recordChildOutcomeInRegistry(
         rejectionCount: registry.getTask(outcome.workerTaskId)?.substantiveRejections,
       },
     });
-    return;
+    return null;
   }
   deps.eventRepo.create({
     goalId: input.goalId,
@@ -915,31 +926,33 @@ function recordChildOutcomeInRegistry(
       finding: verdict.deferredFinding,
     },
   });
+  return null;
 }
 
 /**
  * Pre-merge gate for spec-writer results: validate the OpenSpec artifacts in
  * the worker's worktree and convert failures into a substantive rejection
- * citing the frozen S1–S3 criteria. Returns true when the result was rejected.
+ * citing the frozen S1–S3 criteria. Returns the failure summary when the
+ * result was rejected, null otherwise.
  */
 function rejectInvalidSpecResult(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
   outcome: SupervisorContinuationInput,
   registry: GoalTaskRegistry,
-): boolean {
+): string | null {
   const taskId = outcome.taskId!;
   const changeRegistry = getChangeRegistry(input.state, input.goalId);
   const change = changeRegistry.findChangeByTask(taskId);
   if (!change || specTaskId(change.id) !== taskId) {
-    return false;
+    return null;
   }
   const validated = input.state.openSpec.validateChange({
     cwd: outcome.worktreePath ?? input.state.supervisorCwd,
     changeId: change.id,
   });
   if (validated.ok) {
-    return false;
+    return null;
   }
   const verdict = registry.classifyVerdict(taskId, specValidationVerdict(validated.failures));
   registry.recordOutcome(taskId, {
@@ -963,7 +976,7 @@ function rejectInvalidSpecResult(
       rejectionCount: registry.getTask(taskId)?.substantiveRejections,
     },
   });
-  return true;
+  return specValidationVerdict(validated.failures);
 }
 
 /**

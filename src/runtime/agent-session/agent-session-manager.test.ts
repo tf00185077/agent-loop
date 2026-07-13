@@ -2541,7 +2541,9 @@ test("appends the spec-writer appendix to spec task delegations without CLI work
   assert.match(prompt, /openspec\/changes\/change-one\/proposal\.md/);
   assert.match(prompt, /openspec\/changes\/change-one\/specs\//);
   assert.match(prompt, /openspec\/changes\/change-one\/tasks\.md/);
-  // Artifact templates with a filled example.
+  // Artifact templates with a filled example, including the delta header the
+  // strict validator requires.
+  assert.match(prompt, /## ADDED Requirements/);
   assert.match(prompt, /### Requirement:/);
   assert.match(prompt, /#### Scenario:/);
   assert.match(prompt, /\*\*WHEN\*\*/);
@@ -2657,6 +2659,7 @@ test("does not double-count a backend validation rejection when the supervisor r
   const openSpec = recordingOpenSpecService("cli", {
     validateFailures: [["tasks.md contains no tasks"]],
   });
+  const resumeMessages: string[] = [];
   let supervisorStarted = false;
   let releaseParent!: () => void;
   const parentReleased = new Promise<void>((resolve) => {
@@ -2735,7 +2738,8 @@ test("does not double-count a backend validation rejection when the supervisor r
             },
           } satisfies AgentRuntimeEvent;
         },
-        async send() {
+        async send(message) {
+          resumeMessages.push(message.message ?? "");
           releaseParent();
         },
       };
@@ -2768,6 +2772,12 @@ test("does not double-count a backend validation rejection when the supervisor r
     .listDelegationRequests(result.session.id)
     .filter((request) => request.taskId === "spec:change-one");
   assert.equal(requests.length, 2, "the corrective re-delegation must dispatch");
+  // The continuation observation carries the concrete failing checks so the
+  // corrective re-delegation can tell the next worker what to fix.
+  assert.ok(
+    resumeMessages.some((message) => message.includes("tasks.md contains no tasks")),
+    "continuation must carry the validation failure details",
+  );
 
   fixture.db.close();
 });

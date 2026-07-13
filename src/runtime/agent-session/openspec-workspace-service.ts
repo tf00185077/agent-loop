@@ -202,6 +202,9 @@ function structuralChecks(cwd: string, changeId: string): string[] {
   }
   for (const file of specFiles) {
     const content = readFileSync(file, "utf8");
+    if (!/^## (ADDED|MODIFIED|REMOVED|RENAMED) Requirements/m.test(content)) {
+      failures.push(`${file} needs a delta section header (e.g. "## ADDED Requirements")`);
+    }
     const requirements = content.split(/^### Requirement:/m).slice(1);
     if (requirements.length === 0) {
       failures.push(`${file} contains no requirements`);

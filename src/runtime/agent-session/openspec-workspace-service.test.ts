@@ -100,6 +100,24 @@ test("internal structural checks enforce scenarios and per-task acceptance", () 
   const valid = service.validateChange({ cwd, changeId: "change-core" });
   assert.deepEqual(valid, { ok: true, failures: [] });
 
+  // A spec file without a delta section header cannot validate as a change.
+  writeFileSync(
+    join(changeDir, "specs", "core-loop", "spec.md"),
+    [
+      "### Requirement: Players can move",
+      "The system SHALL let players move.",
+      "",
+      "#### Scenario: Move forward",
+      "- **WHEN** the player presses forward",
+      "- **THEN** the character advances",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const noDelta = service.validateChange({ cwd, changeId: "change-core" });
+  assert.equal(noDelta.ok, false);
+  assert.ok(noDelta.failures.some((failure) => /delta/i.test(failure)));
+
   // A requirement without a scenario fails S2.
   writeFileSync(
     join(changeDir, "specs", "core-loop", "spec.md"),
@@ -144,7 +162,7 @@ test("runs the CLI validator in cli mode and degrades on CLI failure", () => {
   mkdirSync(join(changeDir, "specs", "x"), { recursive: true });
   writeFileSync(
     join(changeDir, "specs", "x", "spec.md"),
-    ["### Requirement: R", "#### Scenario: S", "- **WHEN** a", "- **THEN** b", ""].join("\n"),
+    ["## ADDED Requirements", "", "### Requirement: R", "#### Scenario: S", "- **WHEN** a", "- **THEN** b", ""].join("\n"),
     "utf8",
   );
   writeFileSync(join(changeDir, "tasks.md"), "- [ ] 1.1 T\n  - Acceptance: A1: done.\n", "utf8");
