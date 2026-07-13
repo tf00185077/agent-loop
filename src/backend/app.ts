@@ -41,6 +41,7 @@ import {
   createAgentSessionManager,
   type AgentSessionManager,
 } from "../runtime/agent-session/agent-session-manager.js";
+import { createRoleAdapterResolver } from "./role-adapter-resolver.js";
 import { createAgentSessionRouter } from "./routes/agent-sessions.js";
 import { createGoalRouter } from "./routes/goals.js";
 import {
@@ -62,7 +63,7 @@ export interface CreateAppOptions {
   agentLoopMaxDepth?: number;
   agentLoopMaxScopeAssessmentAttempts?: number;
   agentLoopMaxScopeRefinementRounds?: number;
-  agentRuntimeAdapters?: Partial<Record<"codex-local" | "claude-local", AgentRuntimeAdapter>>;
+  agentRuntimeAdapters?: Partial<Record<"codex-local" | "claude-local" | "mock", AgentRuntimeAdapter>>;
   /** Test seams for the server-constructed Codex runtime adapter. */
   codexRuntimeCapabilityProbe?: CodexRuntimeCapabilityProbe;
   codexRuntimeSessionRunner?: CodexRuntimeSessionRunner;
@@ -89,6 +90,18 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     eventRepo,
     agentSessionRepo,
     maxSupervisorContinuations: options.maxSupervisorContinuations,
+    roleAdapterResolver: createRoleAdapterResolver({
+      getSettings: () => providerSettingsRepo.get(),
+      agentRuntimeAdapters: options.agentRuntimeAdapters,
+      codexCliDetection: options.codexCliDetection,
+      detectCodexCliCommand: options.detectCodexCliCommand,
+      claudeCliDetection: options.claudeCliDetection,
+      detectClaudeCliCommand: options.detectClaudeCliCommand,
+      codexRuntimeCapabilityProbe: options.codexRuntimeCapabilityProbe,
+      codexRuntimeSessionRunner: options.codexRuntimeSessionRunner,
+      claudeRuntimeCapabilityProbe: options.claudeRuntimeCapabilityProbe,
+      claudeRuntimeSessionRunner: options.claudeRuntimeSessionRunner,
+    }),
   });
   const runtime = createRuntimeFromSavedProviderSettings({
     env: options.env ?? process.env,

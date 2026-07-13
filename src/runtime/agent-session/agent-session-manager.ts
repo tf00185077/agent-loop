@@ -1,4 +1,5 @@
 import type {
+  AgentAssignableRole,
   AgentRuntimeAdapter,
   AgentRuntimeEvent,
   AgentRuntimeSession,
@@ -33,6 +34,17 @@ export interface AgentSessionManagerDeps {
    * session ended without a completion signal, per goal.
    */
   maxSupervisorContinuations?: number;
+  /**
+   * Resolves user-configured role→agent assignments for child dispatch.
+   * Returning null keeps the goal's default adapter.
+   */
+  roleAdapterResolver?: (role: AgentAssignableRole) => ResolvedRoleAgentLike | null;
+}
+
+export interface ResolvedRoleAgentLike {
+  adapter: AgentRuntimeAdapter;
+  providerId: string;
+  modelLabel: string | null;
 }
 
 export interface StartManagedSessionInput {
@@ -65,6 +77,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     completionlessContinuations: new Map(),
     lastRejectionReasons: new Map(),
     taskRegistries: new Map(),
+    roleResolutions: new Map(),
     maxSupervisorContinuations: deps.maxSupervisorContinuations ?? 10,
   };
 
@@ -201,6 +214,8 @@ interface SupervisorState {
   lastRejectionReasons: Map<string, string>;
   /** Per-goal frozen acceptance-contract registry. */
   taskRegistries: Map<string, GoalTaskRegistry>;
+  /** Per goal+role resolved child agent (null = use the goal default). */
+  roleResolutions: Map<string, ResolvedRoleAgentLike | null>;
   maxSupervisorContinuations: number;
 }
 
@@ -542,18 +557,20 @@ async function persistDelegationControlEvent(
     uncontracted = gate.uncontracted;
   }
 
+  const childAgent = await resolveChildAgent(deps, input, validation.request.role);
+
   try {
     await createDelegationCoordinator(deps).acceptAndStartWorker({
       parentSessionId: input.sessionId,
-      providerId: input.providerId,
-      modelLabel: input.modelLabel,
+      providerId: childAgent.providerId,
+      modelLabel: childAgent.modelLabel,
       role: validation.request.role,
       prompt: validation.request.prompt,
       promptSummary: validation.request.promptSummary,
       taskId: validation.request.taskId,
       acceptance: dispatchAcceptance,
       workerDelegationRequestId: validation.request.workerDelegationRequestId,
-      adapter: input.adapter,
+      adapter: childAgent.adapter,
       eventData: { ...data, ...(uncontracted ? { uncontracted: true } : {}) },
       onChildOutcome: async (outcome) => {
         recordChildOutcomeInRegistry(deps, input, outcome);
@@ -567,6 +584,69 @@ async function persistDelegationControlEvent(
     const safeReason = err instanceof Error ? err.message : "Delegation request rejected.";
     recordControlRejection(deps, input, data, safeReason);
   }
+}
+
+/**
+ * Resolve the agent a child role runs on: the user's role assignment when
+ * configured and capable, otherwise the goal's default adapter. Cached per
+ * goal+role; downgrades are durable.
+ */
+async function resolveChildAgent(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  role: "worker" | "review_merge",
+): Promise<ResolvedRoleAgentLike> {
+  const fallback: ResolvedRoleAgentLike = {
+    adapter: input.adapter,
+    providerId: input.providerId,
+    modelLabel: input.modelLabel,
+  };
+  if (!deps.roleAdapterResolver) {
+    return fallback;
+  }
+  const cacheKey = `${input.goalId}:${role}`;
+  const cached = input.state.roleResolutions.get(cacheKey);
+  if (cached !== undefined) {
+    return cached ?? fallback;
+  }
+
+  let resolved: ResolvedRoleAgentLike | null = null;
+  let downgradeReason: string | null = null;
+  try {
+    resolved = deps.roleAdapterResolver(role as AgentAssignableRole);
+    if (resolved) {
+      const capabilities = await resolved.adapter.detectCapabilities();
+      if (!capabilities.eventStreaming) {
+        downgradeReason =
+          capabilities.unsupportedReasons?.approval ??
+          "Assigned provider does not support managed execution.";
+        resolved = null;
+      }
+    }
+  } catch (err) {
+    downgradeReason = err instanceof Error ? err.message : "Role assignment resolution failed.";
+    resolved = null;
+  }
+
+  if (downgradeReason) {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: `Role assignment for ${role} downgraded to the goal provider.`,
+      data: {
+        sessionId: input.sessionId,
+        provider: input.providerId,
+        model: input.modelLabel,
+        runtimeEventType: "role_assignment.downgraded",
+        role,
+        reason: downgradeReason,
+      },
+    });
+  }
+
+  input.state.roleResolutions.set(cacheKey, resolved);
+  return resolved ?? fallback;
 }
 
 const REVIEW_REJECTION_OUTCOMES = new Set(["rejected", "test_failed_reverted", "verification_failed"]);

@@ -1735,6 +1735,170 @@ test("classifies review rejections as substantive or deferred by criterion citat
   }
 });
 
+test("dispatches children on role-resolved adapters and records the resolved agent", async () => {
+  const fixture = createManagerFixture("role assignment dispatch");
+  let resolverCalls = 0;
+  const childStarts: Array<{ provider: string; model: string | null }> = [];
+  let supervisorStarted = false;
+  const supervisorAdapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (supervisorStarted || input.parent?.sessionId) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
+      return createHandle(input.sessionId, [
+        delegationRequestEvent(input.sessionId, input.goalId, input.runId),
+        delegationRequestEvent(input.sessionId, input.goalId, input.runId),
+      ]);
+    },
+  };
+  const workerAdapter: AgentRuntimeAdapter = {
+    providerId: "claude-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: false };
+    },
+    async startSession(input) {
+      childStarts.push({ provider: input.providerId, model: input.modelLabel ?? null });
+      return createHandle(input.sessionId, [
+        {
+          type: "session.completed",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Worker finished.",
+          occurredAt: "2026-07-13T05:00:02.000Z",
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    roleAdapterResolver: (role) => {
+      resolverCalls += 1;
+      return role === "worker"
+        ? { adapter: workerAdapter, providerId: "claude-local", modelLabel: "claude-sonnet-4" }
+        : null;
+    },
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: supervisorAdapter,
+    prompt: "Delegate twice.",
+  });
+  await waitFor(() => childStarts.length === 2);
+  await waitFor(
+    () =>
+      fixture.eventRepo
+        .listForGoal(fixture.goal.id)
+        .filter((event) => event.data.continuationMode === "fresh").length === 2,
+  );
+
+  assert.deepEqual(childStarts, [
+    { provider: "claude-local", model: "claude-sonnet-4" },
+    { provider: "claude-local", model: "claude-sonnet-4" },
+  ]);
+  const started = fixture.eventRepo
+    .listForGoal(fixture.goal.id)
+    .filter((event) => event.data.runtimeEventType === "delegation.started");
+  assert.equal(started.length, 2);
+  assert.equal(started[0]?.data.childProvider, "claude-local");
+  assert.equal(started[0]?.data.childModel, "claude-sonnet-4");
+  const sessions = fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id);
+  const childSessions = sessions.filter((session) => session.parent?.sessionId);
+  assert.equal(childSessions.length, 2);
+  assert.equal(childSessions[0]?.providerId, "claude-local");
+  assert.equal(fixture.runRepo.getById(childSessions[0]!.runId)?.provider, "claude-local");
+  // Resolution is cached per goal+role across both delegations.
+  assert.equal(resolverCalls, 1);
+  fixture.db.close();
+});
+
+test("downgrades incapable role assignments to the goal adapter with a durable event", async () => {
+  const fixture = createManagerFixture("role assignment downgrade");
+  const childStarts: string[] = [];
+  let supervisorStarted = false;
+  const supervisorAdapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        childStarts.push(input.providerId);
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Worker finished.",
+            occurredAt: "2026-07-13T06:00:02.000Z",
+          },
+        ]);
+      }
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
+      return createHandle(input.sessionId, [
+        delegationRequestEvent(input.sessionId, input.goalId, input.runId),
+      ]);
+    },
+  };
+  const incapableAdapter: AgentRuntimeAdapter = {
+    providerId: "claude-local",
+    async detectCapabilities() {
+      return {
+        eventStreaming: false,
+        approval: false,
+        cancellation: false,
+        resume: false,
+        childSessions: false,
+        unsupportedReasons: { approval: "Claude print mode support could not be verified." },
+      };
+    },
+    async startSession() {
+      throw new Error("must not start on an incapable assignment");
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    roleAdapterResolver: () => ({
+      adapter: incapableAdapter,
+      providerId: "claude-local",
+      modelLabel: "claude-sonnet-4",
+    }),
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: supervisorAdapter,
+    prompt: "Delegate.",
+  });
+  await waitFor(() => childStarts.length === 1);
+
+  const downgrade = fixture.eventRepo
+    .listForGoal(fixture.goal.id)
+    .find((event) => event.data.runtimeEventType === "role_assignment.downgraded");
+  assert.equal(downgrade?.data.role, "worker");
+  assert.match(String(downgrade?.data.reason), /could not be verified/);
+  // Child ran on the goal's default adapter.
+  const started = fixture.eventRepo
+    .listForGoal(fixture.goal.id)
+    .find((event) => event.data.runtimeEventType === "delegation.started");
+  assert.equal(started?.data.childProvider, "codex-local");
+  fixture.db.close();
+});
+
 test("captures structured child results and attests changed files from the worktree", async () => {
   const fixture = createManagerFixture("structured result attestation");
   let supervisorStarted = false;

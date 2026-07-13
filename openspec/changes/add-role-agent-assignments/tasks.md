@@ -12,11 +12,11 @@
 
 ## 3. Role-Adapter Resolver + Dispatch Wiring
 
-- [ ] 3.1 Add resolver tests: no assignment → null; injected adapter precedence; constructed codex/claude adapters from assignment path with detection self-healing; per-goal capability cache.
-- [ ] 3.2 Implement `createRoleAdapterResolver` in the backend (reusing adapter constructors, probes/session-runner seams, and CLI path resolution) and thread it from `selectRuntimeForSettings` into the session manager.
-- [ ] 3.3 Add session-manager tests: worker delegation with an assignment dispatches the child on the resolved adapter/provider/model (run row + event metadata show the resolved agent); review_merge assignment respected; unassigned role unchanged.
-- [ ] 3.4 Implement role resolution at dispatch in `persistDelegationControlEvent` (resolved trio passed to the coordinator).
-- [ ] 3.5 Add tests + implementation for capability-gated fallback: unsupported/unresolvable assignment → durable `role_assignment.downgraded` (role, provider, safe reason) → dispatch on the goal default adapter.
+- [x] 3.1 Add resolver tests: no assignment → null; injected adapter precedence; constructed codex/claude adapters from assignment path with detection self-healing; per-goal capability cache.
+- [x] 3.2 Implement `createRoleAdapterResolver` in the backend (reusing adapter constructors, probes/session-runner seams, and CLI path resolution) and thread it from `selectRuntimeForSettings` into the session manager.
+- [x] 3.3 Add session-manager tests: worker delegation with an assignment dispatches the child on the resolved adapter/provider/model (run row + event metadata show the resolved agent); review_merge assignment respected; unassigned role unchanged.
+- [x] 3.4 Implement role resolution at dispatch in `persistDelegationControlEvent` (resolved trio passed to the coordinator).
+- [x] 3.5 Add tests + implementation for capability-gated fallback: unsupported/unresolvable assignment → durable `role_assignment.downgraded` (role, provider, safe reason) → dispatch on the goal default adapter.
 
 ## 4. Dashboard Controls
 
