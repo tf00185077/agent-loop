@@ -506,6 +506,22 @@ async function persistDelegationControlEvent(
   }
 
   if (validation.kind === "completion") {
+    const completionChangeRegistry = getChangeRegistry(input.state, input.goalId);
+    if (completionChangeRegistry.hasPlan()) {
+      // A completion claim is the moment to close out an archivable tail
+      // change (e.g. one whose only task was its spec) before judging it.
+      tryArchiveActiveChange(deps, input);
+      if (!completionChangeRegistry.allArchived()) {
+        recordControlRejection(
+          deps,
+          input,
+          data,
+          `Planned changes remain unarchived: ${completionChangeRegistry.unarchivedIds().join(", ")}. ` +
+            "Deliver, merge, and archive them before completing the goal.",
+        );
+        return;
+      }
+    }
     const finishedAt = new Date().toISOString();
     input.state.completedGoals.add(input.goalId);
     deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
@@ -823,7 +839,12 @@ function recordChildOutcomeInRegistry(
     if (outcome.resultSummary.kind === "success" && rejectInvalidSpecResult(deps, input, outcome, registry)) {
       return;
     }
+    if (outcome.resultSummary.kind === "success" && (outcome.resultSummary.attestedFiles?.length ?? 0) > 0) {
+      const change = changeRegistry.findChangeByTask(outcome.taskId);
+      if (change) changeRegistry.recordAttestedWorkerChanges(change.id);
+    }
     registry.recordOutcome(outcome.taskId, outcome.resultSummary);
+    tryArchiveActiveChange(deps, input);
     return;
   }
   if (outcome.role !== "review_merge" || !outcome.workerTaskId) {
@@ -834,7 +855,14 @@ function recordChildOutcomeInRegistry(
     outcome.resultSummary.kind === "failure";
   if (!rejecting) {
     if (outcome.reviewMergeOutcome === "merged") {
-      approveSpecChangeAfterMerge(deps, input, outcome.workerTaskId, changeRegistry);
+      const change = changeRegistry.findChangeByTask(outcome.workerTaskId);
+      if (change) changeRegistry.recordMerged(change.id);
+      const specMerge = approveSpecChangeAfterMerge(deps, input, outcome.workerTaskId, changeRegistry);
+      if (!specMerge) {
+        // A spec merge only just unlocked the change for implementation
+        // tasks; archiving there would close it before any were announced.
+        tryArchiveActiveChange(deps, input);
+      }
     }
     return;
   }
@@ -925,17 +953,20 @@ function rejectInvalidSpecResult(
 /**
  * Post-merge gate: a change leaves `specifying` only after its spec-writer
  * result was review-merged and the merged artifacts validate in the goal
- * workspace.
+ * workspace. Returns true when the merge was for a spec task (handled here).
  */
 function approveSpecChangeAfterMerge(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
   workerTaskId: string,
   changeRegistry: GoalChangeRegistry,
-): void {
+): boolean {
   const change = changeRegistry.findChangeByTask(workerTaskId);
-  if (!change || specTaskId(change.id) !== workerTaskId || change.status !== "specifying") {
-    return;
+  if (!change || specTaskId(change.id) !== workerTaskId) {
+    return false;
+  }
+  if (change.status !== "specifying") {
+    return true;
   }
   const validated = input.state.openSpec.validateChange({
     cwd: input.state.supervisorCwd,
@@ -956,7 +987,7 @@ function approveSpecChangeAfterMerge(
         failures: validated.failures,
       },
     });
-    return;
+    return true;
   }
   changeRegistry.markSpecApproved(change.id);
   deps.eventRepo.create({
@@ -972,6 +1003,85 @@ function approveSpecChangeAfterMerge(
       changeId: change.id,
     },
   });
+  return true;
+}
+
+/**
+ * Archive the active change when its completion conditions hold: all
+ * registered tasks delivered and no attested worker changes left unmerged.
+ * Archiving activates the next planned change; an unmerged-evidence block is
+ * recorded durably so stranded worktree output is never silently "done".
+ */
+function tryArchiveActiveChange(deps: AgentSessionManagerDeps, input: PersistRuntimeEventInput): void {
+  const changeRegistry = getChangeRegistry(input.state, input.goalId);
+  if (!changeRegistry.hasPlan()) {
+    return;
+  }
+  const active = changeRegistry.activeChange();
+  if (!active || active.status === "specifying") {
+    return;
+  }
+  const baseData = {
+    sessionId: input.sessionId,
+    provider: input.providerId,
+    model: input.modelLabel,
+  };
+  const gate = changeRegistry.canArchive(active.id, getTaskRegistry(input.state, input.goalId));
+  if (!gate.ok) {
+    if (active.hasUnmergedAttestedChanges) {
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        runId: input.runId,
+        type: "agent.progress",
+        message: `Change ${active.id} cannot archive yet.`,
+        data: {
+          ...baseData,
+          runtimeEventType: "change.archive_blocked",
+          changeId: active.id,
+          safeReason: gate.safeReason,
+        },
+      });
+    }
+    return;
+  }
+  const archived = input.state.openSpec.archiveChange({
+    cwd: input.state.supervisorCwd,
+    changeId: active.id,
+    date: new Date().toISOString().slice(0, 10),
+  });
+  if (!archived.ok) {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: `Archiving change ${active.id} failed.`,
+      data: {
+        ...baseData,
+        runtimeEventType: "change.archive_failed",
+        changeId: active.id,
+        safeReason: archived.safeReason,
+      },
+    });
+    return;
+  }
+  changeRegistry.markArchived(active.id);
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "agent.progress",
+    message: `Change ${active.id} archived.`,
+    data: { ...baseData, runtimeEventType: "change.archived", changeId: active.id },
+  });
+  const next = changeRegistry.activeChange();
+  if (next) {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: `Change ${next.id} activated.`,
+      data: { ...baseData, runtimeEventType: "change.activated", changeId: next.id },
+    });
+  }
 }
 
 function recordControlRejection(

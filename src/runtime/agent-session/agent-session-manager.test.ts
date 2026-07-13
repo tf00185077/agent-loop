@@ -2732,6 +2732,246 @@ test("approves the spec change only after a merged review validates the goal wor
   fixture.db.close();
 });
 
+test("gates change archives on merged evidence and goal completion on all changes archived", async () => {
+  const fixture = createManagerFixture("change lifecycle goal");
+  const openSpec = recordingOpenSpecService("cli");
+  const gates = Array.from({ length: 6 }, () => {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  });
+  let sendCount = 0;
+  let supervisorStarted = false;
+  let childCount = 0;
+  const workerSuccess = (input: { sessionId: string; goalId: string; runId: string }): AgentRuntimeEvent => ({
+    type: "session.completed",
+    sessionId: input.sessionId,
+    goalId: input.goalId,
+    runId: input.runId,
+    message: "Worker finished.",
+    occurredAt: "2026-07-13T00:00:03.000Z",
+  });
+  const reviewMerged = (input: { sessionId: string; goalId: string; runId: string }): AgentRuntimeEvent => ({
+    type: "session.completed",
+    sessionId: input.sessionId,
+    goalId: input.goalId,
+    runId: input.runId,
+    message: "Review merge completed.",
+    occurredAt: "2026-07-13T00:00:04.000Z",
+    metadata: {
+      reviewMergeApplyOutcome: { status: "merged", diffSummary: "changes applied", safeSummary: "Merged." },
+    },
+  });
+  const latestWorkerRequestId = (parentSessionId: string) =>
+    fixture.agentSessionRepo
+      .listDelegationRequests(parentSessionId)
+      .filter((request) => request.role === "worker" && request.resultSummary)
+      .at(-1)?.id ?? "missing";
+  const controlEvent = (
+    input: { sessionId: string; goalId: string; runId: string },
+    controlBlock: Record<string, unknown>,
+    at: string,
+  ): AgentRuntimeEvent => ({
+    type: "progress",
+    sessionId: input.sessionId,
+    goalId: input.goalId,
+    runId: input.runId,
+    message: "Supervisor control block.",
+    occurredAt: at,
+    metadata: { delegationControlEvent: controlBlock },
+  });
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        childCount += 1;
+        // Odd children are workers, even children are review merges.
+        return createHandle(input.sessionId, [childCount % 2 === 1 ? workerSuccess(input) : reviewMerged(input)]);
+      }
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
+      return {
+        ...createHandle(input.sessionId, []),
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true },
+        async *events() {
+          yield {
+            ...changePlanEvent([
+              { id: "change-one", title: "Change one", rationale: "First slice." },
+              { id: "change-two", title: "Change two", rationale: "Second slice." },
+            ]),
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+          } satisfies AgentRuntimeEvent;
+          yield controlEvent(
+            input,
+            {
+              type: "managed_delegation.request",
+              role: "worker",
+              taskId: "spec:change-one",
+              prompt: "Author change-one specs.",
+              summary: "Author change-one specs.",
+            },
+            "2026-07-13T00:00:02.000Z",
+          );
+          await gates[0]!.promise;
+          yield controlEvent(
+            input,
+            {
+              type: "managed_delegation.request",
+              role: "review_merge",
+              workerDelegationRequestId: latestWorkerRequestId(input.sessionId),
+              prompt: "Merge change-one specs.",
+              summary: "Merge change-one specs.",
+            },
+            "2026-07-13T00:00:05.000Z",
+          );
+          await gates[1]!.promise;
+          yield controlEvent(
+            input,
+            {
+              type: "managed_delegation.task_list",
+              tasks: [
+                {
+                  id: "task-1",
+                  title: "Implement change one",
+                  acceptance: [{ id: "A1", text: "The slice works." }],
+                },
+              ],
+            },
+            "2026-07-13T00:00:06.000Z",
+          );
+          yield controlEvent(
+            input,
+            {
+              type: "managed_delegation.request",
+              role: "worker",
+              taskId: "task-1",
+              prompt: "Implement change one.",
+              summary: "Implement change one.",
+            },
+            "2026-07-13T00:00:07.000Z",
+          );
+          await gates[2]!.promise;
+          yield controlEvent(
+            input,
+            {
+              type: "managed_delegation.request",
+              role: "review_merge",
+              workerDelegationRequestId: latestWorkerRequestId(input.sessionId),
+              prompt: "Merge change one implementation.",
+              summary: "Merge change one implementation.",
+            },
+            "2026-07-13T00:00:08.000Z",
+          );
+          await gates[3]!.promise;
+          // Premature completion: change-two is still unarchived.
+          yield controlEvent(
+            input,
+            { type: "managed_delegation.complete", summary: "All done." },
+            "2026-07-13T00:00:09.000Z",
+          );
+          yield controlEvent(
+            input,
+            {
+              type: "managed_delegation.request",
+              role: "worker",
+              taskId: "spec:change-two",
+              prompt: "Author change-two specs.",
+              summary: "Author change-two specs.",
+            },
+            "2026-07-13T00:00:10.000Z",
+          );
+          await gates[4]!.promise;
+          yield controlEvent(
+            input,
+            {
+              type: "managed_delegation.request",
+              role: "review_merge",
+              workerDelegationRequestId: latestWorkerRequestId(input.sessionId),
+              prompt: "Merge change-two specs.",
+              summary: "Merge change-two specs.",
+            },
+            "2026-07-13T00:00:11.000Z",
+          );
+          await gates[5]!.promise;
+          yield controlEvent(
+            input,
+            { type: "managed_delegation.complete", summary: "Both changes delivered." },
+            "2026-07-13T00:00:12.000Z",
+          );
+        },
+        async send() {
+          gates[sendCount++]?.release();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+    worktreeAttestor: () => ["src/change.ts"],
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const eventOfType = (type: string) => events.filter((event) => event.data.runtimeEventType === type);
+
+  // task-1 finished with attested changes but no merge yet: archive is blocked durably.
+  const blocked = eventOfType("change.archive_blocked");
+  assert.ok(blocked.length >= 1, "expected a durable archive-blocked event");
+  assert.equal(blocked[0]!.data.changeId, "change-one");
+  assert.match(String(blocked[0]!.data.safeReason), /review-merged/i);
+
+  // Archives happen in order and activate the next change.
+  assert.deepEqual(
+    eventOfType("change.archived").map((event) => event.data.changeId),
+    ["change-one", "change-two"],
+  );
+  assert.deepEqual(
+    eventOfType("change.activated").map((event) => event.data.changeId),
+    ["change-one", "change-two"],
+  );
+  assert.deepEqual(
+    openSpec.archived.map((call) => [call.changeId, call.cwd]),
+    [
+      ["change-one", "C:\\goal-workspace"],
+      ["change-two", "C:\\goal-workspace"],
+    ],
+  );
+  for (const call of openSpec.archived) {
+    assert.match(call.date, /^\d{4}-\d{2}-\d{2}$/);
+  }
+
+  // The premature completion was rejected naming the remaining change.
+  const completionRejection = eventOfType("delegation.rejected").find((event) =>
+    String(event.data.safeReason).includes("change-two"),
+  );
+  assert.ok(completionRejection, "expected the early completion to be rejected");
+  assert.match(String(completionRejection.data.safeReason), /unarchived/i);
+
+  // The final completion was accepted.
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "completed");
+  assert.ok(events.some((event) => event.type === "goal.completed"));
+
+  fixture.db.close();
+});
+
 test("records a durable OpenSpec downgrade once when the CLI is unavailable", async () => {
   const fixture = createManagerFixture("degraded openspec goal");
   const openSpec = recordingOpenSpecService("degraded");
@@ -3026,6 +3266,7 @@ function recordingOpenSpecService(
 ) {
   const scaffolded: Array<{ changeId: string; cwd: string }> = [];
   const validated: Array<{ changeId: string; cwd: string }> = [];
+  const archived: Array<{ changeId: string; cwd: string; date: string }> = [];
   const pendingFailures = [...(options.validateFailures ?? [])];
   const service: OpenSpecWorkspaceService = {
     mode: () => mode,
@@ -3038,11 +3279,12 @@ function recordingOpenSpecService(
       const failures = pendingFailures.shift() ?? [];
       return { ok: failures.length === 0, failures };
     },
-    archiveChange() {
+    archiveChange(input) {
+      archived.push({ changeId: input.changeId, cwd: input.cwd, date: input.date });
       return { ok: true };
     },
   };
-  return { scaffolded, validated, service };
+  return { scaffolded, validated, archived, service };
 }
 
 function fixedClock(values: string[]): () => string {

@@ -28,8 +28,8 @@
 
 ## 5. Change Completion + Archive Gating
 
-- [ ] 5.1 Add tests: change cannot archive while tasks are undone or attested worker changes are unmerged (durable missing-merge reason); archive on satisfied conditions emits `change.archived` and activates the next change; completion control block rejected while changes remain, accepted after the last archive.
-- [ ] 5.2 Implement completion conditions, archive execution (CLI/degraded), next-change activation, and the completion-signal gate.
+- [x] 5.1 Add tests: change cannot archive while tasks are undone or attested worker changes are unmerged (durable missing-merge reason); archive on satisfied conditions emits `change.archived` and activates the next change; completion control block rejected while changes remain, accepted after the last archive.
+- [x] 5.2 Implement completion conditions, archive execution (CLI/degraded), next-change activation, and the completion-signal gate.
 
 ## 6. Prompts + Continuation Change History
 
