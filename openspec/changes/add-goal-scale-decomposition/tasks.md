@@ -8,9 +8,9 @@
 
 ## 2. OpenSpec Workspace Service
 
-- [ ] 2.1 Add tests for `openspec-workspace-service` with injected runners: CLI detection via the reusable `cli-command-detection` config; scaffold materialization from internal templates; `validate --strict` gate; archive; degraded mode (no CLI) covering all four operations with durable downgrade reporting.
-- [ ] 2.2 Implement the service (spawnSync in the goal workspace, git commit of scaffolding with a prefixed message, degradation paths).
-- [ ] 2.3 Add internal structural checks used in both modes: every requirement has a WHEN/THEN scenario; every task in tasks.md carries acceptance criteria.
+- [x] 2.1 Add tests for `openspec-workspace-service` with injected runners: CLI detection via the reusable `cli-command-detection` config; scaffold materialization from internal templates; `validate --strict` gate; archive; degraded mode (no CLI) covering all four operations with durable downgrade reporting.
+- [x] 2.2 Implement the service (spawnSync in the goal workspace, git commit of scaffolding with a prefixed message, degradation paths).
+- [x] 2.3 Add internal structural checks used in both modes: every requirement has a WHEN/THEN scenario; every task in tasks.md carries acceptance criteria.
 
 ## 3. Change Registry + Sequencing Enforcement
 
