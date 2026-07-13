@@ -767,9 +767,16 @@ async function persistDelegationControlEvent(
       eventData: { ...data, ...(uncontracted ? { uncontracted: true } : {}) },
       onChildOutcome: async (outcome) => {
         const backendRejection = recordChildOutcomeInRegistry(deps, input, outcome);
+        // Fresh continuations are new sessions with no memory of delegation
+        // ids; the observation must carry the id a later review-merge request
+        // will reference.
+        const taggedObservation =
+          outcome.role === "worker"
+            ? `${outcome.observation} [workerDelegationRequestId: ${outcome.delegationRequestId}]`
+            : outcome.observation;
         const observation = backendRejection
-          ? `${outcome.observation}\n\nBackend validation rejected this result. Failing checks: ${backendRejection}`
-          : outcome.observation;
+          ? `${taggedObservation}\n\nBackend validation rejected this result. Failing checks: ${backendRejection}`
+          : taggedObservation;
         await continueSupervisorAfterChild(deps, input, observation, {
           delegationRequestId: outcome.delegationRequestId,
           childSessionId: outcome.childSessionId,

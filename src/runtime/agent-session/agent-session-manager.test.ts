@@ -897,7 +897,8 @@ test("resumes a live supervisor after child completion when resume is supported"
     adapter,
   });
 
-  assert.deepEqual(resumed, ["Worker result: Worker finished."]);
+  assert.equal(resumed.length, 1);
+  assert.match(resumed[0]!, /^Worker result: Worker finished\. \[workerDelegationRequestId: [0-9a-f-]+\]$/);
   assert.ok(fixture.eventRepo.listForGoal(fixture.goal.id).some((event) => event.data.continuationMode === "resume"));
   await waitFor(() =>
     fixture.eventRepo
@@ -3030,6 +3031,130 @@ test("approves the spec change only after a merged review validates the goal wor
   const mergedIndex = events.findIndex((event) => event.data.runtimeEventType === "review_merge.apply_outcome");
   const approvedIndex = events.findIndex((event) => event.data.runtimeEventType === "change.spec_approved");
   assert.ok(mergedIndex >= 0 && approvedIndex > mergedIndex);
+
+  fixture.db.close();
+});
+
+test("review merges work across fresh supervisor continuations using the id carried in the observation", async () => {
+  const fixture = createManagerFixture("cross-session review merge goal");
+  let supervisorTurn = 0;
+  let childCount = 0;
+  const continuationPrompts: string[] = [];
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        childCount += 1;
+        if (childCount === 1) {
+          return createHandle(input.sessionId, [
+            {
+              type: "session.completed",
+              sessionId: input.sessionId,
+              goalId: input.goalId,
+              runId: input.runId,
+              message: "Worker changed files.",
+              occurredAt: "2026-07-13T00:00:02.000Z",
+            },
+          ]);
+        }
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Review merge completed.",
+            occurredAt: "2026-07-13T00:00:04.000Z",
+            metadata: {
+              reviewMergeApplyOutcome: { status: "merged", diffSummary: "1 file", safeSummary: "Merged." },
+            },
+          },
+        ]);
+      }
+      supervisorTurn += 1;
+      if (supervisorTurn === 1) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Delegating the task.",
+            occurredAt: "2026-07-13T00:00:01.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "worker",
+                taskId: "task-1",
+                acceptance: [{ id: "A1", text: "The file exists." }],
+                prompt: "Create the file.",
+                summary: "Create the file.",
+              },
+            },
+          },
+        ]);
+      }
+      if (supervisorTurn === 2) {
+        continuationPrompts.push(input.prompt);
+        // The fresh continuation only knows the worker delegation id if the
+        // observation carried it — parse it from the prompt like a real
+        // supervisor would.
+        const workerDelegationRequestId =
+          input.prompt.match(/workerDelegationRequestId: ([0-9a-f-]+)/i)?.[1] ?? "not-in-prompt";
+        return createHandle(input.sessionId, [
+          {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: "Requesting review merge from the continuation.",
+            occurredAt: "2026-07-13T00:00:03.000Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_delegation.request",
+                role: "review_merge",
+                workerDelegationRequestId,
+                prompt: "Review and merge the worker changes.",
+                summary: "Review worker changes.",
+              },
+            },
+          },
+        ]);
+      }
+      return createHandle(input.sessionId, []);
+    },
+  };
+  const manager = createAgentSessionManager(fixture);
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() =>
+    fixture.eventRepo
+      .listForGoal(fixture.goal.id)
+      .some((event) => event.data.runtimeEventType === "review_merge.apply_outcome"),
+  );
+
+  assert.equal(continuationPrompts.length, 1);
+  assert.match(continuationPrompts[0]!, /workerDelegationRequestId: [0-9a-f-]+/i);
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  assert.ok(
+    !events.some(
+      (event) =>
+        event.data.runtimeEventType === "delegation.rejected" &&
+        /worker result/i.test(String(event.data.safeReason)),
+    ),
+    "the cross-session review merge must not be rejected",
+  );
+  const merged = events.find((event) => event.data.runtimeEventType === "review_merge.apply_outcome");
+  assert.ok(merged);
+  assert.equal(merged.data.reviewMergeOutcome, "merged");
 
   fixture.db.close();
 });

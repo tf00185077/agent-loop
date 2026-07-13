@@ -91,7 +91,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       if (!parent) {
         throw new Error(`Agent session not found: ${input.parentSessionId}`);
       }
-      const workerResult = input.role === "review_merge" ? requireWorkerResult(deps, parent.id, input.workerDelegationRequestId) : null;
+      const workerResult = input.role === "review_merge" ? requireWorkerResult(deps, parent, input.workerDelegationRequestId) : null;
       const checkpoint =
         input.role === "review_merge" ? await prepareReviewMerge(reviewMergeWorkspaceService, supervisorCwd) : null;
       const childEventData = {
@@ -258,11 +258,15 @@ async function createWorkerCwd(
 
 function requireWorkerResult(
   deps: DelegationCoordinatorDeps,
-  parentSessionId: string,
+  parent: { id: string; goalId: string },
   workerDelegationRequestId?: string | null,
 ) {
+  // Fresh supervisor continuations are new sessions, so the worker result the
+  // review references may hang off an earlier supervisor session of the same
+  // goal — search the whole lineage, not just the requesting session.
   const workerResult = deps.agentSessionRepo
-    .listDelegationRequests(parentSessionId)
+    .listSessionsForGoal(parent.goalId)
+    .flatMap((session) => deps.agentSessionRepo.listDelegationRequests(session.id))
     .find((request) => request.id === workerDelegationRequestId && request.role === "worker" && request.resultSummary);
   if (!workerResult?.resultSummary) {
     throw new Error("Review merge requires an existing worker result.");
