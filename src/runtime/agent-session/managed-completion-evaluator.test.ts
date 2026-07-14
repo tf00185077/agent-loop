@@ -68,6 +68,37 @@ test("accepts completed leaf descendants with PASS criteria", () => {
   db.close();
 });
 
+test("rejects completion while integration recovery is nonterminal or failed", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({ title: "Integration", description: "Recovery" });
+  const tasks = createManagedTaskRepository(db);
+  tasks.registerTasks({
+    goalId: goal.id,
+    tasks: [{ id: "task-1", title: "Resolve", acceptance: [{ id: "A1", text: "Pass" }] }],
+  });
+  const run = createRunRepository(db).create({ goalId: goal.id, provider: "mock", model: "mock" });
+  const sessions = createAgentSessionRepository(db);
+  const parent = sessions.createSession({
+    goalId: goal.id, runId: run.id, providerId: "mock", modelLabel: "mock", lifecycleState: "running",
+    capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true },
+  });
+  db.prepare(`
+    INSERT INTO agent_delegation_requests
+      (id, parent_session_id, role, status, prompt_summary, task_id, created_at, updated_at)
+    VALUES ('worker-1', ?, 'worker', 'completed', 'Worker', 'task-1', '2026-07-14', '2026-07-14')
+  `).run(parent.id);
+  tasks.beginAttempt("task-1", "worker-1");
+  const integration = tasks.beginIntegration({
+    taskId: "task-1", workerDelegationRequestId: "worker-1", checkpointHead: "base",
+    originalCandidateCommitSha: "candidate", conflictFiles: ["src/a.ts"], allowedFiles: ["src/a.ts"],
+    safeSummary: "Conflict",
+  });
+  assert.ok(evaluateManagedCompletion(db, { goalId: goal.id }).gaps.some((gap) => gap.type === "pending_integration"));
+  tasks.transitionIntegration(integration.id, "resolution_failed", { safeSummary: "Failed" });
+  assert.ok(evaluateManagedCompletion(db, { goalId: goal.id }).gaps.some((gap) => gap.type === "pending_integration"));
+  db.close();
+});
+
 function testDatabasePath(): string {
   return join(mkdtempSync(join(tmpdir(), "completion-evaluator-")), "test.sqlite");
 }

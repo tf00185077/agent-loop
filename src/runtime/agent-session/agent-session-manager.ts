@@ -17,17 +17,22 @@ import { GoalChangeRegistry, specTaskAcceptance, specTaskId, specValidationVerdi
 import { createDelegationCoordinator, type SupervisorContinuationInput } from "./delegation-coordinator.js";
 import { validateManagedControlEvent } from "./delegation-control-event.js";
 import { evaluateManagedCompletion } from "./managed-completion-evaluator.js";
-import { createManagedDeliveryService, type ManagedDeliveryService } from "./managed-delivery-service.js";
+import {
+  createManagedDeliveryService,
+  type ManagedDeliveryResult,
+  type ManagedDeliveryService,
+} from "./managed-delivery-service.js";
+import { createManagedIntegrationService, type ManagedIntegrationService } from "./managed-integration-service.js";
 import { projectManagedTaskContext } from "./managed-context-projection.js";
 import {
   createOpenSpecWorkspaceService,
   type OpenSpecWorkspaceService,
 } from "./openspec-workspace-service.js";
-import { buildSpecWriterAppendix, buildSupervisorPrompt } from "./supervisor-prompt.js";
+import { buildIntegratorContractAppendix, buildSpecWriterAppendix, buildSupervisorPrompt } from "./supervisor-prompt.js";
 import { GoalTaskRegistry } from "./task-registry.js";
 import type { ReviewMergeVerificationService } from "./review-merge-verification-service.js";
 import type { ReviewMergeWorkspaceService } from "./review-merge-workspace-service.js";
-import type { WorktreeAttestor, WorktreeService } from "./worktree-service.js";
+import { createGitWorktreeService, type WorktreeAttestor, type WorktreeService } from "./worktree-service.js";
 
 export interface AgentSessionManagerDeps {
   goalRepo: GoalRepository;
@@ -37,6 +42,7 @@ export interface AgentSessionManagerDeps {
   database?: AppDatabase;
   managedTaskRepo?: ManagedTaskRepository;
   managedDeliveryService?: ManagedDeliveryService;
+  managedIntegrationService?: ManagedIntegrationService;
   worktreeService?: WorktreeService;
   worktreeAttestor?: WorktreeAttestor;
   openSpecWorkspaceService?: OpenSpecWorkspaceService;
@@ -161,7 +167,16 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
 
     recoverOrphanedSessions() {
       const recovered: AgentRuntimeSession[] = [];
+      const interruptedGoals = new Set<string>();
       for (const session of deps.agentSessionRepo.listNonTerminalSessions()) {
+        if (!interruptedGoals.has(session.goalId)) {
+          deps.managedTaskRepo?.interruptNonterminalIntegrations(
+            session.goalId,
+            "Integration attempt interrupted because backend adapter control was lost during restart.",
+            session.runId,
+          );
+          interruptedGoals.add(session.goalId);
+        }
         const stalled = deps.agentSessionRepo.updateLifecycleState(session.id, "stalled");
         const finishedAt = new Date().toISOString();
         deps.runRepo.updateStatus(session.runId, "failed", {
@@ -861,7 +876,8 @@ async function persistDelegationControlEvent(
       adapter: childAgent.adapter,
       eventData: { ...data, ...(uncontracted ? { uncontracted: true } : {}) },
       onChildOutcome: async (outcome) => {
-        const backendRejection = recordChildOutcomeInRegistry(deps, input, outcome);
+        const backendRejection = await recordChildOutcomeInRegistry(deps, input, outcome);
+        if (backendRejection === CONDITIONAL_RECOVERY_DEFERRED) return;
         // Fresh continuations are new sessions with no memory of delegation
         // ids; the observation must carry the id a later review-merge request
         // will reference.
@@ -892,7 +908,7 @@ async function persistDelegationControlEvent(
 async function resolveChildAgent(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
-  role: "worker" | "review_merge",
+  role: "worker" | "review_merge" | "integrator",
 ): Promise<ResolvedRoleAgentLike> {
   const fallback: ResolvedRoleAgentLike = {
     adapter: input.adapter,
@@ -948,17 +964,18 @@ async function resolveChildAgent(
 }
 
 const REVIEW_REJECTION_OUTCOMES = new Set(["rejected", "test_failed_reverted", "verification_failed"]);
+const CONDITIONAL_RECOVERY_DEFERRED = Symbol("conditional-recovery-deferred");
 
 /**
  * Returns the backend rejection summary when the child result was rejected by
  * a deterministic gate (so the supervisor's continuation can carry it), or
  * null when the outcome was recorded as-is.
  */
-function recordChildOutcomeInRegistry(
+async function recordChildOutcomeInRegistry(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
   outcome: SupervisorContinuationInput,
-): string | null {
+): Promise<string | null | typeof CONDITIONAL_RECOVERY_DEFERRED> {
   if (deps.managedTaskRepo) {
     return recordDurableChildOutcome({ ...deps, managedTaskRepo: deps.managedTaskRepo }, input, outcome);
   }
@@ -1034,11 +1051,11 @@ function recordChildOutcomeInRegistry(
   return null;
 }
 
-function recordDurableChildOutcome(
+async function recordDurableChildOutcome(
   deps: AgentSessionManagerDeps & { managedTaskRepo: ManagedTaskRepository },
   input: PersistRuntimeEventInput,
   outcome: SupervisorContinuationInput,
-): string | null {
+): Promise<string | null | typeof CONDITIONAL_RECOVERY_DEFERRED> {
   const tasks = deps.managedTaskRepo;
   if (outcome.role === "worker" && outcome.taskId && tasks.getTask(outcome.taskId)) {
     if (outcome.resultSummary.kind === "success") {
@@ -1121,6 +1138,10 @@ function recordDurableChildOutcome(
       ...delivered,
       runId: input.runId,
     });
+    if (delivered.status === "conflict") {
+      const started = await startConditionalIntegrationRecovery(deps, input, outcome, delivered);
+      if (started) return CONDITIONAL_RECOVERY_DEFERRED;
+    }
     if (delivered.status !== "committed") {
       return delivered.safeSummary;
     }
@@ -1133,6 +1154,248 @@ function recordDurableChildOutcome(
   const specMerge = approveSpecChangeAfterMerge(deps, input, outcome.workerTaskId, changeRegistry);
   if (!specMerge) tryArchiveActiveChange(deps, input);
   return null;
+}
+
+async function startConditionalIntegrationRecovery(
+  deps: AgentSessionManagerDeps & { managedTaskRepo: ManagedTaskRepository },
+  input: PersistRuntimeEventInput,
+  judgeOutcome: SupervisorContinuationInput,
+  conflict: ManagedDeliveryResult,
+): Promise<boolean> {
+  const taskId = judgeOutcome.workerTaskId!;
+  const workerDelegationRequestId = judgeOutcome.workerDelegationRequestId!;
+  if (!conflict.checkpointHead || !conflict.candidateCommitSha || !conflict.candidateFiles?.length) return false;
+
+  const tasks = deps.managedTaskRepo;
+  const acceptance = tasks.listCriteria(taskId).map((criterion) => ({
+    id: criterion.criterionId,
+    text: criterion.text,
+  }));
+  const integration = tasks.beginIntegration({
+    taskId,
+    workerDelegationRequestId,
+    checkpointHead: conflict.checkpointHead,
+    originalCandidateCommitSha: conflict.candidateCommitSha,
+    conflictFiles: conflict.conflictFiles ?? [],
+    allowedFiles: conflict.candidateFiles,
+    safeSummary: conflict.safeSummary,
+    runId: input.runId,
+  });
+  const integrationService = deps.managedIntegrationService ?? createManagedIntegrationService({
+    worktreeService: deps.worktreeService ?? createGitWorktreeService(),
+  });
+  const prepared = await integrationService.prepare({
+    supervisorCwd: input.state.supervisorCwd,
+    integrationAttemptId: integration.id,
+    checkpointHead: integration.checkpointHead,
+    originalCandidateCommitSha: integration.originalCandidateCommitSha,
+    candidateFiles: integration.allowedFiles,
+  });
+  if (!prepared.ok) {
+    tasks.transitionIntegration(integration.id, "resolution_failed", {
+      safeSummary: prepared.safeSummary,
+      runId: input.runId,
+    });
+    return false;
+  }
+
+  const cleanup = async () => {
+    try {
+      await integrationService.cleanup({
+        supervisorCwd: input.state.supervisorCwd,
+        integrationCwd: prepared.worktree.path,
+      });
+    } catch (error) {
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        runId: input.runId,
+        type: "agent.progress",
+        message: "Integration worktree cleanup requires later retry.",
+        data: {
+          runtimeEventType: "managed_task.integration_cleanup_failed",
+          integrationAttemptId: integration.id,
+          safeReason: error instanceof Error ? error.message.slice(0, 500) : "Integration cleanup failed.",
+        },
+      });
+    }
+  };
+  const continueAfterRecovery = async (outcome: SupervisorContinuationInput, safeSummary: string) => {
+    await cleanup();
+    await continueSupervisorAfterChild(deps, input, safeSummary, {
+      delegationRequestId: outcome.delegationRequestId,
+      childSessionId: outcome.childSessionId,
+    });
+  };
+  const failRecovery = async (outcome: SupervisorContinuationInput, safeSummary: string) => {
+    const current = tasks.getIntegration(integration.id);
+    if (current && ["pending", "resolving", "awaiting_review", "accepted"].includes(current.status)) {
+      tasks.transitionIntegration(integration.id, "resolution_failed", { safeSummary, runId: input.runId });
+    }
+    await continueAfterRecovery(outcome, `Integration recovery failed: ${safeSummary}`);
+  };
+  const guardRecovery = async (outcome: SupervisorContinuationInput, action: () => Promise<void>) => {
+    try {
+      await action();
+    } catch (error) {
+      await failRecovery(outcome, error instanceof Error ? error.message.slice(0, 500) : "Recovery orchestration failed.");
+    }
+  };
+
+  const integratorAgent = await resolveChildAgent(deps, input, "integrator");
+  try {
+    await createDelegationCoordinator(deps).acceptAndStartWorker({
+      parentSessionId: judgeOutcome.parentSessionId,
+      providerId: integratorAgent.providerId,
+      modelLabel: integratorAgent.modelLabel,
+      role: "integrator",
+      prompt: buildIntegratorContractAppendix({
+        integrationAttemptId: integration.id,
+        workerDelegationRequestId,
+        checkpointHead: integration.checkpointHead,
+        originalCandidateCommitSha: integration.originalCandidateCommitSha,
+        acceptance,
+        conflictFiles: prepared.conflictFiles,
+        allowedFiles: prepared.allowedFiles,
+      }),
+      promptSummary: "Resolve the recorded delivery conflict in an isolated integration worktree.",
+      taskId,
+      acceptance,
+      workerDelegationRequestId,
+      integrationContext: {
+        integrationAttemptId: integration.id,
+        workerDelegationRequestId,
+        checkpointHead: integration.checkpointHead,
+        originalCandidateCommitSha: integration.originalCandidateCommitSha,
+        worktreePath: prepared.worktree.path,
+      },
+      adapter: integratorAgent.adapter,
+      eventData: { integrationAttemptId: integration.id, trigger: "delivery_conflict" },
+      onChildOutcome: async (integratorOutcome) => guardRecovery(integratorOutcome, async () => {
+        if (integratorOutcome.integrationResultError || !integratorOutcome.integrationResult ||
+            integratorOutcome.resultSummary.kind === "failure") {
+          await failRecovery(integratorOutcome,
+            integratorOutcome.integrationResultError ?? integratorOutcome.resultSummary.safeSummary);
+          return;
+        }
+        const candidate = integrationService.verifyAndCreateCandidate({
+          integrationCwd: prepared.worktree.path,
+          checkpointHead: integration.checkpointHead,
+          allowedFiles: prepared.allowedFiles,
+          safeSummary: integratorOutcome.integrationResult.safeSummary,
+        });
+        if (!candidate.ok) {
+          await failRecovery(integratorOutcome, candidate.safeSummary);
+          return;
+        }
+        tasks.transitionIntegration(integration.id, "awaiting_review", {
+          resolvedCandidateCommitSha: candidate.resolvedCandidateCommitSha,
+          safeSummary: candidate.safeSummary,
+          runId: input.runId,
+        });
+
+        const judgeAgent = await resolveChildAgent(deps, input, "review_merge");
+        await createDelegationCoordinator(deps).acceptAndStartWorker({
+          parentSessionId: judgeOutcome.parentSessionId,
+          providerId: judgeAgent.providerId,
+          modelLabel: judgeAgent.modelLabel,
+          role: "review_merge",
+          prompt: "Independently judge the backend-created resolved candidate against the frozen acceptance contract.",
+          promptSummary: "Re-Judge the exact resolved integration candidate.",
+          taskId,
+          acceptance,
+          workerDelegationRequestId,
+          reviewCandidateContext: {
+            integrationAttemptId: integration.id,
+            resolvedCandidateCommitSha: candidate.resolvedCandidateCommitSha,
+            worktreePath: prepared.worktree.path,
+          },
+          adapter: judgeAgent.adapter,
+          eventData: { integrationAttemptId: integration.id, resolvedCandidateCommitSha: candidate.resolvedCandidateCommitSha },
+          onChildOutcome: async (rejudgeOutcome) => guardRecovery(rejudgeOutcome, async () => {
+            if (rejudgeOutcome.reviewDecisionError || !rejudgeOutcome.reviewDecision) {
+              const safeSummary = rejudgeOutcome.reviewDecisionError ??
+                "Judge completed without a candidate-bound managed_review.decision block.";
+              tasks.recordInvalidReview({
+                taskId,
+                workerDelegationRequestId,
+                judgeDelegationRequestId: rejudgeOutcome.delegationRequestId,
+                safeSummary,
+                deferredFindings: rejudgeOutcome.observation ? [rejudgeOutcome.observation.slice(0, 500)] : [],
+                runId: input.runId,
+              });
+              await failRecovery(rejudgeOutcome, safeSummary);
+              return;
+            }
+            const reviewed = tasks.recordReview({
+              taskId,
+              workerDelegationRequestId,
+              judgeDelegationRequestId: rejudgeOutcome.delegationRequestId,
+              integrationAttemptId: integration.id,
+              reviewedCandidateCommitSha: candidate.resolvedCandidateCommitSha,
+              verdict: rejudgeOutcome.reviewDecision.verdict,
+              decisions: rejudgeOutcome.reviewDecision.decisions,
+              safeSummary: rejudgeOutcome.reviewDecision.safeSummary,
+              deferredFindings: rejudgeOutcome.reviewDecision.deferredFindings ?? [],
+              hasAttestedChanges: true,
+              runId: input.runId,
+            });
+            if (reviewed.verdict !== "accepted") {
+              await continueAfterRecovery(rejudgeOutcome, reviewed.safeSummary);
+              return;
+            }
+            const deliveryService = deps.managedDeliveryService ?? createManagedDeliveryService();
+            const delivered = deliveryService.deliverCandidate?.({
+              supervisorCwd: input.state.supervisorCwd,
+              checkpointHead: integration.checkpointHead,
+              candidateCommitSha: candidate.resolvedCandidateCommitSha,
+              safeSummary: reviewed.safeSummary,
+            });
+            if (!delivered || delivered.status !== "committed") {
+              const safeSummary = delivered?.safeSummary ?? "Resolved candidate delivery is unavailable.";
+              tasks.transitionIntegration(integration.id, "resolution_failed", { safeSummary, runId: input.runId });
+              tasks.recordDelivery({
+                taskId,
+                workerDelegationRequestId,
+                integrationAttemptId: integration.id,
+                ...(delivered ?? {}),
+                status: "integration_failed",
+                safeSummary,
+                runId: input.runId,
+              });
+              await continueAfterRecovery(rejudgeOutcome, `Integration delivery failed: ${safeSummary}`);
+              return;
+            }
+            tasks.recordDelivery({
+              taskId,
+              workerDelegationRequestId,
+              integrationAttemptId: integration.id,
+              ...delivered,
+              runId: input.runId,
+            });
+            const worker = findDelegationForGoal(deps, input.goalId, workerDelegationRequestId);
+            if (worker?.resultSummary) {
+              getTaskRegistry(input.state, input.goalId).recordOutcome(taskId, worker.resultSummary);
+            }
+            const changeRegistry = getChangeRegistry(input.state, input.goalId);
+            const change = changeRegistry.findChangeByTask(taskId);
+            if (change) changeRegistry.recordMerged(change.id);
+            const specMerge = approveSpecChangeAfterMerge(deps, input, taskId, changeRegistry);
+            if (!specMerge) tryArchiveActiveChange(deps, input);
+            await continueAfterRecovery(rejudgeOutcome, `Resolved candidate committed: ${delivered.safeSummary}`);
+          }),
+        });
+      }),
+    });
+    return true;
+  } catch (error) {
+    const safeSummary = error instanceof Error ? error.message : "Integrator dispatch failed.";
+    const current = tasks.getIntegration(integration.id);
+    if (current && ["pending", "resolving"].includes(current.status)) {
+      tasks.transitionIntegration(integration.id, "resolution_failed", { safeSummary, runId: input.runId });
+    }
+    await cleanup();
+    return false;
+  }
 }
 
 function findDelegationForGoal(

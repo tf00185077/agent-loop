@@ -193,9 +193,13 @@ export function renderManagedTaskContext(tasks: ManagedTaskContextRecord[]): str
       const cited = task.lastCitedCriteria.length > 0 ? ` citing [${task.lastCitedCriteria.join(", ")}]` : "";
       const judge = task.lastJudgeVerdict ? ` judge=${task.lastJudgeVerdict}` : "";
       const delivery = task.lastDeliveryStatus ? ` delivery=${task.lastDeliveryStatus}` : "";
+      const integration = task.lastIntegrationStatus
+        ? ` integration=${task.lastIntegrationStatus}(${task.integrationAttemptId})` +
+          (task.resolvedCandidateCommitSha ? ` candidate=${task.resolvedCandidateCommitSha}` : "")
+        : "";
       const summary = task.lastSafeSummary ? ` | last: ${task.lastSafeSummary}` : "";
       return `- ${task.id} "${task.title}"${lineage} [${task.status}] attempts=${task.attemptCount} ` +
-        `rejections=${task.substantiveRejectionCount}${cited} | ${criteria}${judge}${delivery}${summary}`;
+        `rejections=${task.substantiveRejectionCount}${cited} | ${criteria}${judge}${delivery}${integration}${summary}`;
     }),
   ].join("\n");
 }
@@ -228,6 +232,8 @@ export function buildWorkerContractAppendix(acceptance: TaskAcceptanceCriterion[
 
 export function buildJudgeContractAppendix(input: {
   workerDelegationRequestId: string;
+  integrationAttemptId?: string | null;
+  reviewedCandidateCommitSha?: string | null;
   acceptance: TaskAcceptanceCriterion[];
   resultSummary: AgentRuntimeDelegationSummary;
 }): string {
@@ -235,6 +241,8 @@ export function buildJudgeContractAppendix(input: {
     "## Independent Judge contract (no apply or commit authority)",
     "",
     `Worker attempt: ${input.workerDelegationRequestId}`,
+    ...(input.integrationAttemptId ? [`Integration attempt: ${input.integrationAttemptId}`] : []),
+    ...(input.reviewedCandidateCommitSha ? [`Exact reviewed candidate: ${input.reviewedCandidateCommitSha}`] : []),
     `Worker safe summary: ${input.resultSummary.safeSummary}`,
     `Backend-attested files: ${(input.resultSummary.attestedFiles ?? []).join(", ") || "none"}`,
     "",
@@ -246,6 +254,8 @@ export function buildJudgeContractAppendix(input: {
     controlExample({
       type: "managed_review.decision",
       workerDelegationRequestId: input.workerDelegationRequestId,
+      ...(input.integrationAttemptId ? { integrationAttemptId: input.integrationAttemptId } : {}),
+      ...(input.reviewedCandidateCommitSha ? { reviewedCandidateCommitSha: input.reviewedCandidateCommitSha } : {}),
       verdict: "accepted",
       decisions: input.acceptance.map((criterion) => ({
         criterionId: criterion.id,
@@ -254,6 +264,41 @@ export function buildJudgeContractAppendix(input: {
       })),
       safeSummary: "Short overall judge summary.",
       deferredFindings: [],
+    }),
+  ].join("\n");
+}
+
+export function buildIntegratorContractAppendix(input: {
+  integrationAttemptId: string;
+  workerDelegationRequestId: string;
+  checkpointHead: string;
+  originalCandidateCommitSha: string;
+  acceptance: TaskAcceptanceCriterion[];
+  conflictFiles: string[];
+  allowedFiles: string[];
+}): string {
+  return [
+    "## Integrator contract (isolated conflict recovery; no acceptance or commit authority)",
+    "",
+    `Integration attempt: ${input.integrationAttemptId}`,
+    `Worker attempt: ${input.workerDelegationRequestId}`,
+    `Checkpoint HEAD: ${input.checkpointHead}`,
+    `Original candidate: ${input.originalCandidateCommitSha}`,
+    `Conflict files: ${input.conflictFiles.join(", ") || "none"}`,
+    `Allowed files: ${input.allowedFiles.join(", ") || "none"}`,
+    "",
+    "Resolve the existing index conflicts while preserving the frozen acceptance contract:",
+    ...input.acceptance.map((criterion) => `- ${criterion.id}: ${criterion.text}`),
+    "",
+    "Do not commit, move HEAD, add files outside the allowed list, or modify the supervisor workspace.",
+    "Stage resolved conflict files if needed, then emit exactly one structured result:",
+    "",
+    controlExample({
+      type: "managed_integration.result",
+      integrationAttemptId: input.integrationAttemptId,
+      workerDelegationRequestId: input.workerDelegationRequestId,
+      originalCandidateCommitSha: input.originalCandidateCommitSha,
+      safeSummary: "Short summary of how the conflicts were resolved.",
     }),
   ].join("\n");
 }

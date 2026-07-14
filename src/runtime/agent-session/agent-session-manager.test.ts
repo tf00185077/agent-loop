@@ -281,6 +281,7 @@ test("forwards approve reject and cancel controls to the active adapter exactly 
     runRepo,
     eventRepo,
     agentSessionRepo,
+    worktreeService: memoryWorktreeService(),
   });
 
   const running = manager.startManagedSession({
@@ -323,6 +324,7 @@ test("persists valid delegation control events and starts a child claim", async 
     runRepo,
     eventRepo,
     agentSessionRepo,
+    worktreeService: memoryWorktreeService(),
   });
 
   const result = await manager.startManagedSession({
@@ -389,6 +391,7 @@ test("rejects duplicate active delegation control events durably", async () => {
     runRepo,
     eventRepo,
     agentSessionRepo,
+    worktreeService: memoryWorktreeService(),
   });
   const controlEvent = {
     type: "managed_delegation.request",
@@ -3740,6 +3743,165 @@ test("uses durable task, structured Judge, and completion gates without fixture-
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   assert.ok(events.some((event) => event.data.completionGaps));
   assert.equal(events.find((event) => event.type === "goal.completed")?.message, "Durably accepted.");
+  fixture.db.close();
+});
+
+test("dispatches Integrator and candidate-bound re-Judge immediately after backend conflict", async () => {
+  const fixture = createManagerFixture("conditional integration flow");
+  const managedTaskRepo = createManagedTaskRepository(fixture.db);
+  const starts: string[] = [];
+  let supervisorTurn = 0;
+  const allDelegations = () => fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id)
+    .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id));
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        if (input.prompt.includes("## Integrator contract")) {
+          starts.push("integrator");
+          const integrationId = input.prompt.match(/Integration attempt: (\S+)/)?.[1] ?? "missing";
+          const workerId = input.prompt.match(/Worker attempt: (\S+)/)?.[1] ?? "missing";
+          return createHandle(input.sessionId, [
+            {
+              type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Resolved.", occurredAt: "2026-07-14T00:00:06.000Z",
+              metadata: { delegationControlEvent: {
+                type: "managed_integration.result", integrationAttemptId: integrationId,
+                workerDelegationRequestId: workerId, originalCandidateCommitSha: "candidate-1",
+                safeSummary: "Resolved the conflict.",
+              } },
+            },
+            { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Integrator completed.", occurredAt: "2026-07-14T00:00:07.000Z" },
+          ]);
+        }
+        if (input.prompt.includes("Independent Judge contract")) {
+          const workerId = allDelegations().find((request) => request.role === "worker")!.id;
+          const resolved = input.prompt.includes("Exact reviewed candidate: candidate-2");
+          starts.push(resolved ? "judge-resolved" : "judge-original");
+          const integrationId = input.prompt.match(/Integration attempt: (\S+)/)?.[1];
+          return createHandle(input.sessionId, [
+            {
+              type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Judged.", occurredAt: "2026-07-14T00:00:04.000Z",
+              metadata: { delegationControlEvent: {
+                type: "managed_review.decision", workerDelegationRequestId: workerId,
+                ...(resolved ? { integrationAttemptId: integrationId, reviewedCandidateCommitSha: "candidate-2" } : {}),
+                verdict: "accepted",
+                decisions: [{ criterionId: "A1", outcome: "PASS", safeSummary: "Pass" }],
+                safeSummary: resolved ? "Resolved candidate accepted." : "Original candidate accepted.",
+              } },
+            },
+            { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Judge completed.", occurredAt: "2026-07-14T00:00:05.000Z" },
+          ]);
+        }
+        starts.push("worker");
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Evidence.", occurredAt: "2026-07-14T00:00:02.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_task.result", taskId: "task-1",
+              criterionEvidence: [{ criterionId: "A1", evidence: "Test passed." }], claimedFiles: ["src/change.ts"],
+            } },
+          },
+          { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Worker completed.", occurredAt: "2026-07-14T00:00:03.000Z" },
+        ]);
+      }
+
+      supervisorTurn += 1;
+      starts.push(`supervisor-${supervisorTurn}`);
+      if (supervisorTurn === 1) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Contract.", occurredAt: "2026-07-14T00:00:00.000Z",
+            metadata: { delegationControlEvent: { type: "managed_delegation.task_list", tasks: [
+              { id: "task-1", title: "Conflict task", acceptance: [{ id: "A1", text: "Final candidate passes." }] },
+            ] } },
+          },
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Delegate.", occurredAt: "2026-07-14T00:00:01.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "worker", taskId: "task-1", prompt: "Implement.", summary: "Implement.",
+            } },
+          },
+        ]);
+      }
+      if (supervisorTurn === 2) {
+        const workerId = allDelegations().find((request) => request.role === "worker")!.id;
+        return createHandle(input.sessionId, [{
+          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Request judge.", occurredAt: "2026-07-14T00:00:03.500Z",
+          metadata: { delegationControlEvent: {
+            type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: workerId,
+            prompt: "Judge.", summary: "Judge.",
+          } },
+        }]);
+      }
+      return createHandle(input.sessionId, [{
+        type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+        message: "Complete.", occurredAt: "2026-07-14T00:00:09.000Z",
+        metadata: { delegationControlEvent: { type: "managed_delegation.complete", summary: "Integrated." } },
+      }]);
+    },
+  };
+
+  let cleaned = 0;
+  const manager = createAgentSessionManager({
+    ...fixture,
+    database: fixture.db,
+    managedTaskRepo,
+    worktreeAttestor: () => ["src/change.ts"],
+    managedDeliveryService: {
+      deliver() {
+        return {
+          status: "conflict", safeSummary: "Candidate conflicted; checkpoint restored.", checkpointHead: "base",
+          checkpointStatus: "clean", candidateCommitSha: "candidate-1", commitSha: null,
+          validationCommand: null, validationExitCode: null, validationSummary: null,
+          rollbackSummary: "restored", candidateFiles: ["src/change.ts"], conflictFiles: ["src/change.ts"],
+          conflictSummary: "CONFLICT src/change.ts",
+        };
+      },
+      deliverCandidate() {
+        return {
+          status: "committed", safeSummary: "Resolved candidate committed.", checkpointHead: "base",
+          checkpointStatus: "clean", candidateCommitSha: "candidate-2", commitSha: "delivered-2",
+          validationCommand: "npm test", validationExitCode: 0, validationSummary: "passed", rollbackSummary: null,
+        };
+      },
+    },
+    managedIntegrationService: {
+      async prepare() {
+        return { ok: true as const, worktree: { path: "C:\\integration", label: "integration-1" },
+          conflictFiles: ["src/change.ts"], allowedFiles: ["src/change.ts"] };
+      },
+      verifyAndCreateCandidate() {
+        return { ok: true as const, resolvedCandidateCommitSha: "candidate-2", changedFiles: ["src/change.ts"],
+          safeSummary: "Resolved candidate created." };
+      },
+      async cleanup() { cleaned += 1; },
+    },
+  });
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
+
+  assert.deepEqual(starts, [
+    "supervisor-1", "worker", "supervisor-2", "judge-original", "integrator", "judge-resolved", "supervisor-3",
+  ]);
+  assert.deepEqual(allDelegations().map((request) => request.role), ["worker", "review_merge", "integrator", "review_merge"]);
+  assert.equal(managedTaskRepo.listIntegrations("task-1")[0]?.status, "committed");
+  assert.equal(managedTaskRepo.listReviews("task-1").at(-1)?.reviewedCandidateCommitSha, "candidate-2");
+  assert.equal(managedTaskRepo.listDeliveries("task-1")[0]?.commitSha, "delivered-2");
+  assert.equal(cleaned, 1);
   fixture.db.close();
 });
 

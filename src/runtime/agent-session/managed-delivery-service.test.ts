@@ -18,6 +18,26 @@ test("creates a runtime candidate, applies it, validates, and records the superv
   assert.equal(git(fixture.supervisor, ["status", "--porcelain"]).stdout.trim(), "");
 });
 
+test("applies an exact pre-created resolved candidate under backend authority", () => {
+  const fixture = gitFixture();
+  const checkpoint = git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim();
+  writeFileSync(join(fixture.worker, "resolved.txt"), "resolved\n");
+  git(fixture.worker, ["add", "resolved.txt"]);
+  git(fixture.worker, ["-c", "user.name=Runtime", "-c", "user.email=runtime@example.invalid", "commit", "-m", "resolved"]);
+  const candidate = git(fixture.worker, ["rev-parse", "HEAD"]).stdout.trim();
+
+  const service = createManagedDeliveryService({ fixedValidationCommand: `node -e "process.exit(0)"` });
+  const result = service.deliverCandidate!({
+    supervisorCwd: fixture.supervisor,
+    checkpointHead: checkpoint,
+    candidateCommitSha: candidate,
+    safeSummary: "Resolved candidate accepted",
+  });
+  assert.equal(result.status, "committed");
+  assert.equal(result.candidateCommitSha, candidate);
+  assert.equal(git(fixture.supervisor, ["status", "--porcelain"]).stdout.trim(), "");
+});
+
 test("fails closed when the worker changed after attestation", () => {
   const fixture = gitFixture();
   writeFileSync(join(fixture.worker, "feature.txt"), "expected\n");
@@ -63,6 +83,9 @@ test("records conflict and restores the clean supervisor checkpoint", () => {
     workerCwd: fixture.worker, supervisorCwd: fixture.supervisor, attestedFiles: ["base.txt"], safeSummary: "Deliver",
   });
   assert.equal(result.status, "conflict");
+  assert.deepEqual(result.candidateFiles, ["base.txt"]);
+  assert.deepEqual(result.conflictFiles, ["base.txt"]);
+  assert.match(result.conflictSummary ?? "", /conflict/i);
   assert.equal(git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim(), checkpoint);
   assert.equal(git(fixture.supervisor, ["status", "--porcelain"]).stdout.trim(), "");
 });

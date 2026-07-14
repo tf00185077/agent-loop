@@ -186,7 +186,28 @@ session by default:
    records a durable `runtime.managed_mode_downgraded` event and falls back to
    the previous one-shot provider run — visible, never silent.
 
+### Conditional Integrator conflict recovery
+
+`review_merge` remains the independent Judge; it does not commit. After an
+accepted Worker result, the backend creates and applies the candidate. If that
+exact apply produces a verified Git conflict, the backend records one durable
+integration attempt and immediately dispatches the optional `integrator` role
+in an isolated worktree rooted at the recorded checkpoint. The Integrator may
+only resolve the recorded conflict within the backend-computed allowed files;
+it may not move `HEAD`, commit, select providers, change acceptance criteria,
+or authorize delivery.
+
+The backend verifies the index and file scope, creates the resolved candidate
+commit itself, and dispatches a new candidate-bound Judge. Only a decision that
+names the exact integration attempt and resolved SHA can authorize the final
+fixed validation and commit. Malformed results, unresolved/out-of-scope work,
+rejection, interruption, or delivery failure are persisted and handed back to
+the Supervisor without starting a second automatic Integrator attempt.
+
 ### Role Agent Assignments
+
+The assignable child roles are `worker`, `spec_writer`, `review_merge`, and the
+conditional conflict-recovery role `integrator`.
 
 Provider setup can assign a different agent per child role — `worker`,
 `spec_writer`, and `review_merge` — each with its own provider, model label,

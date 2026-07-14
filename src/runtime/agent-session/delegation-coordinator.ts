@@ -7,6 +7,7 @@ import type {
   AgentRuntimeReviewMergeCheckpoint,
   AgentRuntimeWorktreeMetadata,
   ManagedReviewDecisionControlEvent,
+  ManagedIntegrationResultControlEvent,
   TaskAcceptanceCriterion,
 } from "../../domain/index.js";
 import type { ManagedTaskRepository } from "../../persistence/managed-task-repository.js";
@@ -15,7 +16,7 @@ import type {
   EventRepository,
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
-import { validateManagedReviewDecision, validateManagedTaskResult, type ManagedTaskResult } from "./delegation-control-event.js";
+import { validateManagedIntegrationResult, validateManagedReviewDecision, validateManagedTaskResult, type ManagedTaskResult } from "./delegation-control-event.js";
 import { buildJudgeContractAppendix, buildWorkerContractAppendix } from "./supervisor-prompt.js";
 import {
   attestWorktreeFiles,
@@ -58,6 +59,18 @@ export interface StartWorkerDelegationInput {
   /** Extra role-specific instructions appended after the contract appendix. */
   promptAppendix?: string | null;
   workerDelegationRequestId?: string | null;
+  integrationContext?: {
+    integrationAttemptId: string;
+    workerDelegationRequestId: string;
+    checkpointHead: string;
+    originalCandidateCommitSha: string;
+    worktreePath: string;
+  } | null;
+  reviewCandidateContext?: {
+    integrationAttemptId: string;
+    resolvedCandidateCommitSha: string;
+    worktreePath: string;
+  } | null;
   adapter: AgentRuntimeAdapter;
   eventData: Record<string, unknown>;
   onChildOutcome?: (input: SupervisorContinuationInput) => Promise<void>;
@@ -79,6 +92,10 @@ export interface SupervisorContinuationInput {
   reviewDecision: ManagedReviewDecisionControlEvent | null;
   reviewDecisionError: string | null;
   workerDelegationRequestId: string | null;
+  integrationAttemptId: string | null;
+  reviewedCandidateCommitSha: string | null;
+  integrationResult: ManagedIntegrationResultControlEvent | null;
+  integrationResultError: string | null;
 }
 
 export interface DelegationCoordinator {
@@ -126,6 +143,8 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
           taskId: workerResult.taskId,
           workerDelegationRequestId: workerResult.id,
           judgeDelegationRequestId: accepted.id,
+          integrationAttemptId: input.reviewCandidateContext?.integrationAttemptId ?? null,
+          reviewedCandidateCommitSha: input.reviewCandidateContext?.resolvedCandidateCommitSha ?? null,
           safeSummary: "Independent judge review started.",
           runId: parent.runId,
         });
@@ -166,7 +185,11 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       const childCwd =
         input.role === "worker"
           ? await createWorkerCwd(worktreeService, supervisorCwd, childSession.id, deps.agentSessionRepo)
-          : { path: workerResult?.worktreePath ?? supervisorCwd, worktree: null };
+          : input.role === "integrator" && input.integrationContext
+            ? { path: input.integrationContext.worktreePath, worktree: null }
+            : input.reviewCandidateContext
+              ? { path: input.reviewCandidateContext.worktreePath, worktree: null }
+              : { path: workerResult?.worktreePath ?? supervisorCwd, worktree: null };
       const contractedPrompt =
         input.role === "worker" && input.acceptance && input.acceptance.length > 0
           ? `${input.prompt}\n\n${buildWorkerContractAppendix(input.acceptance, input.taskId ?? null)}`
@@ -176,6 +199,8 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
             workerDelegationRequestId: workerResult.id,
             acceptance: workerResult.acceptance ?? [],
             resultSummary: workerResult.resultSummary,
+            integrationAttemptId: input.reviewCandidateContext?.integrationAttemptId ?? null,
+            reviewedCandidateCommitSha: input.reviewCandidateContext?.resolvedCandidateCommitSha ?? null,
           })}`
         : contractedPrompt;
       const childPrompt = input.promptAppendix ? `${judgePrompt}\n\n${input.promptAppendix}` : judgePrompt;
@@ -191,6 +216,13 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       });
 
       const running = deps.agentSessionRepo.startDelegationRequest(accepted.id, childSession.id);
+      if (input.role === "integrator" && input.integrationContext && deps.managedTaskRepo) {
+        deps.managedTaskRepo.transitionIntegration(input.integrationContext.integrationAttemptId, "resolving", {
+          safeSummary: "Integrator conflict recovery started.",
+          integratorDelegationRequestId: accepted.id,
+          runId: parent.runId,
+        });
+      }
       deps.agentSessionRepo.updateLifecycleState(childSession.id, "running");
       deps.agentSessionRepo.updateLifecycleState(parent.id, "waiting_child");
       deps.eventRepo.create({
@@ -242,10 +274,12 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         role: input.role,
         taskId: input.taskId ?? null,
         workerTaskId: workerResult?.taskId ?? null,
-        worktreePath: childCwd.worktree?.path ?? workerResult?.worktreePath ?? null,
+        worktreePath: childCwd.path,
         pending: {},
         workerDelegationRequestId: workerResult?.id ?? null,
-        frozenAcceptance: workerResult?.acceptance ?? [],
+        integrationContext: input.integrationContext ?? null,
+        reviewCandidateContext: input.reviewCandidateContext ?? null,
+        frozenAcceptance: input.acceptance ?? workerResult?.acceptance ?? [],
         reviewMergeVerificationService,
         supervisorCwd,
         onChildOutcome: input.onChildOutcome,
@@ -334,6 +368,11 @@ async function consumeChildEvents(deps: DelegationCoordinatorDeps, input: Consum
           reviewMergeOutcome: outcome.reviewMergeOutcome,
           reviewDecision: outcome.reviewDecision,
           reviewDecisionError: outcome.reviewDecisionError,
+          integrationAttemptId: input.integrationContext?.integrationAttemptId ??
+            input.reviewCandidateContext?.integrationAttemptId ?? null,
+          reviewedCandidateCommitSha: input.reviewCandidateContext?.resolvedCandidateCommitSha ?? null,
+          integrationResult: outcome.integrationResult,
+          integrationResultError: outcome.integrationResultError,
           workerDelegationRequestId: input.workerDelegationRequestId,
         });
       }
@@ -355,9 +394,13 @@ interface RecordChildEventInput {
     taskResult?: ManagedTaskResult;
     reviewDecision?: ManagedReviewDecisionControlEvent;
     reviewDecisionError?: string;
+    integrationResult?: ManagedIntegrationResultControlEvent;
+    integrationResultError?: string;
   };
   role: AgentRuntimeDelegationRole;
   workerDelegationRequestId: string | null;
+  integrationContext: StartWorkerDelegationInput["integrationContext"];
+  reviewCandidateContext: StartWorkerDelegationInput["reviewCandidateContext"];
   frozenAcceptance: TaskAcceptanceCriterion[];
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;
@@ -371,6 +414,8 @@ interface ChildTerminalOutcome {
   reviewMergeOutcome: string | null;
   reviewDecision: ManagedReviewDecisionControlEvent | null;
   reviewDecisionError: string | null;
+  integrationResult: ManagedIntegrationResultControlEvent | null;
+  integrationResultError: string | null;
 }
 
 function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEventInput): ChildTerminalOutcome | null {
@@ -411,14 +456,40 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
         : null,
       reviewDecision: input.pending.reviewDecision ?? null,
       reviewDecisionError: input.pending.reviewDecisionError ?? null,
+      integrationResult: input.pending.integrationResult ?? null,
+      integrationResultError: input.pending.integrationResultError ??
+        (input.role === "integrator" && !input.pending.integrationResult
+          ? "Integrator completed without a managed_integration.result block."
+          : null),
     };
   }
 
   if (input.event.metadata?.delegationControlEvent !== undefined) {
+    if (input.role === "integrator" && input.integrationContext) {
+      if (input.pending.integrationResult) {
+        input.pending.integrationResultError = "Integrator emitted more than one managed_integration.result block.";
+        return null;
+      }
+      const integrated = validateManagedIntegrationResult({
+        controlEvent: input.event.metadata.delegationControlEvent,
+        expectedIntegrationAttemptId: input.integrationContext.integrationAttemptId,
+        expectedWorkerDelegationRequestId: input.integrationContext.workerDelegationRequestId,
+        expectedOriginalCandidateCommitSha: input.integrationContext.originalCandidateCommitSha,
+      });
+      if (integrated.ok) {
+        input.pending.integrationResult = integrated.result;
+        input.pending.integrationResultError = undefined;
+      } else {
+        input.pending.integrationResultError = integrated.safeReason;
+      }
+      return null;
+    }
     if (input.role === "review_merge" && input.workerDelegationRequestId) {
       const reviewed = validateManagedReviewDecision({
         controlEvent: input.event.metadata.delegationControlEvent,
         expectedWorkerDelegationRequestId: input.workerDelegationRequestId,
+        expectedIntegrationAttemptId: input.reviewCandidateContext?.integrationAttemptId ?? null,
+        expectedReviewedCandidateCommitSha: input.reviewCandidateContext?.resolvedCandidateCommitSha ?? null,
         frozenCriteria: input.frozenAcceptance,
       });
       if (reviewed.ok) {

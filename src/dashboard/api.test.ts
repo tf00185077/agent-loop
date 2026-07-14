@@ -141,6 +141,12 @@ test("reads an agent session snapshot for a goal", async () => {
       },
       approvals: [],
       childSessionRequests: [],
+      managedTasks: [{
+        id: "task-1", title: "Resolve", status: "awaiting_delivery", criteria: [],
+        lastJudgeVerdict: "accepted", lastDeliveryStatus: "conflict",
+        lastIntegrationStatus: "awaiting_review", integrationAttemptId: "integration-1",
+        resolvedCandidateCommitSha: "candidate-2", lastSafeSummary: "Ready for re-review.",
+      }],
     });
   };
 
@@ -149,6 +155,8 @@ test("reads an agent session snapshot for a goal", async () => {
   assert.equal(capturedUrl, "/api/goals/goal-1/agent-session");
   assert.equal(snapshot.session?.providerId, "codex-local");
   assert.equal(snapshot.session?.modelLabel, "gpt-5-codex");
+  assert.equal(snapshot.managedTasks?.[0]?.lastIntegrationStatus, "awaiting_review");
+  assert.equal(snapshot.managedTasks?.[0]?.resolvedCandidateCommitSha, "candidate-2");
 });
 
 test("approves and rejects agent session approvals through dashboard API", async () => {

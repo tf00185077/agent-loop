@@ -262,6 +262,31 @@ export function GoalDetailPanel({
           )}
         </section>
       )}
+      {(agentSessionSnapshot?.managedTasks?.length ?? 0) > 0 && (
+        <section style={{ marginTop: 12, marginBottom: 20 }}>
+          <h3 style={{ fontSize: 16, margin: "0 0 8px" }}>Managed task state</h3>
+          <table style={{ borderCollapse: "collapse", fontSize: 14 }}>
+            <tbody>
+              {agentSessionSnapshot!.managedTasks!.map((task) => (
+                <tr key={task.id}>
+                  <td style={{ paddingRight: 16, paddingBottom: 4 }}>{task.id}</td>
+                  <td style={{ paddingRight: 16, paddingBottom: 4 }}>{task.status}</td>
+                  <td style={{ paddingBottom: 4 }}>
+                    {task.lastIntegrationStatus
+                      ? `integration ${task.lastIntegrationStatus} (${task.integrationAttemptId})`
+                      : task.lastSafeSummary}
+                    {task.resolvedCandidateCommitSha && (
+                      <div style={{ color: "#666", fontSize: 12 }}>
+                        {`resolved candidate ${task.resolvedCandidateCommitSha}`}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
     </div>
   );
 }

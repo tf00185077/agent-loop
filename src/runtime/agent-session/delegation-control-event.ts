@@ -4,10 +4,72 @@ import type {
   ManagedChangePlanEntry,
   ManagedTaskListEntry,
   ManagedReviewDecisionControlEvent,
+  ManagedIntegrationResultControlEvent,
   TaskAcceptanceCriterion,
   TaskCriterionEvidence,
   TaskTestEvidence,
 } from "../../domain/index.js";
+
+export type ManagedIntegrationResultValidation =
+  | { ok: true; result: ManagedIntegrationResultControlEvent }
+  | { ok: false; safeReason: string };
+
+export function validateManagedIntegrationResult(input: {
+  controlEvent: unknown;
+  expectedIntegrationAttemptId: string;
+  expectedWorkerDelegationRequestId: string;
+  expectedOriginalCandidateCommitSha: string;
+}): ManagedIntegrationResultValidation {
+  const value = input.controlEvent;
+  if (!isRecord(value) || value.type !== "managed_integration.result") {
+    return { ok: false, safeReason: "Not a managed_integration.result control event." };
+  }
+  if (value.integrationAttemptId !== input.expectedIntegrationAttemptId) {
+    return { ok: false, safeReason: "Integrator result targets a different integration attempt." };
+  }
+  if (value.workerDelegationRequestId !== input.expectedWorkerDelegationRequestId) {
+    return { ok: false, safeReason: "Integrator result targets a different worker attempt." };
+  }
+  if (value.originalCandidateCommitSha !== input.expectedOriginalCandidateCommitSha) {
+    return { ok: false, safeReason: "Integrator result targets a different original candidate." };
+  }
+  if (typeof value.safeSummary !== "string" || value.safeSummary.trim().length === 0) {
+    return { ok: false, safeReason: "Integrator result requires a safe summary." };
+  }
+  return {
+    ok: true,
+    result: {
+      type: "managed_integration.result",
+      integrationAttemptId: input.expectedIntegrationAttemptId,
+      workerDelegationRequestId: input.expectedWorkerDelegationRequestId,
+      originalCandidateCommitSha: input.expectedOriginalCandidateCommitSha,
+      safeSummary: value.safeSummary.trim(),
+    },
+  };
+}
+
+export function selectManagedIntegrationResult(input: {
+  controlEvents: unknown[];
+  expectedIntegrationAttemptId: string;
+  expectedWorkerDelegationRequestId: string;
+  expectedOriginalCandidateCommitSha: string;
+}): ManagedIntegrationResultValidation {
+  const candidates = input.controlEvents.filter(
+    (event) => isRecord(event) && event.type === "managed_integration.result",
+  );
+  if (candidates.length === 0) {
+    return { ok: false, safeReason: "Integrator completed without a managed_integration.result block." };
+  }
+  if (candidates.length > 1) {
+    return { ok: false, safeReason: "Integrator emitted more than one managed_integration.result block." };
+  }
+  return validateManagedIntegrationResult({
+    controlEvent: candidates[0],
+    expectedIntegrationAttemptId: input.expectedIntegrationAttemptId,
+    expectedWorkerDelegationRequestId: input.expectedWorkerDelegationRequestId,
+    expectedOriginalCandidateCommitSha: input.expectedOriginalCandidateCommitSha,
+  });
+}
 
 export interface DelegationControlEventRequest {
   role: AgentRuntimeDelegationRole;
@@ -37,6 +99,8 @@ export type ManagedReviewDecisionValidation =
 export function validateManagedReviewDecision(input: {
   controlEvent: unknown;
   expectedWorkerDelegationRequestId: string;
+  expectedIntegrationAttemptId?: string | null;
+  expectedReviewedCandidateCommitSha?: string | null;
   frozenCriteria: TaskAcceptanceCriterion[];
 }): ManagedReviewDecisionValidation {
   const value = input.controlEvent;
@@ -45,6 +109,13 @@ export function validateManagedReviewDecision(input: {
   }
   if (value.workerDelegationRequestId !== input.expectedWorkerDelegationRequestId) {
     return { ok: false, safeReason: "Judge decision targets a different worker attempt." };
+  }
+  if (input.expectedIntegrationAttemptId && value.integrationAttemptId !== input.expectedIntegrationAttemptId) {
+    return { ok: false, safeReason: "Judge decision targets a different integration attempt." };
+  }
+  if (input.expectedReviewedCandidateCommitSha &&
+      value.reviewedCandidateCommitSha !== input.expectedReviewedCandidateCommitSha) {
+    return { ok: false, safeReason: "Judge decision targets a different reviewed candidate." };
   }
   if (value.verdict !== "accepted" && value.verdict !== "rejected" && value.verdict !== "blocked") {
     return { ok: false, safeReason: "Judge verdict must be accepted, rejected, or blocked." };
@@ -89,6 +160,10 @@ export function validateManagedReviewDecision(input: {
     decision: {
       type: "managed_review.decision",
       workerDelegationRequestId: input.expectedWorkerDelegationRequestId,
+      ...(input.expectedIntegrationAttemptId ? { integrationAttemptId: input.expectedIntegrationAttemptId } : {}),
+      ...(input.expectedReviewedCandidateCommitSha
+        ? { reviewedCandidateCommitSha: input.expectedReviewedCandidateCommitSha }
+        : {}),
       verdict: value.verdict,
       decisions,
       safeSummary: value.safeSummary.trim(),

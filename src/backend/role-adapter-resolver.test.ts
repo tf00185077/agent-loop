@@ -31,6 +31,7 @@ test("returns null for roles without an assignment", () => {
 
   assert.equal(resolver("worker"), null);
   assert.equal(resolver("review_merge"), null);
+  assert.equal(resolver("integrator"), null);
 });
 
 test("injected adapters take precedence over construction", () => {
@@ -58,6 +59,17 @@ test("blank model labels resolve to null (provider default)", () => {
   const resolved = resolver("review_merge");
   assert.equal(resolved?.providerId, "mock");
   assert.equal(resolved?.modelLabel, null);
+});
+
+test("resolves the Integrator through backend role policy", () => {
+  const resolver = createRoleAdapterResolver({
+    getSettings: () =>
+      settingsWith({ integrator: { provider: "mock", modelLabel: "merge-fast", commandPath: null } }),
+  });
+
+  const resolved = resolver("integrator");
+  assert.equal(resolved?.providerId, "mock");
+  assert.equal(resolved?.modelLabel, "merge-fast");
 });
 
 test("constructs codex and claude adapters from assignment paths with detection stubs", async () => {

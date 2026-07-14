@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { openDatabase } from "../persistence/database.js";
 import { createApp } from "./app.js";
 import { createGoalRepository } from "../persistence/goal-repository.js";
+import { createManagedTaskRepository } from "../persistence/managed-task-repository.js";
 import {
   createAgentSessionRepository,
   createEventRepository,
@@ -259,6 +260,11 @@ describe("Backend API", () => {
                 modelLabel: "claude-sonnet-4",
                 commandPath: "C:\\Tools\\claude.cmd --api-key sk-secret",
               },
+              integrator: {
+                provider: "codex-local",
+                modelLabel: "gpt-5.5-mini",
+                commandPath: "C:\\Tools\\codex.exe",
+              },
             },
           }),
         });
@@ -269,6 +275,11 @@ describe("Backend API", () => {
             provider: "claude-local",
             modelLabel: "claude-sonnet-4",
             commandPath: "C:\\Tools\\claude.cmd",
+          },
+          integrator: {
+            provider: "codex-local",
+            modelLabel: "gpt-5.5-mini",
+            commandPath: "C:\\Tools\\codex.exe",
           },
         });
 
@@ -1642,6 +1653,48 @@ describe("Backend API", () => {
           ((body.mergeOutcomes as Array<Record<string, unknown>>)[0]).outcome,
           "test_failed_reverted",
         );
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("returns a sanitized durable integration read model", async () => {
+      const providerServer = await startServer();
+      try {
+        const { goal, session } = seedManagedSession(providerServer.db);
+        const tasks = createManagedTaskRepository(providerServer.db);
+        tasks.registerTasks({
+          goalId: goal.id,
+          tasks: [{ id: "task-integration", title: "Resolve", acceptance: [{ id: "A1", text: "Pass" }] }],
+        });
+        const sessions = createAgentSessionRepository(providerServer.db);
+        const worker = sessions.createDelegationRequest({
+          parentSessionId: session.id, role: "worker", taskId: "task-integration", promptSummary: "private worker prompt",
+        });
+        tasks.beginAttempt("task-integration", worker.id);
+        sessions.rejectDelegationRequest(worker.id, "Fixture worker process ended.");
+        const integration = tasks.beginIntegration({
+          taskId: "task-integration", workerDelegationRequestId: worker.id, checkpointHead: "checkpoint-secret",
+          originalCandidateCommitSha: "candidate-original", conflictFiles: ["src/private.ts"],
+          allowedFiles: ["src/private.ts"], safeSummary: "Conflict recorded.",
+        });
+        const integrator = sessions.createDelegationRequest({
+          parentSessionId: session.id, role: "integrator", taskId: "task-integration", promptSummary: "private integrator prompt",
+        });
+        tasks.transitionIntegration(integration.id, "resolving", {
+          integratorDelegationRequestId: integrator.id, safeSummary: "Resolving.",
+        });
+
+        const res = await fetch(`${providerServer.url}/api/goals/${goal.id}/agent-session`);
+        const body = (await json(res)) as Record<string, unknown>;
+        const managed = (body.managedTasks as Array<Record<string, unknown>>)[0]!;
+        assert.equal(managed.lastIntegrationStatus, "resolving");
+        assert.equal(managed.integrationAttemptId, integration.id);
+        assert.equal(managed.resolvedCandidateCommitSha, null);
+        assert.equal("conflictFiles" in managed, false);
+        assert.equal("allowedFiles" in managed, false);
+        assert.equal(JSON.stringify(managed).includes("private integrator prompt"), false);
+        assert.equal(JSON.stringify(managed).includes("checkpoint-secret"), false);
       } finally {
         await providerServer.close();
       }

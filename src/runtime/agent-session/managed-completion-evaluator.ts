@@ -83,6 +83,18 @@ export function evaluateManagedCompletion(
       gaps.push({ type: "pending_delivery", taskId: task.id, safeSummary: `Task ${task.id} is awaiting backend delivery.` });
     }
 
+    const integrations = db.prepare(`
+      SELECT id, status FROM managed_task_integrations WHERE task_id = ? ORDER BY created_at, rowid
+    `).all(task.id) as Array<{ id: string; status: string }>;
+    for (const integration of integrations) {
+      if (integration.status === "committed" || integration.status === "rejected" || integration.status === "blocked") continue;
+      gaps.push({
+        type: "pending_integration",
+        taskId: task.id,
+        safeSummary: `Integration attempt ${integration.id} for task ${task.id} is ${integration.status}.`,
+      });
+    }
+
     const attempts = db.prepare(`
       SELECT id, result_summary FROM agent_delegation_requests
       WHERE task_id = ? AND role = 'worker' AND result_summary IS NOT NULL

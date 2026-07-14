@@ -4,11 +4,13 @@ import type {
   ManagedDeliveryOutcome,
   ManagedJudgeCriterionDecision,
   ManagedJudgeVerdict,
+  ManagedIntegrationStatus,
   ManagedTaskCriterionRecord,
   ManagedTaskDeliveryRecord,
   ManagedTaskListEntry,
   ManagedTaskRecord,
   ManagedTaskStatus,
+  ManagedTaskIntegrationRecord,
   TaskCriterionEvidence,
 } from "../domain/index.js";
 import type { AppDatabase } from "./database.js";
@@ -42,6 +44,8 @@ export interface RecordManagedReviewInput {
   taskId: string;
   workerDelegationRequestId: string;
   judgeDelegationRequestId: string | null;
+  integrationAttemptId?: string | null;
+  reviewedCandidateCommitSha?: string | null;
   verdict: ManagedJudgeVerdict;
   decisions: ManagedJudgeCriterionDecision[];
   safeSummary: string;
@@ -55,6 +59,8 @@ export interface ManagedReviewRecord {
   taskId: string;
   workerDelegationRequestId: string;
   judgeDelegationRequestId: string | null;
+  integrationAttemptId: string | null;
+  reviewedCandidateCommitSha: string | null;
   status: "pending" | "accepted" | "rejected" | "blocked" | "malformed";
   verdict: ManagedJudgeVerdict | null;
   decisions: ManagedJudgeCriterionDecision[];
@@ -80,6 +86,7 @@ export interface ManagedCriterionResultRecord {
 export interface RecordManagedDeliveryInput {
   taskId: string;
   workerDelegationRequestId: string;
+  integrationAttemptId?: string | null;
   status: ManagedDeliveryOutcome;
   safeSummary: string;
   checkpointHead?: string | null;
@@ -90,6 +97,24 @@ export interface RecordManagedDeliveryInput {
   validationExitCode?: number | null;
   validationSummary?: string | null;
   rollbackSummary?: string | null;
+  runId?: string | null;
+}
+
+export interface BeginManagedIntegrationInput {
+  taskId: string;
+  workerDelegationRequestId: string;
+  checkpointHead: string;
+  originalCandidateCommitSha: string;
+  conflictFiles: string[];
+  allowedFiles: string[];
+  safeSummary: string;
+  runId?: string | null;
+}
+
+export interface TransitionManagedIntegrationOptions {
+  safeSummary: string;
+  integratorDelegationRequestId?: string | null;
+  resolvedCandidateCommitSha?: string | null;
   runId?: string | null;
 }
 
@@ -106,6 +131,8 @@ export interface ManagedTaskRepository {
     taskId: string;
     workerDelegationRequestId: string;
     judgeDelegationRequestId: string;
+    integrationAttemptId?: string | null;
+    reviewedCandidateCommitSha?: string | null;
     safeSummary: string;
     runId?: string | null;
   }): ManagedReviewRecord;
@@ -121,7 +148,28 @@ export interface ManagedTaskRepository {
   listReviews(taskId: string): ManagedReviewRecord[];
   recordDelivery(input: RecordManagedDeliveryInput): ManagedTaskDeliveryRecord;
   listDeliveries(taskId: string): ManagedTaskDeliveryRecord[];
+  beginIntegration(input: BeginManagedIntegrationInput): ManagedTaskIntegrationRecord;
+  transitionIntegration(
+    integrationAttemptId: string,
+    status: ManagedIntegrationStatus,
+    options: TransitionManagedIntegrationOptions,
+  ): ManagedTaskIntegrationRecord;
+  getIntegration(integrationAttemptId: string): ManagedTaskIntegrationRecord | null;
+  listIntegrations(taskId: string): ManagedTaskIntegrationRecord[];
+  interruptNonterminalIntegrations(goalId: string, safeSummary: string, runId?: string | null): number;
 }
+
+const integrationTransitions: Record<ManagedIntegrationStatus, readonly ManagedIntegrationStatus[]> = {
+  pending: ["resolving", "resolution_failed", "interrupted"],
+  resolving: ["awaiting_review", "resolution_failed", "interrupted"],
+  awaiting_review: ["accepted", "rejected", "blocked", "resolution_failed", "interrupted"],
+  accepted: ["committed", "resolution_failed", "interrupted"],
+  rejected: [],
+  blocked: [],
+  resolution_failed: [],
+  interrupted: [],
+  committed: [],
+};
 
 const legalTransitions: Record<ManagedTaskStatus, readonly ManagedTaskStatus[]> = {
   registered: ["delegated", "split", "blocked", "failed"],
@@ -306,22 +354,32 @@ export function createManagedTaskRepository(
       return db.transaction(() => {
         const task = requireTask(db, input.taskId);
         requireAttempt(db, input.taskId, input.workerDelegationRequestId);
-        if (task.status !== "awaiting_review") {
+        const integration = input.integrationAttemptId ? requireIntegration(db, input.integrationAttemptId) : null;
+        if (integration) {
+          validateIntegrationCandidate(integration, input.taskId, input.workerDelegationRequestId,
+            input.reviewedCandidateCommitSha ?? null);
+          if (integration.status !== "awaiting_review") {
+            throw new Error(`Cannot begin integration review while integration is ${integration.status}.`);
+          }
+        } else if (task.status !== "awaiting_review") {
           throw new Error(`Cannot begin review while task is ${task.status}.`);
         }
         const now = clock();
         const id = randomUUID();
         db.prepare(`
           INSERT INTO managed_task_reviews (
-            id, task_id, worker_delegation_request_id, judge_delegation_request_id, status, verdict,
+            id, task_id, worker_delegation_request_id, judge_delegation_request_id,
+            integration_attempt_id, reviewed_candidate_commit_sha, status, verdict,
             decisions, cited_criteria, safe_summary, deferred_findings, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, 'pending', NULL, '[]', '[]', ?, '[]', ?, ?)
-        `).run(id, input.taskId, input.workerDelegationRequestId, input.judgeDelegationRequestId, input.safeSummary, now, now);
+          ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, '[]', '[]', ?, '[]', ?, ?)
+        `).run(id, input.taskId, input.workerDelegationRequestId, input.judgeDelegationRequestId,
+          input.integrationAttemptId ?? null, input.reviewedCandidateCommitSha ?? null, input.safeSummary, now, now);
         insertAuditEvent(db, {
           goalId: task.goalId, runId: input.runId ?? null, message: input.safeSummary,
           runtimeEventType: "managed_task.review_started",
           data: { taskId: input.taskId, workerDelegationRequestId: input.workerDelegationRequestId,
-            judgeDelegationRequestId: input.judgeDelegationRequestId }, now,
+            judgeDelegationRequestId: input.judgeDelegationRequestId,
+            integrationAttemptId: input.integrationAttemptId ?? null }, now,
         });
         return getReview(db, id)!;
       })();
@@ -360,9 +418,19 @@ export function createManagedTaskRepository(
       return db.transaction(() => {
         const task = requireTask(db, input.taskId);
         requireAttempt(db, input.taskId, input.workerDelegationRequestId);
-        if (db.prepare("SELECT 1 FROM managed_task_reviews WHERE worker_delegation_request_id = ? AND verdict IS NOT NULL")
-          .get(input.workerDelegationRequestId)) {
-          throw new Error(`Worker attempt already reviewed: ${input.workerDelegationRequestId}`);
+        const integration = input.integrationAttemptId ? requireIntegration(db, input.integrationAttemptId) : null;
+        if (integration) {
+          validateIntegrationCandidate(integration, input.taskId, input.workerDelegationRequestId,
+            input.reviewedCandidateCommitSha ?? null);
+        }
+        const duplicate = integration
+          ? db.prepare("SELECT 1 FROM managed_task_reviews WHERE integration_attempt_id = ? AND verdict IS NOT NULL")
+            .get(integration.id)
+          : db.prepare("SELECT 1 FROM managed_task_reviews WHERE worker_delegation_request_id = ? AND integration_attempt_id IS NULL AND verdict IS NOT NULL")
+            .get(input.workerDelegationRequestId);
+        if (duplicate) {
+          throw new Error(integration ? `Integration attempt already reviewed: ${integration.id}`
+            : `Worker attempt already reviewed: ${input.workerDelegationRequestId}`);
         }
         const criteria = listCriteria(db, input.taskId);
         validateReview(criteria, input);
@@ -393,20 +461,30 @@ export function createManagedTaskRepository(
         if (pending) {
           db.prepare(`
             UPDATE managed_task_reviews SET status = ?, verdict = ?, decisions = ?, cited_criteria = ?,
+              integration_attempt_id = ?, reviewed_candidate_commit_sha = ?,
               safe_summary = ?, deferred_findings = ?, updated_at = ? WHERE id = ?
-          `).run(reviewStatus, input.verdict, JSON.stringify(input.decisions), JSON.stringify(cited), input.safeSummary,
-            JSON.stringify(input.deferredFindings ?? []), now, reviewId);
+          `).run(reviewStatus, input.verdict, JSON.stringify(input.decisions), JSON.stringify(cited),
+            input.integrationAttemptId ?? null, input.reviewedCandidateCommitSha ?? null,
+            input.safeSummary, JSON.stringify(input.deferredFindings ?? []), now, reviewId);
         } else {
           db.prepare(`
             INSERT INTO managed_task_reviews (
-              id, task_id, worker_delegation_request_id, judge_delegation_request_id, status, verdict,
+              id, task_id, worker_delegation_request_id, judge_delegation_request_id,
+              integration_attempt_id, reviewed_candidate_commit_sha, status, verdict,
               decisions, cited_criteria, safe_summary, deferred_findings, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             reviewId, input.taskId, input.workerDelegationRequestId, input.judgeDelegationRequestId,
+            input.integrationAttemptId ?? null, input.reviewedCandidateCommitSha ?? null,
             reviewStatus, input.verdict, JSON.stringify(input.decisions), JSON.stringify(cited), input.safeSummary,
             JSON.stringify(input.deferredFindings ?? []), now, now,
           );
+        }
+        if (integration) {
+          const integrationStatus: ManagedIntegrationStatus = input.verdict === "accepted"
+            ? "accepted" : input.verdict === "blocked" ? "blocked" : "rejected";
+          db.prepare("UPDATE managed_task_integrations SET status = ?, safe_summary = ?, updated_at = ? WHERE id = ?")
+            .run(integrationStatus, input.safeSummary, now, integration.id);
         }
         const nextStatus: ManagedTaskStatus = input.verdict === "accepted"
           ? (input.hasAttestedChanges ? "awaiting_delivery" : "accepted")
@@ -437,24 +515,36 @@ export function createManagedTaskRepository(
         const id = randomUUID();
         db.prepare(`
           INSERT INTO managed_task_deliveries (
-            id, task_id, worker_delegation_request_id, status, checkpoint_head, checkpoint_status,
+            id, task_id, worker_delegation_request_id, integration_attempt_id, status, checkpoint_head, checkpoint_status,
             candidate_commit_sha, commit_sha, validation_command, validation_exit_code, validation_summary,
             rollback_summary, safe_summary, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(worker_delegation_request_id) DO UPDATE SET
+            integration_attempt_id = excluded.integration_attempt_id,
             status = excluded.status, checkpoint_head = excluded.checkpoint_head,
             checkpoint_status = excluded.checkpoint_status, candidate_commit_sha = excluded.candidate_commit_sha,
             commit_sha = excluded.commit_sha, validation_command = excluded.validation_command,
             validation_exit_code = excluded.validation_exit_code, validation_summary = excluded.validation_summary,
             rollback_summary = excluded.rollback_summary, safe_summary = excluded.safe_summary, updated_at = excluded.updated_at
         `).run(
-          id, input.taskId, input.workerDelegationRequestId, input.status,
+          id, input.taskId, input.workerDelegationRequestId, input.integrationAttemptId ?? null, input.status,
           input.checkpointHead ?? null, input.checkpointStatus ?? null, input.candidateCommitSha ?? null,
           input.commitSha ?? null, input.validationCommand ?? null, input.validationExitCode ?? null,
           input.validationSummary ?? null, input.rollbackSummary ?? null, input.safeSummary, now, now,
         );
+        if (input.integrationAttemptId && input.status === "committed") {
+          const integration = requireIntegration(db, input.integrationAttemptId);
+          validateIntegrationCandidate(integration, input.taskId, input.workerDelegationRequestId,
+            input.candidateCommitSha ?? null);
+          if (integration.status !== "accepted") {
+            throw new Error(`Cannot commit integration while integration is ${integration.status}.`);
+          }
+          db.prepare("UPDATE managed_task_integrations SET status = 'committed', safe_summary = ?, updated_at = ? WHERE id = ?")
+            .run(input.safeSummary, now, integration.id);
+        }
         const nextStatus: ManagedTaskStatus = input.status === "committed" ? "accepted"
           : input.status === "pending" ? "awaiting_delivery"
+          : input.status === "conflict" ? "awaiting_delivery"
           : input.status === "rejected" ? "rejected"
           : input.status === "revert_failed" ? "blocked" : "failed";
         db.prepare("UPDATE managed_tasks SET status = ?, last_safe_summary = ?, updated_at = ? WHERE id = ?")
@@ -469,6 +559,93 @@ export function createManagedTaskRepository(
     },
     listDeliveries(taskId) {
       return db.prepare("SELECT * FROM managed_task_deliveries WHERE task_id = ? ORDER BY created_at, rowid").all(taskId).map(mapDelivery);
+    },
+    beginIntegration(input) {
+      return db.transaction(() => {
+        const task = requireTask(db, input.taskId);
+        requireAttempt(db, input.taskId, input.workerDelegationRequestId);
+        const existing = db.prepare(`
+          SELECT id FROM managed_task_integrations
+          WHERE worker_delegation_request_id = ? AND original_candidate_commit_sha = ?
+        `).get(input.workerDelegationRequestId, input.originalCandidateCommitSha) as { id: string } | undefined;
+        if (existing) throw new Error(`Integration attempt already exists: ${existing.id}`);
+        const now = clock();
+        const id = randomUUID();
+        db.prepare(`
+          INSERT INTO managed_task_integrations (
+            id, task_id, worker_delegation_request_id, integrator_delegation_request_id, status,
+            checkpoint_head, original_candidate_commit_sha, resolved_candidate_commit_sha,
+            conflict_files, allowed_files, safe_summary, created_at, updated_at
+          ) VALUES (?, ?, ?, NULL, 'pending', ?, ?, NULL, ?, ?, ?, ?, ?)
+        `).run(id, input.taskId, input.workerDelegationRequestId, input.checkpointHead,
+          input.originalCandidateCommitSha, JSON.stringify(uniqueSorted(input.conflictFiles)),
+          JSON.stringify(uniqueSorted(input.allowedFiles)), input.safeSummary, now, now);
+        db.prepare("UPDATE managed_tasks SET status = 'awaiting_delivery', last_safe_summary = ?, updated_at = ? WHERE id = ?")
+          .run(input.safeSummary, now, input.taskId);
+        insertAuditEvent(db, {
+          goalId: task.goalId, runId: input.runId ?? null, message: input.safeSummary,
+          runtimeEventType: "managed_task.integration_started",
+          data: { taskId: input.taskId, workerDelegationRequestId: input.workerDelegationRequestId,
+            integrationAttemptId: id, originalCandidateCommitSha: input.originalCandidateCommitSha }, now,
+        });
+        return requireIntegration(db, id);
+      })();
+    },
+    transitionIntegration(integrationAttemptId, status, transitionOptions) {
+      return db.transaction(() => {
+        const current = requireIntegration(db, integrationAttemptId);
+        if (!integrationTransitions[current.status].includes(status)) {
+          throw new Error(`Cannot transition integration ${integrationAttemptId} from ${current.status} to ${status}.`);
+        }
+        if (status === "resolving" && !transitionOptions.integratorDelegationRequestId) {
+          throw new Error("Resolving integration requires an Integrator delegation.");
+        }
+        if (status === "awaiting_review" && !transitionOptions.resolvedCandidateCommitSha) {
+          throw new Error("Awaiting review requires a resolved candidate commit SHA.");
+        }
+        const task = requireTask(db, current.taskId);
+        const now = clock();
+        db.prepare(`
+          UPDATE managed_task_integrations SET status = ?, integrator_delegation_request_id = COALESCE(?, integrator_delegation_request_id),
+            resolved_candidate_commit_sha = COALESCE(?, resolved_candidate_commit_sha), safe_summary = ?, updated_at = ?
+          WHERE id = ?
+        `).run(status, transitionOptions.integratorDelegationRequestId ?? null,
+          transitionOptions.resolvedCandidateCommitSha ?? null, transitionOptions.safeSummary, now, integrationAttemptId);
+        insertAuditEvent(db, {
+          goalId: task.goalId, runId: transitionOptions.runId ?? null, message: transitionOptions.safeSummary,
+          runtimeEventType: "managed_task.integration_transitioned",
+          data: { taskId: current.taskId, workerDelegationRequestId: current.workerDelegationRequestId,
+            integrationAttemptId, status }, now,
+        });
+        return requireIntegration(db, integrationAttemptId);
+      })();
+    },
+    getIntegration(integrationAttemptId) {
+      return getIntegration(db, integrationAttemptId);
+    },
+    listIntegrations(taskId) {
+      return db.prepare("SELECT * FROM managed_task_integrations WHERE task_id = ? ORDER BY created_at, rowid")
+        .all(taskId).map(mapIntegration);
+    },
+    interruptNonterminalIntegrations(goalId, safeSummary, runId = null) {
+      return db.transaction(() => {
+        const rows = db.prepare(`
+          SELECT i.* FROM managed_task_integrations i
+          JOIN managed_tasks t ON t.id = i.task_id
+          WHERE t.goal_id = ? AND i.status IN ('pending', 'resolving', 'awaiting_review', 'accepted')
+        `).all(goalId).map(mapIntegration);
+        const now = clock();
+        for (const integration of rows) {
+          db.prepare("UPDATE managed_task_integrations SET status = 'interrupted', safe_summary = ?, updated_at = ? WHERE id = ?")
+            .run(safeSummary, now, integration.id);
+          insertAuditEvent(db, {
+            goalId, runId, message: safeSummary, runtimeEventType: "managed_task.integration_interrupted",
+            data: { taskId: integration.taskId, workerDelegationRequestId: integration.workerDelegationRequestId,
+              integrationAttemptId: integration.id }, now,
+          });
+        }
+        return rows.length;
+      })();
     },
   };
 }
@@ -564,6 +741,8 @@ function mapReview(row: unknown): ManagedReviewRecord {
   return {
     id: value.id!, taskId: value.task_id!, workerDelegationRequestId: value.worker_delegation_request_id!,
     judgeDelegationRequestId: value.judge_delegation_request_id,
+    integrationAttemptId: value.integration_attempt_id,
+    reviewedCandidateCommitSha: value.reviewed_candidate_commit_sha,
     status: value.status as ManagedReviewRecord["status"], verdict: value.verdict as ManagedJudgeVerdict | null,
     decisions: JSON.parse(value.decisions ?? "[]") as ManagedJudgeCriterionDecision[],
     citedCriteria: JSON.parse(value.cited_criteria ?? "[]") as string[], safeSummary: value.safe_summary!,
@@ -581,6 +760,7 @@ function mapDelivery(row: unknown): ManagedTaskDeliveryRecord {
   return {
     id: value.id as string, taskId: value.task_id as string,
     workerDelegationRequestId: value.worker_delegation_request_id as string,
+    integrationAttemptId: value.integration_attempt_id as string | null,
     status: value.status as ManagedDeliveryOutcome, checkpointHead: value.checkpoint_head as string | null,
     checkpointStatus: value.checkpoint_status as string | null, candidateCommitSha: value.candidate_commit_sha as string | null,
     commitSha: value.commit_sha as string | null, validationCommand: value.validation_command as string | null,
@@ -588,6 +768,54 @@ function mapDelivery(row: unknown): ManagedTaskDeliveryRecord {
     rollbackSummary: value.rollback_summary as string | null, safeSummary: value.safe_summary as string,
     createdAt: value.created_at as string, updatedAt: value.updated_at as string,
   };
+}
+
+function getIntegration(db: AppDatabase, integrationAttemptId: string): ManagedTaskIntegrationRecord | null {
+  const row = db.prepare("SELECT * FROM managed_task_integrations WHERE id = ?").get(integrationAttemptId);
+  return row ? mapIntegration(row) : null;
+}
+
+function requireIntegration(db: AppDatabase, integrationAttemptId: string): ManagedTaskIntegrationRecord {
+  const integration = getIntegration(db, integrationAttemptId);
+  if (!integration) throw new Error(`Managed integration attempt not found: ${integrationAttemptId}`);
+  return integration;
+}
+
+function mapIntegration(row: unknown): ManagedTaskIntegrationRecord {
+  const value = row as Record<string, string | null>;
+  return {
+    id: value.id!,
+    taskId: value.task_id!,
+    workerDelegationRequestId: value.worker_delegation_request_id!,
+    integratorDelegationRequestId: value.integrator_delegation_request_id,
+    status: value.status as ManagedIntegrationStatus,
+    checkpointHead: value.checkpoint_head!,
+    originalCandidateCommitSha: value.original_candidate_commit_sha!,
+    resolvedCandidateCommitSha: value.resolved_candidate_commit_sha,
+    conflictFiles: JSON.parse(value.conflict_files ?? "[]") as string[],
+    allowedFiles: JSON.parse(value.allowed_files ?? "[]") as string[],
+    safeSummary: value.safe_summary!,
+    createdAt: value.created_at!,
+    updatedAt: value.updated_at!,
+  };
+}
+
+function validateIntegrationCandidate(
+  integration: ManagedTaskIntegrationRecord,
+  taskId: string,
+  workerDelegationRequestId: string,
+  reviewedCandidateCommitSha: string | null,
+): void {
+  if (integration.taskId !== taskId || integration.workerDelegationRequestId !== workerDelegationRequestId) {
+    throw new Error("Integration attempt does not target the managed worker attempt.");
+  }
+  if (!integration.resolvedCandidateCommitSha || reviewedCandidateCommitSha !== integration.resolvedCandidateCommitSha) {
+    throw new Error("Judge review must target the exact resolved candidate commit SHA.");
+  }
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort();
 }
 
 function insertAuditEvent(db: AppDatabase, input: {

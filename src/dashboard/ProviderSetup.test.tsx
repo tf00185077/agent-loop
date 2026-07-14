@@ -309,6 +309,7 @@ test("provider setup panel renders role assignment controls", () => {
   assert.match(html, /Worker \(implementation\)/);
   assert.match(html, /Spec writer/);
   assert.match(html, /Review merge/);
+  assert.match(html, /Integrator \(conflict recovery\)/);
   assert.match(html, /Inherit goal provider/);
   // The assigned worker row exposes model and command-path fields.
   assert.match(html, /aria-label="Worker \(implementation\) model"/);

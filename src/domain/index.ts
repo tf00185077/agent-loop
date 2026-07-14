@@ -86,6 +86,9 @@ export type {
   ManagedTaskListEntry,
   ManagedTaskResultControlEvent,
   ManagedReviewDecisionControlEvent,
+  ManagedIntegrationResultControlEvent,
+  ManagedIntegrationStatus,
+  ManagedTaskIntegrationRecord,
   ManagedCompletionGap,
   ManagedCompletionGapType,
   ManagedCriterionOutcome,
@@ -115,6 +118,7 @@ export {
   managedCompletionGapTypes,
   managedCriterionOutcomes,
   managedDeliveryOutcomes,
+  managedIntegrationStatuses,
   managedJudgeVerdicts,
   managedTaskStatuses,
 } from "./agent-runtime-control-plane.types.js";

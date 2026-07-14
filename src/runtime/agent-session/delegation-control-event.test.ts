@@ -6,6 +6,8 @@ import {
   validateDelegationControlEvent,
   validateManagedControlEvent,
   validateManagedReviewDecision,
+  validateManagedIntegrationResult,
+  selectManagedIntegrationResult,
 } from "./delegation-control-event.js";
 
 test("accepts provider-neutral worker delegation control events", () => {
@@ -443,6 +445,120 @@ test("validates strict managed review decisions against the frozen attempt contr
     frozenCriteria: [{ id: "A1", text: "Tests" }, { id: "A2", text: "Docs" }],
   });
   assert.deepEqual(wrongAttempt, { ok: false, safeReason: "Judge decision targets a different worker attempt." });
+});
+
+test("validates Integrator results against exact durable identities", () => {
+  const expected = {
+    expectedIntegrationAttemptId: "integration-1",
+    expectedWorkerDelegationRequestId: "worker-1",
+    expectedOriginalCandidateCommitSha: "abc123",
+  };
+  const valid = validateManagedIntegrationResult({
+    controlEvent: {
+      type: "managed_integration.result",
+      integrationAttemptId: "integration-1",
+      workerDelegationRequestId: "worker-1",
+      originalCandidateCommitSha: "abc123",
+      safeSummary: "Resolved both conflict markers.",
+    },
+    ...expected,
+  });
+  assert.equal(valid.ok, true);
+  assert.equal(valid.ok ? valid.result.safeSummary : null, "Resolved both conflict markers.");
+
+  assert.deepEqual(validateManagedIntegrationResult({ controlEvent: null, ...expected }), {
+    ok: false,
+    safeReason: "Not a managed_integration.result control event.",
+  });
+  assert.deepEqual(validateManagedIntegrationResult({
+    controlEvent: {
+      type: "managed_integration.result",
+      integrationAttemptId: "integration-other",
+      workerDelegationRequestId: "worker-1",
+      originalCandidateCommitSha: "abc123",
+      safeSummary: "Wrong target",
+    },
+    ...expected,
+  }), { ok: false, safeReason: "Integrator result targets a different integration attempt." });
+  assert.deepEqual(validateManagedIntegrationResult({
+    controlEvent: {
+      type: "managed_integration.result",
+      integrationAttemptId: "integration-1",
+      workerDelegationRequestId: "worker-other",
+      originalCandidateCommitSha: "abc123",
+      safeSummary: "Wrong worker",
+    },
+    ...expected,
+  }), { ok: false, safeReason: "Integrator result targets a different worker attempt." });
+  assert.deepEqual(validateManagedIntegrationResult({
+    controlEvent: {
+      type: "managed_integration.result",
+      integrationAttemptId: "integration-1",
+      workerDelegationRequestId: "worker-1",
+      originalCandidateCommitSha: "foreign",
+      safeSummary: "Wrong candidate",
+    },
+    ...expected,
+  }), { ok: false, safeReason: "Integrator result targets a different original candidate." });
+  assert.deepEqual(validateManagedIntegrationResult({
+    controlEvent: {
+      type: "managed_integration.result",
+      integrationAttemptId: "integration-1",
+      workerDelegationRequestId: "worker-1",
+      originalCandidateCommitSha: "abc123",
+      safeSummary: "   ",
+    },
+    ...expected,
+  }), { ok: false, safeReason: "Integrator result requires a safe summary." });
+});
+
+test("requires exactly one Integrator result block", () => {
+  const expected = {
+    expectedIntegrationAttemptId: "integration-1",
+    expectedWorkerDelegationRequestId: "worker-1",
+    expectedOriginalCandidateCommitSha: "abc123",
+  };
+  const payload = {
+    type: "managed_integration.result",
+    integrationAttemptId: "integration-1",
+    workerDelegationRequestId: "worker-1",
+    originalCandidateCommitSha: "abc123",
+    safeSummary: "Resolved.",
+  };
+  assert.deepEqual(selectManagedIntegrationResult({ controlEvents: [], ...expected }), {
+    ok: false,
+    safeReason: "Integrator completed without a managed_integration.result block.",
+  });
+  assert.deepEqual(selectManagedIntegrationResult({ controlEvents: [payload, payload], ...expected }), {
+    ok: false,
+    safeReason: "Integrator emitted more than one managed_integration.result block.",
+  });
+  assert.equal(selectManagedIntegrationResult({ controlEvents: [{ type: "progress" }, payload], ...expected }).ok, true);
+});
+
+test("binds integration re-review to the exact resolved candidate", () => {
+  const base = {
+    expectedWorkerDelegationRequestId: "worker-1",
+    expectedIntegrationAttemptId: "integration-1",
+    expectedReviewedCandidateCommitSha: "candidate-2",
+    frozenCriteria: [{ id: "A1", text: "Pass" }],
+  };
+  const decision = {
+    type: "managed_review.decision",
+    workerDelegationRequestId: "worker-1",
+    integrationAttemptId: "integration-1",
+    reviewedCandidateCommitSha: "candidate-2",
+    verdict: "accepted",
+    decisions: [{ criterionId: "A1", outcome: "PASS", safeSummary: "Pass" }],
+    safeSummary: "Accepted",
+  };
+  assert.equal(validateManagedReviewDecision({ controlEvent: decision, ...base }).ok, true);
+  assert.deepEqual(validateManagedReviewDecision({
+    controlEvent: { ...decision, reviewedCandidateCommitSha: "candidate-old" }, ...base,
+  }), { ok: false, safeReason: "Judge decision targets a different reviewed candidate." });
+  assert.deepEqual(validateManagedReviewDecision({
+    controlEvent: { ...decision, integrationAttemptId: "integration-old" }, ...base,
+  }), { ok: false, safeReason: "Judge decision targets a different integration attempt." });
 });
 
 function supervisorSession(overrides: Partial<AgentRuntimeSession> = {}): AgentRuntimeSession {

@@ -143,7 +143,7 @@ export interface AgentRuntimeChildSessionRequest {
   safeReason?: string | null;
 }
 
-export const delegationRoles = ["worker", "review_merge"] as const;
+export const delegationRoles = ["worker", "review_merge", "integrator"] as const;
 
 export type AgentRuntimeDelegationRole = (typeof delegationRoles)[number];
 
@@ -193,6 +193,7 @@ export const managedDeliveryOutcomes = [
   "committed",
   "rejected",
   "conflict",
+  "integration_failed",
   "test_failed_reverted",
   "revert_failed",
   "failed",
@@ -201,12 +202,27 @@ export const managedDeliveryOutcomes = [
 
 export type ManagedDeliveryOutcome = (typeof managedDeliveryOutcomes)[number];
 
+export const managedIntegrationStatuses = [
+  "pending",
+  "resolving",
+  "awaiting_review",
+  "accepted",
+  "rejected",
+  "blocked",
+  "resolution_failed",
+  "interrupted",
+  "committed",
+] as const;
+
+export type ManagedIntegrationStatus = (typeof managedIntegrationStatuses)[number];
+
 export const managedCompletionGapTypes = [
   "unaccepted_leaf_task",
   "criterion_not_passed",
   "active_attempt",
   "pending_review",
   "pending_delivery",
+  "pending_integration",
   "undelivered_changes",
   "uncontracted_only_work",
   "unarchived_change",
@@ -258,6 +274,8 @@ export interface ManagedTaskReviewRecord {
   taskId: string;
   workerDelegationRequestId: string;
   judgeDelegationRequestId: string | null;
+  integrationAttemptId?: string | null;
+  reviewedCandidateCommitSha?: string | null;
   verdict: ManagedJudgeVerdict;
   decisions: ManagedJudgeCriterionDecision[];
   citedCriteria: string[];
@@ -270,6 +288,7 @@ export interface ManagedTaskDeliveryRecord {
   id: string;
   taskId: string;
   workerDelegationRequestId: string;
+  integrationAttemptId?: string | null;
   status: ManagedDeliveryOutcome;
   checkpointHead: string | null;
   checkpointStatus: string | null;
@@ -279,6 +298,22 @@ export interface ManagedTaskDeliveryRecord {
   validationExitCode: number | null;
   validationSummary: string | null;
   rollbackSummary: string | null;
+  safeSummary: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedTaskIntegrationRecord {
+  id: string;
+  taskId: string;
+  workerDelegationRequestId: string;
+  integratorDelegationRequestId: string | null;
+  status: ManagedIntegrationStatus;
+  checkpointHead: string;
+  originalCandidateCommitSha: string;
+  resolvedCandidateCommitSha: string | null;
+  conflictFiles: string[];
+  allowedFiles: string[];
   safeSummary: string;
   createdAt: string;
   updatedAt: string;
@@ -306,6 +341,7 @@ export const managedControlEventTypes = [
   "managed_delegation.task_list",
   "managed_task.result",
   "managed_review.decision",
+  "managed_integration.result",
   "managed_change.plan",
 ] as const;
 
@@ -393,10 +429,20 @@ export interface ManagedTaskResultControlEvent {
 export interface ManagedReviewDecisionControlEvent {
   type: "managed_review.decision";
   workerDelegationRequestId: string;
+  integrationAttemptId?: string | null;
+  reviewedCandidateCommitSha?: string | null;
   verdict: ManagedJudgeVerdict;
   decisions: ManagedJudgeCriterionDecision[];
   safeSummary: string;
   deferredFindings?: string[];
+}
+
+export interface ManagedIntegrationResultControlEvent {
+  type: "managed_integration.result";
+  integrationAttemptId: string;
+  workerDelegationRequestId: string;
+  originalCandidateCommitSha: string;
+  safeSummary: string;
 }
 
 export type ManagedControlEvent =
@@ -405,6 +451,7 @@ export type ManagedControlEvent =
   | ManagedTaskListControlEvent
   | ManagedTaskResultControlEvent
   | ManagedReviewDecisionControlEvent
+  | ManagedIntegrationResultControlEvent
   | ManagedChangePlanControlEvent;
 
 export interface AgentRuntimeDelegationRequest {

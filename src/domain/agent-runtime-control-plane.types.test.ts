@@ -13,7 +13,9 @@ import {
   managedCriterionOutcomes,
   managedJudgeVerdicts,
   managedDeliveryOutcomes,
+  managedIntegrationStatuses,
   managedCompletionGapTypes,
+  managedControlEventTypes,
   commandRecordStatuses,
   type AgentRuntimeCapabilities,
   type AgentRuntimeCommandRecord,
@@ -23,6 +25,9 @@ import {
   type AgentRuntimeSession,
   type AgentRuntimeDelegationRequest,
   type AgentRuntimeDelegationSummary,
+  type ManagedIntegrationResultControlEvent,
+  type ManagedTaskIntegrationRecord,
+  type ManagedTaskReviewRecord,
 } from "./agent-runtime-control-plane.types.js";
 import {
   agentRuntimeCapabilityNames as publicAgentRuntimeCapabilityNames,
@@ -186,7 +191,7 @@ test("represents runtime events with session provider and optional control metad
 });
 
 test("represents durable managed delegation contracts", () => {
-  assert.deepEqual(delegationRoles, ["worker", "review_merge"]);
+  assert.deepEqual(delegationRoles, ["worker", "review_merge", "integrator"]);
   assert.deepEqual(delegationRequestStatuses, [
     "requested",
     "accepted",
@@ -258,10 +263,22 @@ test("defines closed durable task decision vocabularies", () => {
     "committed",
     "rejected",
     "conflict",
+    "integration_failed",
     "test_failed_reverted",
     "revert_failed",
     "failed",
     "verification_failed",
+  ]);
+  assert.deepEqual(managedIntegrationStatuses, [
+    "pending",
+    "resolving",
+    "awaiting_review",
+    "accepted",
+    "rejected",
+    "blocked",
+    "resolution_failed",
+    "interrupted",
+    "committed",
   ]);
   assert.deepEqual(managedCompletionGapTypes, [
     "unaccepted_leaf_task",
@@ -269,8 +286,52 @@ test("defines closed durable task decision vocabularies", () => {
     "active_attempt",
     "pending_review",
     "pending_delivery",
+    "pending_integration",
     "undelivered_changes",
     "uncontracted_only_work",
     "unarchived_change",
   ]);
+});
+
+test("binds integration results and Judge records to an exact candidate", () => {
+  assert.ok(managedControlEventTypes.includes("managed_integration.result"));
+
+  const result: ManagedIntegrationResultControlEvent = {
+    type: "managed_integration.result",
+    integrationAttemptId: "integration-1",
+    workerDelegationRequestId: "worker-1",
+    originalCandidateCommitSha: "candidate-1",
+    safeSummary: "Resolved the accepted candidate against the checkpoint.",
+  };
+  const integration: ManagedTaskIntegrationRecord = {
+    id: result.integrationAttemptId,
+    taskId: "task-1",
+    workerDelegationRequestId: result.workerDelegationRequestId,
+    integratorDelegationRequestId: "integrator-1",
+    status: "awaiting_review",
+    checkpointHead: "base-1",
+    originalCandidateCommitSha: result.originalCandidateCommitSha,
+    resolvedCandidateCommitSha: "candidate-2",
+    conflictFiles: ["src/a.ts"],
+    allowedFiles: ["src/a.ts"],
+    safeSummary: result.safeSummary,
+    createdAt: "2026-07-14T00:00:00.000Z",
+    updatedAt: "2026-07-14T00:00:01.000Z",
+  };
+  const review: ManagedTaskReviewRecord = {
+    id: "review-2",
+    taskId: integration.taskId,
+    workerDelegationRequestId: integration.workerDelegationRequestId,
+    judgeDelegationRequestId: "judge-2",
+    integrationAttemptId: integration.id,
+    reviewedCandidateCommitSha: integration.resolvedCandidateCommitSha,
+    verdict: "accepted",
+    decisions: [{ criterionId: "A1", outcome: "PASS", safeSummary: "Pass" }],
+    citedCriteria: ["A1"],
+    safeSummary: "Resolved candidate accepted.",
+    deferredFindings: [],
+    createdAt: "2026-07-14T00:00:02.000Z",
+  };
+
+  assert.equal(review.reviewedCandidateCommitSha, integration.resolvedCandidateCommitSha);
 });

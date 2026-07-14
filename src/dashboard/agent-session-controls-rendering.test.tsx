@@ -163,6 +163,24 @@ test("goal detail renders managed delegation tree state and outcomes", () => {
   assert.match(html, /Workspace reverted to pre-merge checkpoint/);
 });
 
+test("goal detail renders durable integration recovery state", () => {
+  const snapshot = sessionSnapshot();
+  snapshot.managedTasks = [{
+    id: "task-1", title: "Resolve conflict", status: "awaiting_delivery",
+    criteria: [{ id: "A1", text: "Pass", outcome: "PASS" }],
+    lastJudgeVerdict: "accepted", lastDeliveryStatus: "conflict",
+    lastIntegrationStatus: "awaiting_review", integrationAttemptId: "integration-1",
+    resolvedCandidateCommitSha: "candidate-2", lastSafeSummary: "Resolved candidate ready.",
+  }];
+  const html = renderToStaticMarkup(
+    <GoalDetailPanel goal={goal()} latestMetadata={null} agentSessionSnapshot={snapshot}
+      starting={false} onStart={() => undefined} />,
+  );
+  assert.match(html, /Managed task state/);
+  assert.match(html, /integration awaiting_review \(integration-1\)/);
+  assert.match(html, /resolved candidate candidate-2/);
+});
+
 
 function goal(): Goal {
   return {

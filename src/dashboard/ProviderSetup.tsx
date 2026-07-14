@@ -299,6 +299,7 @@ const roleDisplayNames: Record<AgentAssignableRole, string> = {
   worker: "Worker (implementation)",
   spec_writer: "Spec writer",
   review_merge: "Review merge",
+  integrator: "Integrator (conflict recovery)",
 };
 
 interface RoleAssignmentsEditorProps {

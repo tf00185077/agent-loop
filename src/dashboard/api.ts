@@ -38,6 +38,20 @@ export interface AgentSessionSnapshot {
   childSessionRequests: AgentRuntimeChildSessionRequest[];
   delegationRequests: AgentRuntimeDelegationRequest[];
   mergeOutcomes?: ReviewMergeOutcomeReadModel[];
+  managedTasks?: ManagedTaskReadModel[];
+}
+
+export interface ManagedTaskReadModel {
+  id: string;
+  title: string;
+  status: string;
+  criteria: Array<{ id: string; text: string; outcome: string }>;
+  lastJudgeVerdict: string | null;
+  lastDeliveryStatus: string | null;
+  lastIntegrationStatus: string | null;
+  integrationAttemptId: string | null;
+  resolvedCandidateCommitSha: string | null;
+  lastSafeSummary: string;
 }
 
 export interface ReviewMergeOutcomeReadModel {
@@ -66,7 +80,7 @@ export interface ProviderStatus {
   message: string | null;
 }
 
-export const agentAssignableRoles = ["worker", "spec_writer", "review_merge"] as const;
+export const agentAssignableRoles = ["worker", "spec_writer", "review_merge", "integrator"] as const;
 
 export type AgentAssignableRole = (typeof agentAssignableRoles)[number];
 

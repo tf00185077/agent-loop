@@ -5,9 +5,14 @@ import {
   createDefaultProviderSettings,
   sanitizeStartGoalProviderOverride,
   sanitizeProviderStatus,
+  agentAssignableRoles,
   type ProviderSettings,
   type StartGoalProviderOverride,
 } from "./provider-settings.types.js";
+
+test("includes Integrator in backend-assignable child roles", () => {
+  assert.deepEqual(agentAssignableRoles, ["worker", "spec_writer", "review_merge", "integrator"]);
+});
 
 test("defaults provider settings to mock with sanitized idle status", () => {
   assert.deepEqual(createDefaultProviderSettings(), {

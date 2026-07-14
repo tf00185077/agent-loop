@@ -107,6 +107,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
       claudeRuntimeSessionRunner: options.claudeRuntimeSessionRunner,
     }),
   });
+  agentSessionManager.recoverOrphanedSessions();
   const runtime = createRuntimeFromSavedProviderSettings({
     env: options.env ?? process.env,
     providerSettingsRepo,

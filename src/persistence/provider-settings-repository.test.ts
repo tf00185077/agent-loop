@@ -67,6 +67,7 @@ test("round-trips sanitized role assignments across database reopen", () => {
         commandPath: "C:\\Tools\\claude.cmd --api-key sk-secret",
       },
       review_merge: { provider: "codex-local", modelLabel: "", commandPath: null },
+      integrator: { provider: "claude-local", modelLabel: "claude-haiku", commandPath: "C:\\Tools\\claude.cmd" },
     },
   });
   firstDb.close();
@@ -81,6 +82,7 @@ test("round-trips sanitized role assignments across database reopen", () => {
       commandPath: "C:\\Tools\\claude.cmd",
     },
     review_merge: { provider: "codex-local", modelLabel: "", commandPath: null },
+    integrator: { provider: "claude-local", modelLabel: "claude-haiku", commandPath: "C:\\Tools\\claude.cmd" },
   });
   reopened.close();
 });

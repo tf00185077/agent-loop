@@ -9,6 +9,13 @@ export interface ManagedDeliveryInput {
   safeSummary: string;
 }
 
+export interface ManagedCandidateDeliveryInput {
+  supervisorCwd: string;
+  checkpointHead: string;
+  candidateCommitSha: string;
+  safeSummary: string;
+}
+
 export interface ManagedDeliveryResult {
   status: ManagedDeliveryOutcome;
   safeSummary: string;
@@ -20,6 +27,9 @@ export interface ManagedDeliveryResult {
   validationExitCode: number | null;
   validationSummary: string | null;
   rollbackSummary: string | null;
+  candidateFiles?: string[];
+  conflictFiles?: string[];
+  conflictSummary?: string | null;
 }
 
 export interface ManagedDeliveryServiceOptions {
@@ -38,6 +48,7 @@ export interface CommandResult {
 
 export interface ManagedDeliveryService {
   deliver(input: ManagedDeliveryInput): ManagedDeliveryResult;
+  deliverCandidate?(input: ManagedCandidateDeliveryInput): ManagedDeliveryResult;
 }
 
 export function createManagedDeliveryService(options: ManagedDeliveryServiceOptions = {}): ManagedDeliveryService {
@@ -95,12 +106,16 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
 
       const apply = runGit({ cwd: input.supervisorCwd, args: ["cherry-pick", candidateCommitSha] });
       if (apply.status !== 0) {
+        const conflicts = nameOnly(runGit, input.supervisorCwd, ["diff", "--name-only", "--diff-filter=U"]);
         const restored = restoreCheckpoint(runGit, input.supervisorCwd, checkpointHead, true);
         return {
           ...withCheckpoint(outcome(restored.ok ? "conflict" : "revert_failed", restored.ok
             ? "Candidate commit conflicted; the supervisor checkpoint was restored."
             : "Candidate commit conflicted and the supervisor checkpoint could not be restored."), checkpointHead),
           candidateCommitSha,
+          candidateFiles: expected,
+          conflictFiles: conflicts,
+          conflictSummary: safe(apply.stderr) || "Candidate apply reported a conflict.",
           rollbackSummary: restored.summary,
         };
       }
@@ -149,6 +164,81 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
         validationExitCode: validation.status,
         validationSummary,
         rollbackSummary: null,
+        candidateFiles: expected,
+        conflictFiles: [],
+        conflictSummary: null,
+      };
+    },
+    deliverCandidate(input) {
+      const status = runGit({ cwd: input.supervisorCwd, args: ["status", "--porcelain", "-uall"] });
+      const head = runGit({ cwd: input.supervisorCwd, args: ["rev-parse", "HEAD"] });
+      if (status.status !== 0 || head.status !== 0 || safe(status.stdout) || safe(head.stdout) !== input.checkpointHead) {
+        return withCheckpoint(outcome("verification_failed", "Supervisor checkpoint changed before resolved delivery."), input.checkpointHead);
+      }
+      const candidateFiles = nameOnly(runGit, input.supervisorCwd,
+        ["diff-tree", "--no-commit-id", "--name-only", "-r", input.candidateCommitSha]);
+      const apply = runGit({ cwd: input.supervisorCwd, args: ["cherry-pick", input.candidateCommitSha] });
+      if (apply.status !== 0) {
+        const conflictFiles = nameOnly(runGit, input.supervisorCwd, ["diff", "--name-only", "--diff-filter=U"]);
+        const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, true);
+        return {
+          ...withCheckpoint(outcome(restored.ok ? "conflict" : "revert_failed", restored.ok
+            ? "Resolved candidate conflicted again; the supervisor checkpoint was restored."
+            : "Resolved candidate conflicted again and rollback could not be verified."), input.checkpointHead),
+          candidateCommitSha: input.candidateCommitSha,
+          candidateFiles,
+          conflictFiles,
+          conflictSummary: safe(apply.stderr) || "Resolved candidate apply reported a conflict.",
+          rollbackSummary: restored.summary,
+        };
+      }
+      const validation = runCommand({ cwd: input.supervisorCwd, command: fixedValidationCommand });
+      const validationSummary = safe(`${validation.stdout ?? ""} ${validation.stderr ?? ""}`);
+      if (validation.status !== 0) {
+        const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, false);
+        return {
+          ...withCheckpoint(outcome(
+            restored.ok ? (validation.status === null ? "verification_failed" : "test_failed_reverted") : "revert_failed",
+            restored.ok ? "Fixed validation failed; the supervisor checkpoint was restored and verified."
+              : "Fixed validation failed and rollback could not be verified.",
+          ), input.checkpointHead),
+          candidateCommitSha: input.candidateCommitSha,
+          candidateFiles,
+          validationCommand: fixedValidationCommand,
+          validationExitCode: validation.status,
+          validationSummary,
+          rollbackSummary: restored.summary,
+        };
+      }
+      const deliveredHead = runGit({ cwd: input.supervisorCwd, args: ["rev-parse", "HEAD"] });
+      const finalStatus = runGit({ cwd: input.supervisorCwd, args: ["status", "--porcelain", "-uall"] });
+      if (deliveredHead.status !== 0 || finalStatus.status !== 0 || safe(finalStatus.stdout)) {
+        const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, false);
+        return {
+          ...withCheckpoint(outcome(restored.ok ? "verification_failed" : "revert_failed",
+            "Resolved delivery workspace state could not be verified."), input.checkpointHead),
+          candidateCommitSha: input.candidateCommitSha,
+          candidateFiles,
+          validationCommand: fixedValidationCommand,
+          validationExitCode: validation.status,
+          validationSummary,
+          rollbackSummary: restored.summary,
+        };
+      }
+      return {
+        status: "committed",
+        safeSummary: "Resolved candidate applied and fixed validation passed under backend authority.",
+        checkpointHead: input.checkpointHead,
+        checkpointStatus: "clean",
+        candidateCommitSha: input.candidateCommitSha,
+        commitSha: safe(deliveredHead.stdout),
+        validationCommand: fixedValidationCommand,
+        validationExitCode: validation.status,
+        validationSummary,
+        rollbackSummary: null,
+        candidateFiles,
+        conflictFiles: [],
+        conflictSummary: null,
       };
     },
   };
@@ -186,7 +276,14 @@ function outcome(status: ManagedDeliveryOutcome, safeSummary: string): ManagedDe
   return {
     status, safeSummary, checkpointHead: null, checkpointStatus: null, candidateCommitSha: null,
     commitSha: null, validationCommand: null, validationExitCode: null, validationSummary: null, rollbackSummary: null,
+    candidateFiles: [], conflictFiles: [], conflictSummary: null,
   };
+}
+
+function nameOnly(runGit: GitRunner, cwd: string, args: string[]): string[] {
+  const result = runGit({ cwd, args });
+  if (result.status !== 0) return [];
+  return String(result.stdout ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean).sort();
 }
 
 function withCheckpoint(result: ManagedDeliveryResult, checkpointHead: string): ManagedDeliveryResult {

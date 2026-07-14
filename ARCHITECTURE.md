@@ -32,6 +32,22 @@ Model Provider Adapter
 
 The first version should optimize for a working local single-user product, not a distributed platform. The architecture should keep clean boundaries for future expansion, but only the MVP loop should be implemented first.
 
+## Managed delivery authority
+
+The runtime separates four execution identities: Supervisor, Worker,
+independent Judge (`review_merge` compatibility role), and conditional
+Integrator. SQLite and backend Git operations are the authority between them.
+The Integrator is dispatched only after backend delivery proves an exact
+candidate conflicts with a clean recorded checkpoint. It resolves in a
+runtime-owned worktree; the backend verifies scope and creates the candidate;
+a fresh Judge decision bound to that candidate is mandatory before the backend
+runs fixed validation and commits. No LLM has direct final-commit authority.
+
+`managed_task_integrations` records the checkpoint, original and resolved
+candidate identities, allowed/conflict files, role delegation, and lifecycle.
+Nonterminal, failed, or interrupted integration state is a completion gap, so
+restart or missing prose context cannot accidentally complete the goal.
+
 ## Current Server Decision
 
 The existing server shape was designed around a GitHub Copilot/local `gh` flow and a chat-style dashboard. That is no longer the target architecture.

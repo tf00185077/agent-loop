@@ -2,6 +2,7 @@ import type {
   ManagedCriterionOutcome,
   ManagedDeliveryOutcome,
   ManagedJudgeVerdict,
+  ManagedIntegrationStatus,
   ManagedTaskStatus,
 } from "../../domain/index.js";
 import type { ManagedTaskRepository } from "../../persistence/managed-task-repository.js";
@@ -18,6 +19,9 @@ export interface ManagedTaskContextRecord {
   criteria: Array<{ id: string; text: string; outcome: ManagedCriterionOutcome }>;
   lastJudgeVerdict: ManagedJudgeVerdict | null;
   lastDeliveryStatus: ManagedDeliveryOutcome | null;
+  lastIntegrationStatus: ManagedIntegrationStatus | null;
+  integrationAttemptId: string | null;
+  resolvedCandidateCommitSha: string | null;
 }
 
 export function projectManagedTaskContext(
@@ -27,6 +31,7 @@ export function projectManagedTaskContext(
   return repository.listForGoal(goalId).map((task) => {
     const reviews = repository.listReviews(task.id);
     const deliveries = repository.listDeliveries(task.id);
+    const integration = repository.listIntegrations(task.id).at(-1);
     return {
       id: task.id,
       title: task.title,
@@ -43,6 +48,9 @@ export function projectManagedTaskContext(
       })),
       lastJudgeVerdict: reviews.at(-1)?.verdict ?? null,
       lastDeliveryStatus: deliveries.at(-1)?.status ?? null,
+      lastIntegrationStatus: integration?.status ?? null,
+      integrationAttemptId: integration?.id ?? null,
+      resolvedCandidateCommitSha: integration?.resolvedCandidateCommitSha ?? null,
     };
   });
 }

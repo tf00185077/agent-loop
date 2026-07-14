@@ -37,6 +37,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "managed_task_criteria",
     "managed_task_criterion_results",
     "managed_task_deliveries",
+    "managed_task_integrations",
     "managed_task_reviews",
     "managed_tasks",
     "provider_settings",
@@ -67,13 +68,19 @@ test("initializes lifecycle and provider settings tables", () => {
     "judge_outcome", "judge_safe_summary", "created_at", "updated_at",
   ]);
   assert.deepEqual(columnNames(db, "managed_task_reviews"), [
-    "id", "task_id", "worker_delegation_request_id", "judge_delegation_request_id", "status",
+    "id", "task_id", "worker_delegation_request_id", "judge_delegation_request_id", "integration_attempt_id",
+    "reviewed_candidate_commit_sha", "status",
     "verdict", "decisions", "cited_criteria", "safe_summary", "deferred_findings", "created_at", "updated_at",
   ]);
   assert.deepEqual(columnNames(db, "managed_task_deliveries"), [
-    "id", "task_id", "worker_delegation_request_id", "status", "checkpoint_head", "checkpoint_status",
+    "id", "task_id", "worker_delegation_request_id", "integration_attempt_id", "status", "checkpoint_head", "checkpoint_status",
     "candidate_commit_sha", "commit_sha", "validation_command", "validation_exit_code", "validation_summary",
     "rollback_summary", "safe_summary", "created_at", "updated_at",
+  ]);
+  assert.deepEqual(columnNames(db, "managed_task_integrations"), [
+    "id", "task_id", "worker_delegation_request_id", "integrator_delegation_request_id", "status",
+    "checkpoint_head", "original_candidate_commit_sha", "resolved_candidate_commit_sha", "conflict_files",
+    "allowed_files", "safe_summary", "created_at", "updated_at",
   ]);
   assert.deepEqual(columnNames(db, "runs"), [
     "id",

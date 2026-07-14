@@ -48,3 +48,29 @@ test("surfaces sanitized git worktree failures", async () => {
     /Failed to create child worktree: fatal: cannot create worktree/,
   );
 });
+
+test("creates an integration worktree at an exact checkpoint and removes it idempotently", async () => {
+  const calls: Array<{ cwd: string; args: string[] }> = [];
+  const baseDir = join(mkdtempSync(join(tmpdir(), "auto-agent-integration-worktree-")), "children");
+  const service = createGitWorktreeService({
+    baseDir,
+    runGit(input) {
+      calls.push(input);
+      return { status: 0 };
+    },
+  });
+
+  const metadata = await service.createIntegrationWorktree!({
+    parentCwd: "C:\\repo",
+    integrationAttemptId: "integration:one",
+    checkpointHead: "abc123",
+  });
+  await service.removeWorktree!({ parentCwd: "C:\\repo", path: metadata.path });
+
+  assert.equal(metadata.label, "integration-integration-one");
+  assert.deepEqual(calls, [
+    { cwd: "C:\\repo", args: ["worktree", "add", "--detach", metadata.path, "abc123"] },
+    { cwd: "C:\\repo", args: ["worktree", "remove", "--force", metadata.path] },
+    { cwd: "C:\\repo", args: ["worktree", "prune"] },
+  ]);
+});

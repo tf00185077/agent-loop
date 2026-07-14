@@ -6,11 +6,24 @@ import type { AgentRuntimeWorktreeMetadata } from "../../domain/index.js";
 
 export interface WorktreeService {
   createChildWorktree(input: CreateChildWorktreeInput): Promise<AgentRuntimeWorktreeMetadata>;
+  createIntegrationWorktree?(input: CreateIntegrationWorktreeInput): Promise<AgentRuntimeWorktreeMetadata>;
+  removeWorktree?(input: RemoveWorktreeInput): Promise<void>;
 }
 
 export interface CreateChildWorktreeInput {
   parentCwd: string;
   childSessionId: string;
+}
+
+export interface CreateIntegrationWorktreeInput {
+  parentCwd: string;
+  integrationAttemptId: string;
+  checkpointHead: string;
+}
+
+export interface RemoveWorktreeInput {
+  parentCwd: string;
+  path: string;
 }
 
 export interface GitWorktreeServiceOptions {
@@ -40,6 +53,22 @@ export function createGitWorktreeService(options: GitWorktreeServiceOptions = {}
       }
 
       return { path, label };
+    },
+    async createIntegrationWorktree(input) {
+      const label = `integration-${input.integrationAttemptId.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
+      const parentCwd = resolve(input.parentCwd);
+      const baseDir = resolve(options.baseDir ?? join(dirname(parentCwd), `${basename(parentCwd)}-worktrees`));
+      const path = join(baseDir, label);
+      mkdirSync(baseDir, { recursive: true });
+      const result = runGit({ cwd: parentCwd, args: ["worktree", "add", "--detach", path, input.checkpointHead] });
+      if (result.status !== 0) {
+        throw new Error(`Failed to create integration worktree: ${sanitizeGitDiagnostic(result.stderr ?? "")}`);
+      }
+      return { path, label };
+    },
+    async removeWorktree(input) {
+      runGit({ cwd: resolve(input.parentCwd), args: ["worktree", "remove", "--force", resolve(input.path)] });
+      runGit({ cwd: resolve(input.parentCwd), args: ["worktree", "prune"] });
     },
   };
 }

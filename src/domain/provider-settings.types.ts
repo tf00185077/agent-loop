@@ -16,7 +16,7 @@ export interface ProviderStatus {
   message: string | null;
 }
 
-export const agentAssignableRoles = ["worker", "spec_writer", "review_merge"] as const;
+export const agentAssignableRoles = ["worker", "spec_writer", "review_merge", "integrator"] as const;
 
 export type AgentAssignableRole = (typeof agentAssignableRoles)[number];
 

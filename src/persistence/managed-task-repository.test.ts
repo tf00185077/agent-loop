@@ -165,6 +165,103 @@ test("rolls back task state when its audit event cannot be inserted", () => {
   db.close();
 });
 
+test("persists one candidate-bound integration attempt through re-review and delivery", () => {
+  const fixture = managedFixture();
+  let { db } = fixture;
+  const { path, goalId, delegationId } = fixture;
+  let tasks = createManagedTaskRepository(db, { now: fixedNow });
+  tasks.registerTasks({
+    goalId,
+    tasks: [{ id: "task-1", title: "Integrate", acceptance: [{ id: "A1", text: "Merged behavior passes" }] }],
+  });
+  tasks.beginAttempt("task-1", delegationId);
+  tasks.recordExecutorEvidence({ taskId: "task-1", workerDelegationRequestId: delegationId, safeSummary: "Worker done" });
+  tasks.recordReview({
+    taskId: "task-1", workerDelegationRequestId: delegationId, judgeDelegationRequestId: null,
+    verdict: "accepted", decisions: [{ criterionId: "A1", outcome: "PASS", safeSummary: "Original accepted" }],
+    safeSummary: "Original candidate accepted", hasAttestedChanges: true,
+  });
+  tasks.recordDelivery({
+    taskId: "task-1", workerDelegationRequestId: delegationId, status: "conflict",
+    safeSummary: "Conflict restored", checkpointHead: "base", candidateCommitSha: "candidate-1",
+  });
+
+  const integration = tasks.beginIntegration({
+    taskId: "task-1", workerDelegationRequestId: delegationId, checkpointHead: "base",
+    originalCandidateCommitSha: "candidate-1", conflictFiles: ["src/a.ts"], allowedFiles: ["src/a.ts"],
+    safeSummary: "Conflict detected",
+  });
+  assert.equal(integration.status, "pending");
+  assert.throws(() => tasks.beginIntegration({
+    taskId: "task-1", workerDelegationRequestId: delegationId, checkpointHead: "base",
+    originalCandidateCommitSha: "candidate-1", conflictFiles: [], allowedFiles: ["src/a.ts"], safeSummary: "Duplicate",
+  }), /already exists/i);
+
+  const integratorId = createDelegation(db, goalId, "task-1", "integrator");
+  tasks.transitionIntegration(integration.id, "resolving", {
+    safeSummary: "Integrator running", integratorDelegationRequestId: integratorId,
+  });
+  assert.throws(() => tasks.transitionIntegration(integration.id, "committed", { safeSummary: "Skip review" }), /Cannot transition/);
+  tasks.transitionIntegration(integration.id, "awaiting_review", {
+    safeSummary: "Resolved candidate created", resolvedCandidateCommitSha: "candidate-2",
+  });
+
+  db.close();
+  db = openDatabase({ path });
+  tasks = createManagedTaskRepository(db, { now: fixedNow });
+  assert.equal(tasks.getIntegration(integration.id)?.status, "awaiting_review");
+  assert.equal(tasks.getIntegration(integration.id)?.resolvedCandidateCommitSha, "candidate-2");
+
+  const judgeId = createDelegation(db, goalId, "task-1", "review_merge");
+  tasks.beginReview({
+    taskId: "task-1", workerDelegationRequestId: delegationId, judgeDelegationRequestId: judgeId,
+    integrationAttemptId: integration.id, reviewedCandidateCommitSha: "candidate-2", safeSummary: "Re-review pending",
+  });
+  const review = tasks.recordReview({
+    taskId: "task-1", workerDelegationRequestId: delegationId, judgeDelegationRequestId: judgeId,
+    integrationAttemptId: integration.id, reviewedCandidateCommitSha: "candidate-2",
+    verdict: "accepted", decisions: [{ criterionId: "A1", outcome: "PASS", safeSummary: "Resolved accepted" }],
+    safeSummary: "Resolved candidate accepted", hasAttestedChanges: true,
+  });
+  assert.equal(review.integrationAttemptId, integration.id);
+  assert.equal(review.reviewedCandidateCommitSha, "candidate-2");
+  assert.equal(tasks.getIntegration(integration.id)?.status, "accepted");
+
+  tasks.recordDelivery({
+    taskId: "task-1", workerDelegationRequestId: delegationId, integrationAttemptId: integration.id,
+    status: "committed", safeSummary: "Integrated delivery committed", checkpointHead: "base",
+    candidateCommitSha: "candidate-2", commitSha: "delivered-2",
+  });
+  assert.equal(tasks.getIntegration(integration.id)?.status, "committed");
+  assert.equal(tasks.listDeliveries("task-1")[0]?.integrationAttemptId, integration.id);
+  db.close();
+
+  const reopenedDb = openDatabase({ path });
+  const reopened = createManagedTaskRepository(reopenedDb);
+  assert.deepEqual(reopened.listIntegrations("task-1")[0]?.conflictFiles, ["src/a.ts"]);
+  assert.equal(reopened.listIntegrations("task-1")[0]?.resolvedCandidateCommitSha, "candidate-2");
+  assert.equal(reopened.listReviews("task-1").at(-1)?.reviewedCandidateCommitSha, "candidate-2");
+  reopenedDb.close();
+});
+
+test("marks a lost nonterminal Integrator attempt interrupted without permitting a duplicate", () => {
+  const { db, goalId, delegationId } = managedFixture();
+  const tasks = createManagedTaskRepository(db, { now: fixedNow });
+  tasks.registerTasks({ goalId, tasks: [{ id: "task-1", title: "Recover", acceptance: [] }] });
+  tasks.beginAttempt("task-1", delegationId);
+  const integration = tasks.beginIntegration({
+    taskId: "task-1", workerDelegationRequestId: delegationId, checkpointHead: "base",
+    originalCandidateCommitSha: "candidate-1", conflictFiles: ["a"], allowedFiles: ["a"], safeSummary: "Conflict",
+  });
+  tasks.interruptNonterminalIntegrations(goalId, "Integrator process unavailable after restart.");
+  assert.equal(tasks.getIntegration(integration.id)?.status, "interrupted");
+  assert.throws(() => tasks.beginIntegration({
+    taskId: "task-1", workerDelegationRequestId: delegationId, checkpointHead: "base",
+    originalCandidateCommitSha: "candidate-1", conflictFiles: ["a"], allowedFiles: ["a"], safeSummary: "Retry",
+  }), /already exists/i);
+  db.close();
+});
+
 function managedFixture(): { db: AppDatabase; path: string; goalId: string; delegationId: string } {
   const path = testDatabasePath();
   const db = openDatabase({ path });
@@ -176,7 +273,7 @@ function createDelegation(
   db: AppDatabase,
   goalId: string,
   taskId: string,
-  role: "worker" | "review_merge" = "worker",
+  role: "worker" | "review_merge" | "integrator" = "worker",
 ): string {
   const run = createRunRepository(db).create({ goalId, provider: "mock", model: "mock" });
   const sessions = createAgentSessionRepository(db);

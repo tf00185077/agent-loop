@@ -5,6 +5,7 @@ import {
   buildSupervisorPrompt,
   buildWorkerContractAppendix,
   buildJudgeContractAppendix,
+  buildIntegratorContractAppendix,
   renderChangeHistory,
   renderTaskHistory,
 } from "./supervisor-prompt.js";
@@ -19,6 +20,38 @@ test("judge appendix requires exact criterion decisions and denies commit author
   assert.match(prompt, /worker-1/);
   assert.match(prompt, /A1: Tests pass/);
   assert.match(prompt, /no apply or commit authority/i);
+});
+
+test("Integrator appendix binds conflict scope and denies commit authority", () => {
+  const prompt = buildIntegratorContractAppendix({
+    integrationAttemptId: "integration-1",
+    workerDelegationRequestId: "worker-1",
+    checkpointHead: "base-1",
+    originalCandidateCommitSha: "candidate-1",
+    acceptance: [{ id: "A1", text: "Tests pass" }],
+    conflictFiles: ["src/a.ts"],
+    allowedFiles: ["src/a.ts", "src/a.test.ts"],
+  });
+  assert.match(prompt, /managed_integration\.result/);
+  assert.match(prompt, /integration-1/);
+  assert.match(prompt, /candidate-1/);
+  assert.match(prompt, /src\/a\.ts/);
+  assert.match(prompt, /do not commit/i);
+  assert.doesNotMatch(prompt, /provider|credential|api.?key/i);
+});
+
+test("candidate-bound Judge appendix requires exact integration candidate identity", () => {
+  const prompt = buildJudgeContractAppendix({
+    workerDelegationRequestId: "worker-1",
+    integrationAttemptId: "integration-1",
+    reviewedCandidateCommitSha: "candidate-2",
+    acceptance: [{ id: "A1", text: "Tests pass" }],
+    resultSummary: { kind: "success", safeSummary: "Resolved", attestedFiles: ["src/a.ts"] },
+  });
+  assert.match(prompt, /integration-1/);
+  assert.match(prompt, /candidate-2/);
+  assert.match(prompt, /"integrationAttemptId": "integration-1"/);
+  assert.match(prompt, /"reviewedCandidateCommitSha": "candidate-2"/);
 });
 import type { ChangeRecord } from "./change-registry.js";
 import type { TaskRecord } from "./task-registry.js";

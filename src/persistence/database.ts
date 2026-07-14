@@ -199,11 +199,33 @@ function initializeSchema(db: AppDatabase): void {
       UNIQUE (worker_delegation_request_id, criterion_id)
     );
 
+    CREATE TABLE IF NOT EXISTS managed_task_integrations (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES managed_tasks(id),
+      worker_delegation_request_id TEXT NOT NULL REFERENCES agent_delegation_requests(id),
+      integrator_delegation_request_id TEXT REFERENCES agent_delegation_requests(id),
+      status TEXT NOT NULL CHECK (status IN (
+        'pending', 'resolving', 'awaiting_review', 'accepted', 'rejected', 'blocked',
+        'resolution_failed', 'interrupted', 'committed'
+      )),
+      checkpoint_head TEXT NOT NULL,
+      original_candidate_commit_sha TEXT NOT NULL,
+      resolved_candidate_commit_sha TEXT,
+      conflict_files TEXT NOT NULL DEFAULT '[]',
+      allowed_files TEXT NOT NULL DEFAULT '[]',
+      safe_summary TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (worker_delegation_request_id, original_candidate_commit_sha)
+    );
+
     CREATE TABLE IF NOT EXISTS managed_task_reviews (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES managed_tasks(id),
       worker_delegation_request_id TEXT NOT NULL REFERENCES agent_delegation_requests(id),
       judge_delegation_request_id TEXT REFERENCES agent_delegation_requests(id),
+      integration_attempt_id TEXT REFERENCES managed_task_integrations(id),
+      reviewed_candidate_commit_sha TEXT,
       status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'blocked', 'malformed')),
       verdict TEXT CHECK (verdict IN ('accepted', 'rejected', 'blocked')),
       decisions TEXT NOT NULL DEFAULT '[]',
@@ -219,8 +241,9 @@ function initializeSchema(db: AppDatabase): void {
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES managed_tasks(id),
       worker_delegation_request_id TEXT NOT NULL REFERENCES agent_delegation_requests(id),
+      integration_attempt_id TEXT REFERENCES managed_task_integrations(id),
       status TEXT NOT NULL CHECK (status IN (
-        'pending', 'committed', 'rejected', 'conflict', 'test_failed_reverted',
+        'pending', 'committed', 'rejected', 'conflict', 'integration_failed', 'test_failed_reverted',
         'revert_failed', 'failed', 'verification_failed'
       )),
       checkpoint_head TEXT,
@@ -247,7 +270,51 @@ function initializeSchema(db: AppDatabase): void {
   ensureColumn(db, "agent_delegation_requests", "change_id", "TEXT");
   ensureColumn(db, "agent_delegation_requests", "attempt_number", "INTEGER");
   ensureColumn(db, "provider_settings", "role_assignments", "TEXT");
+  ensureColumn(db, "managed_task_reviews", "integration_attempt_id", "TEXT");
+  ensureColumn(db, "managed_task_reviews", "reviewed_candidate_commit_sha", "TEXT");
+  ensureColumn(db, "managed_task_deliveries", "integration_attempt_id", "TEXT");
+  migrateManagedTaskDeliveriesOutcome(db);
   backfillManagedTaskState(db);
+}
+
+function migrateManagedTaskDeliveriesOutcome(db: AppDatabase): void {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'managed_task_deliveries'")
+    .get() as { sql: string } | undefined;
+  if (!row || row.sql.includes("integration_failed")) return;
+  db.exec(`
+    ALTER TABLE managed_task_deliveries RENAME TO managed_task_deliveries_legacy;
+    CREATE TABLE managed_task_deliveries (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES managed_tasks(id),
+      worker_delegation_request_id TEXT NOT NULL REFERENCES agent_delegation_requests(id),
+      integration_attempt_id TEXT REFERENCES managed_task_integrations(id),
+      status TEXT NOT NULL CHECK (status IN (
+        'pending', 'committed', 'rejected', 'conflict', 'integration_failed', 'test_failed_reverted',
+        'revert_failed', 'failed', 'verification_failed'
+      )),
+      checkpoint_head TEXT,
+      checkpoint_status TEXT,
+      candidate_commit_sha TEXT,
+      commit_sha TEXT,
+      validation_command TEXT,
+      validation_exit_code INTEGER,
+      validation_summary TEXT,
+      rollback_summary TEXT,
+      safe_summary TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (worker_delegation_request_id)
+    );
+    INSERT INTO managed_task_deliveries (
+      id, task_id, worker_delegation_request_id, integration_attempt_id, status, checkpoint_head,
+      checkpoint_status, candidate_commit_sha, commit_sha, validation_command, validation_exit_code,
+      validation_summary, rollback_summary, safe_summary, created_at, updated_at
+    ) SELECT id, task_id, worker_delegation_request_id, integration_attempt_id, status, checkpoint_head,
+      checkpoint_status, candidate_commit_sha, commit_sha, validation_command, validation_exit_code,
+      validation_summary, rollback_summary, safe_summary, created_at, updated_at
+    FROM managed_task_deliveries_legacy;
+    DROP TABLE managed_task_deliveries_legacy;
+  `);
 }
 
 function ensureColumn(db: AppDatabase, table: string, column: string, type: string): void {

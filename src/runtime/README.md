@@ -61,3 +61,11 @@ Review merge children have supervisor workspace authority, so the backend adds g
 - Other durable outcomes include `rejected`, `conflict`, `failed`, and `verification_failed`.
 
 Worker worktrees are retained after child completion. Their labels and sanitized paths are persisted in session snapshots so a later cleanup workflow can remove accepted or abandoned worktrees deliberately.
+
+On a verified backend delivery conflict, the manager creates one durable
+integration attempt and routes an `integrator` child through the normal role
+resolver. The child receives exact candidate/checkpoint identities, frozen
+criteria, and a bounded allowed-file set. Its only authoritative output is one
+`managed_integration.result` block. Backend Git checks create the resolved
+candidate, then an immediate `review_merge` child must judge that exact SHA.
+The Supervisor resumes only after this sequential recovery finishes or fails.
