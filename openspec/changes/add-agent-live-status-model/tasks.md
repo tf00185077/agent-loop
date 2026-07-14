@@ -1,32 +1,33 @@
-## 1. Minimal Live Status Contract
+## 1. Durable Live-Status Contract
 
-- [ ] 1.1 Add domain tests for a minimal agent live status view model derived from durable goal events.
-- [ ] 1.2 Define MVP status states: running, waiting_child, continuing, completed, failed, blocked, cancelled, and unknown.
-- [ ] 1.3 Define derived fields for last activity time, provider/model context, agent role/id, parent agent id, task id, and safe status summary.
-- [ ] 1.4 Specify how missing optional orchestration metadata is handled for current single-agent provider runs.
+- [ ] 1.1 Add domain tests for closed live `state` and `phase` vocabularies plus nullable safe metadata fields.
+- [ ] 1.2 Define and export the compact `AgentLiveStatus` contract without adding persistence schema.
+- [ ] 1.3 Add failing projector tests for terminal goal precedence, approval/input, stalled sessions, and missing historical metadata.
+- [ ] 1.4 Implement bounded normalization and the terminal/human-waiting/session fallback projection rules.
 
-## 2. Status Derivation
+## 2. Pipeline-Aware Projection
 
-- [ ] 2.1 Add tests that derive live status from run started, delegation waiting, child completed, continuation started, run terminal, cancellation, and error events.
-- [ ] 2.2 Implement a deterministic status reducer that consumes events in durable timeline order.
-- [ ] 2.3 Ensure child or continuation state is cleared when terminal events arrive.
-- [ ] 2.4 Preserve safe summaries only; do not derive status from raw provider payloads.
+- [ ] 2.1 Add failing projector tests for active Worker, original Judge, Integrator, candidate-bound re-Judge, delivery, continuation, validation, and rollback phases.
+- [ ] 2.2 Implement the layered precedence projector using structured records as authority and events only as summary/time fallback.
+- [ ] 2.3 Add tests proving stale completion prose cannot override awaiting delivery and stale active sessions cannot override terminal goals.
+- [ ] 2.4 Add reopen coverage proving integration interruption and resolved-candidate re-review project equivalently from durable state.
 
-## 3. Backend API Integration
+## 3. Backend Snapshot Integration
 
-- [ ] 3.1 Add backend tests for returning minimal derived live status for a goal.
-- [ ] 3.2 Include derived status in an existing goal detail response or add a small goal-scoped status endpoint without breaking current clients.
-- [ ] 3.3 Ensure status derivation works from snapshots after refresh and does not require an active SSE connection.
-- [ ] 3.4 Add tests proving terminal goal states return stable completed, failed, blocked, or cancelled status.
+- [ ] 3.1 Add failing backend tests for `liveStatus` on the existing goal agent-session snapshot.
+- [ ] 3.2 Compose the projector from sanitized goal/session/approval/delegation/managed-task/event inputs in the existing route.
+- [ ] 3.3 Add backend tests proving prompts, conflict files, checkpoints, commands, diffs, diagnostics, and credential-like values are absent.
+- [ ] 3.4 Add compatibility tests for historical goals and terminal states without active sessions or SSE.
 
-## 4. Dashboard Status Rendering
+## 4. Dashboard Compact Status
 
-- [ ] 4.1 Add dashboard rendering tests for minimal live status near the timeline.
-- [ ] 4.2 Render compact current activity: provider/model, last activity, current state, and safe summary when available.
-- [ ] 4.3 Render single-agent runs cleanly when agent id, parent agent id, or task id are absent.
+- [ ] 4.1 Add failing rendering tests for Worker, Judge, Integrator, re-Judge, delivery, stalled, terminal, and partial-metadata statuses.
+- [ ] 4.2 Extend dashboard API types and render a compact current-activity panel above existing managed-session details.
+- [ ] 4.3 Keep existing detailed controls, delegation/task tables, and timeline unchanged; use the current event stream only to refresh snapshots.
+- [ ] 4.4 Add human-readable labels for every known state/phase and a safe fallback for future unknown values.
 
-## 5. Verification
+## 5. Verification and Documentation
 
-- [ ] 5.1 Run focused domain reducer, backend status API, and dashboard status rendering tests.
-- [ ] 5.2 Run typecheck and the full test suite, documenting any unrelated pre-existing failures.
-- [ ] 5.3 Run `openspec validate add-agent-live-status-model --strict`.
+- [ ] 5.1 Update runtime/dashboard documentation with the authority precedence and state/phase model.
+- [ ] 5.2 Run focused domain, projector, persistence-reopen, backend, and dashboard tests.
+- [ ] 5.3 Run `npm test`, `npm run typecheck`, `openspec validate --all --strict`, and `git diff --check`.

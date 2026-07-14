@@ -1,35 +1,81 @@
 ## ADDED Requirements
 
-### Requirement: Minimal live status is derived from durable events
-The system SHALL derive a goal's current MVP agent activity status from durable goal, run, and agent events.
+### Requirement: Live status is projected from durable authority
+The system SHALL project a goal's compact current activity from durable goal,
+session, approval, delegation, managed-task, review/delivery, and integration
+state. Sanitized events MAY supplement missing summary and activity time but
+SHALL NOT override structured current state.
 
 #### Scenario: Status is reconstructed after refresh
-- **WHEN** the dashboard reloads after runtime events were persisted
-- **THEN** the backend can derive the current live status from the durable event snapshot
-- **AND** no active SSE connection or in-memory provider process state is required
+- **WHEN** the dashboard reloads or the database is reopened
+- **THEN** the backend derives the same current state and phase from durable records
+- **AND** no active provider process, SSE connection, or browser reducer is required
 
-### Requirement: Minimal live status identifies MVP control state
-The system SHALL expose safe current activity fields that help the user understand whether the MVP delegation loop is running, waiting, continuing, or terminal.
+#### Scenario: Historical prose conflicts with structured state
+- **WHEN** a prior event claims completion but a managed task is awaiting delivery
+- **THEN** live status reports the delivery phase rather than completed
 
-#### Scenario: Supervisor waits on child
-- **WHEN** the latest relevant control-plane event indicates the supervisor is waiting for a child result
-- **THEN** the live status includes `waiting_child`, the parent/child relationship metadata when available, and the last activity time
+### Requirement: Live status separates state from pipeline phase
+The system SHALL expose a coarse `state` and a role-aware `phase` so users can
+distinguish outcome/waiting semantics from the active pipeline component.
 
-#### Scenario: Supervisor continues after child
-- **WHEN** a child result is recorded and a supervisor continuation starts
-- **THEN** the live status includes `continuing` with a safe result summary when available
+#### Scenario: Worker is active
+- **WHEN** the authoritative active delegation role is `worker`
+- **THEN** live status reports `waiting` with phase `worker`
+- **AND** includes the task and delegation identities when available
 
-#### Scenario: Goal reaches terminal state
-- **WHEN** the durable events indicate completed, failed, blocked, or cancelled state
-- **THEN** the live status exposes the matching terminal state with a sanitized summary
+#### Scenario: Original Judge is active
+- **WHEN** `review_merge` is reviewing a Worker candidate without an awaiting integration re-review
+- **THEN** live status reports `waiting` with phase `judge`
 
-### Requirement: Optional agent metadata is tolerated
-The system SHALL support agent and task metadata in live status while remaining compatible with single-agent runs.
+#### Scenario: Integrator resolves a conflict
+- **WHEN** durable integration state is `pending` or `resolving`
+- **THEN** live status reports `waiting` with phase `integrator`
+- **AND** includes the integration attempt identity
 
-#### Scenario: Agent metadata is present
-- **WHEN** observations include agent id, agent role, parent agent id, or task id
-- **THEN** the live status includes those identifiers in the derived view
+#### Scenario: Resolved candidate awaits re-Judge
+- **WHEN** durable integration state is `awaiting_review`
+- **THEN** live status reports `waiting` with phase `rejudge`
+- **AND** includes the resolved candidate identity when present
 
-#### Scenario: Agent metadata is absent
-- **WHEN** current single-agent observations do not include orchestration metadata
-- **THEN** the live status still renders using goal/run/provider context
+#### Scenario: Backend delivery remains pending
+- **WHEN** a managed task or accepted integration is awaiting backend delivery
+- **THEN** live status reports `running` with phase `delivery`
+
+### Requirement: Terminal and human-waiting states have precedence
+The system SHALL apply deterministic precedence so terminal goal and explicit
+human-waiting states cannot be hidden by stale lower-level activity.
+
+#### Scenario: Terminal goal has stale active session
+- **WHEN** a goal is completed, failed, blocked, or cancelled while an older session record is nonterminal
+- **THEN** live status reports the goal's terminal state with phase `none`
+
+#### Scenario: Approval is pending
+- **WHEN** the current session has a pending approval
+- **THEN** live status reports `waiting` with phase `approval` and a sanitized approval summary
+
+#### Scenario: Session is stalled
+- **WHEN** no higher-precedence state applies and the current session is stalled
+- **THEN** live status reports `stalled` with the best known pipeline phase
+
+#### Scenario: Integration is interrupted
+- **WHEN** a nonterminal recovery is durably marked `interrupted` after restart
+- **THEN** live status reports `stalled` with phase `integrator`
+- **AND** does not infer success from prior Integrator prose
+
+### Requirement: Live status exposes only bounded safe context
+The system SHALL expose known provider/model and durable runtime identities when
+available while omitting raw or sensitive execution content.
+
+#### Scenario: Runtime metadata is present
+- **WHEN** durable records identify a session, parent session, delegation, role,
+  task, integration attempt, or resolved candidate
+- **THEN** live status includes those exact sanitized identifiers
+
+#### Scenario: Metadata is incomplete
+- **WHEN** a historical or single-agent run lacks optional identities
+- **THEN** live status uses null fields and remains renderable
+
+#### Scenario: Sensitive source fields exist
+- **WHEN** source records contain prompts, diffs, commands, diagnostics, or provider payloads
+- **THEN** live status omits those fields and caps normalized safe summary text at 500 characters

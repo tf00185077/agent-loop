@@ -1,26 +1,46 @@
 ## Why
 
-The MVP delegation loop needs a compact answer to "what is happening right now?" without requiring users to infer supervisor, child, and review/merge state from raw events. This change keeps the status model minimal so it supports the MVP without becoming a full multi-agent dashboard project.
+The managed pipeline now has durable Supervisor, Worker, Judge, Integrator,
+re-Judge, delivery, validation, rollback, approval, and restart states. The
+dashboard exposes their detailed records, but users still lack one compact,
+trustworthy answer to "what is happening right now?" A prose/event-only reducer
+is no longer sufficient because structured SQLite records are the authority for
+current task, review, delivery, and integration state.
 
 ## What Changes
 
-- Add a minimal live status model derived from durable goal, run, and agent events.
-- Derive current state such as running, waiting on child, continuing, completed, failed, blocked, and unknown.
-- Track safe current activity fields including last activity time, provider/model, agent role/id, parent agent id, task id, and status summary when available.
-- Expose the derived status through the backend so refresh/reconnect uses durable history as the source of truth.
-- Render a compact status in the dashboard near the event timeline.
-- Defer rich stalled detection, SSE-specific live updates, full command/task activity modeling, browser-only verification, and multi-agent tree rendering to future work.
+- Add a compact live-status contract with a coarse `state` and a role-aware
+  `phase` instead of an ever-growing flat status enum.
+- Project current status from durable goal, session, approval, delegation,
+  managed-task, review/delivery, and integration records using an explicit
+  precedence order.
+- Use sanitized durable events only to supplement last activity and a bounded
+  summary; event prose never overrides structured current state.
+- Include safe provider/model and exact runtime identities when available:
+  session, parent session, delegation, role, task, integration attempt, and
+  resolved candidate.
+- Add the projection to the existing goal-scoped agent-session snapshot.
+- Render one compact current-activity panel above the existing detailed
+  session/delegation/task views and event timeline.
+- Reuse the existing event stream as a refresh trigger; add no second live
+  transport or browser-owned state machine.
 
 ## Capabilities
 
 ### New Capabilities
-- `agent-live-status`: Defines how durable agent events are reduced into a minimal current status for backend APIs and dashboard display.
+- `agent-live-status`: Defines the authoritative durable live-status projection,
+  precedence rules, API contract, and compact dashboard presentation.
 
 ### Modified Capabilities
-- `dashboard-goal-lifecycle`: The dashboard SHALL show minimal derived current activity for a goal in addition to the durable event timeline.
+- `dashboard-goal-lifecycle`: The goal detail dashboard SHALL show compact
+  current activity in addition to existing durable detail and timeline views.
 
 ## Impact
 
-- Affects domain/view-model code for event-to-status reduction, backend goal response shape or status endpoint, dashboard goal detail rendering, and focused tests.
-- Depends on durable, sanitized events being available.
-- Adds no provider execution path, scheduler, distributed worker pool, multi-agent run tree, or rich live telemetry.
+- Affects shared domain/view-model types, a focused runtime projection module,
+  the existing `/api/goals/:id/agent-session` response, dashboard goal detail,
+  and tests.
+- Depends on the existing sanitized session/delegation and managed-task
+  projections, including conditional integration recovery.
+- Adds no scheduler, provider execution behavior, database schema, new SSE
+  protocol, raw provider payload, or replacement for existing detailed views.

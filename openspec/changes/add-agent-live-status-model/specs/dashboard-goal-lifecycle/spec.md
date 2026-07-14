@@ -1,27 +1,30 @@
 ## ADDED Requirements
 
-### Requirement: Dashboard shows minimal live status
-The dashboard SHALL show a compact current activity status for a goal in addition to the durable event timeline.
+### Requirement: Dashboard shows compact authoritative live status
+The dashboard SHALL show one compact current-activity panel for a goal above
+the existing managed-session details and durable event timeline.
 
-#### Scenario: Active run has current activity
-- **WHEN** a goal detail view is open for a running goal with runtime activity
-- **THEN** the dashboard displays the current state, last activity, provider/model when known, and safe activity summary
+#### Scenario: Active pipeline phase is visible
+- **WHEN** live status reports Supervisor, continuation, Worker, Judge,
+  Integrator, re-Judge, delivery, validation, rollback, approval, or user-input activity
+- **THEN** the dashboard displays a human-readable state and phase without requiring timeline inference
 
-#### Scenario: Supervisor waits on child
-- **WHEN** the derived live status indicates `waiting_child`
-- **THEN** the dashboard displays that the supervisor is waiting for child work instead of requiring the user to infer it from raw timeline events
+#### Scenario: Runtime context is known
+- **WHEN** provider/model, role, task, or last activity is present
+- **THEN** the compact panel displays those safe fields
 
 #### Scenario: Goal reaches terminal state
-- **WHEN** a snapshot or event indicates completion, failure, blocked, or cancellation state
-- **THEN** the dashboard updates the compact live status to the terminal state
+- **WHEN** the snapshot reports completed, failed, blocked, or cancelled
+- **THEN** the panel displays the terminal state even if older child/session records remain nonterminal
 
-### Requirement: Dashboard status tolerates partial metadata
-The dashboard SHALL render minimal live status when optional orchestration metadata is absent or incomplete.
+### Requirement: Dashboard status remains compatible with partial metadata
+The dashboard SHALL render compact live status when optional runtime metadata is
+absent or contains a future unknown value.
 
-#### Scenario: Single-agent status has no parent
-- **WHEN** live status includes provider/model but no agent id, parent agent id, or task id
-- **THEN** the dashboard renders the status without error
+#### Scenario: Historical goal has no runtime identities
+- **WHEN** live status has no session, delegation, parent, role, task, or integration identifiers
+- **THEN** the dashboard renders known state, phase, summary, and time without error
 
-#### Scenario: Unknown status details appear
-- **WHEN** live status includes an unknown source or future status detail
-- **THEN** the dashboard displays known safe fields and does not fail the goal detail view
+#### Scenario: Detailed views already exist
+- **WHEN** compact status and detailed managed-session/task data are both returned
+- **THEN** the dashboard keeps the detailed controls and timeline and does not duplicate their full contents in the compact panel
