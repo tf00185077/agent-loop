@@ -21,6 +21,7 @@ import {
 } from "../../runtime/safety/agent-runtime-control-plane-sanitizer.js";
 import { projectManagedTaskContext } from "../../runtime/agent-session/managed-context-projection.js";
 import { projectAgentLiveStatus } from "../../runtime/agent-session/agent-live-status.js";
+import { recordUnhandledRuntimeFailure } from "../../runtime/agent-session/unhandled-failure.js";
 
 const TERMINAL_EVENT_TYPES = new Set<Event["type"]>([
   "goal.completed",
@@ -236,9 +237,14 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
         startedAt: new Date().toISOString(),
       });
 
-      // Run lifecycle in background (non-blocking)
+      // Run lifecycle in background (non-blocking). Any otherwise-unhandled
+      // rejection is routed into the durable safety net so the goal cannot be
+      // left silently stuck in `running`.
       runtime.run(goal.id, parsed.options).catch((err: unknown) => {
-        console.error(`Runtime error for goal ${goal.id}:`, err);
+        recordUnhandledRuntimeFailure(
+          { goalRepo, eventRepo },
+          { kind: "goal", goalId: goal.id, error: err },
+        );
       });
 
       res.json(started);

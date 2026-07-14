@@ -32,6 +32,7 @@ import {
   createReviewMergeVerificationService,
   type ReviewMergeVerificationService,
 } from "./review-merge-verification-service.js";
+import { recordUnhandledRuntimeFailure } from "./unhandled-failure.js";
 
 export interface DelegationCoordinatorDeps {
   runRepo: RunRepository;
@@ -264,6 +265,9 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         },
       });
 
+      // Fire-and-forget child consumption; any otherwise-unhandled rejection is
+      // routed into the durable safety net so a failing child loop can never be
+      // an unobserved promise rejection.
       void consumeChildEvents(deps, {
         events: handle.events(),
         delegationRequestId: running.id,
@@ -283,6 +287,18 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         reviewMergeVerificationService,
         supervisorCwd,
         onChildOutcome: input.onChildOutcome,
+      }).catch((err: unknown) => {
+        recordUnhandledRuntimeFailure(
+          { eventRepo: deps.eventRepo, agentSessionRepo: deps.agentSessionRepo },
+          {
+            kind: "delegation",
+            goalId: parent.goalId,
+            runId: parent.runId,
+            delegationRequestId: running.id,
+            childSessionId: childSession.id,
+            error: err,
+          },
+        );
       });
     },
   };
