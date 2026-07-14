@@ -570,6 +570,7 @@ export function createAgentSessionRepository(
         taskId: input.taskId ?? null,
         changeId: input.changeId ?? null,
         acceptance: input.acceptance ?? null,
+        attemptNumber: null,
         resultSummary: null,
         detachedReason: null,
         createdAt: now,
@@ -597,6 +598,7 @@ export function createAgentSessionRepository(
           accepted_at,
           started_at,
           completed_at
+          ,attempt_number
         )
         VALUES (
           @id,
@@ -615,6 +617,7 @@ export function createAgentSessionRepository(
           @acceptedAt,
           @startedAt,
           @completedAt
+          ,@attemptNumber
         )
       `).run({
         ...request,
@@ -905,23 +908,24 @@ function serializeDelegationSummary(summary: AgentRuntimeDelegationSummary | nul
 }
 
 function mapAgentRuntimeDelegationRequestRow(row: unknown): AgentRuntimeDelegationRequest {
-  const value = row as Record<string, string | null>;
+  const value = row as Record<string, string | number | null>;
   return {
-    id: value.id!,
-    parentSessionId: value.parent_session_id!,
-    childSessionId: value.child_session_id,
+    id: value.id as string,
+    parentSessionId: value.parent_session_id as string,
+    childSessionId: value.child_session_id as string | null,
     role: value.role as AgentRuntimeDelegationRole,
     status: value.status as AgentRuntimeDelegationRequestStatus,
-    promptSummary: value.prompt_summary!,
-    taskId: value.task_id ?? null,
-    changeId: value.change_id ?? null,
-    acceptance: value.acceptance ? (JSON.parse(value.acceptance) as TaskAcceptanceCriterion[]) : null,
-    resultSummary: value.result_summary ? (JSON.parse(value.result_summary) as AgentRuntimeDelegationSummary) : null,
-    detachedReason: value.detached_reason,
-    createdAt: value.created_at!,
-    updatedAt: value.updated_at!,
-    acceptedAt: value.accepted_at,
-    startedAt: value.started_at,
-    completedAt: value.completed_at,
+    promptSummary: value.prompt_summary as string,
+    taskId: value.task_id as string | null,
+    changeId: value.change_id as string | null,
+    acceptance: value.acceptance ? (JSON.parse(value.acceptance as string) as TaskAcceptanceCriterion[]) : null,
+    attemptNumber: value.attempt_number as number | null,
+    resultSummary: value.result_summary ? (JSON.parse(value.result_summary as string) as AgentRuntimeDelegationSummary) : null,
+    detachedReason: value.detached_reason as string | null,
+    createdAt: value.created_at as string,
+    updatedAt: value.updated_at as string,
+    acceptedAt: value.accepted_at as string | null,
+    startedAt: value.started_at as string | null,
+    completedAt: value.completed_at as string | null,
   };
 }

@@ -1,6 +1,7 @@
-import type { TaskAcceptanceCriterion } from "../../domain/index.js";
+import type { AgentRuntimeDelegationSummary, TaskAcceptanceCriterion } from "../../domain/index.js";
 import type { ChangeRecord } from "./change-registry.js";
 import type { TaskRecord } from "./task-registry.js";
+import type { ManagedTaskContextRecord } from "./managed-context-projection.js";
 
 export interface SupervisorPromptGoal {
   title: string;
@@ -18,6 +19,7 @@ export interface BuildSupervisorPromptInput {
   phase: SupervisorPromptPhase;
   /** Durable task history rendered into continuation/nudge/rejection prompts. */
   taskHistory?: TaskRecord[];
+  managedTaskContext?: ManagedTaskContextRecord[];
   /** Durable change-plan state rendered into continuation/nudge/rejection prompts. */
   changeHistory?: ChangeRecord[];
 }
@@ -117,8 +119,8 @@ const CONTRACT = [
     type: "managed_delegation.request",
     role: "review_merge",
     workerDelegationRequestId: "<delegation request id from the worker result>",
-    summary: "Review and merge the worker changes",
-    prompt: "Apply the worker changes, run the fixed test command, report the outcome.",
+    summary: "Independently judge the worker result",
+    prompt: "Inspect the frozen criteria, evidence, and candidate diff; decide every criterion without applying or committing changes.",
   }),
   "",
   controlExample({
@@ -132,7 +134,9 @@ export function buildSupervisorPrompt(input: BuildSupervisorPromptInput): string
   if (input.phase.kind !== "bootstrap" && input.changeHistory && input.changeHistory.length > 0) {
     sections.push(renderChangeHistory(input.changeHistory));
   }
-  if (input.phase.kind !== "bootstrap" && input.taskHistory && input.taskHistory.length > 0) {
+  if (input.phase.kind !== "bootstrap" && input.managedTaskContext && input.managedTaskContext.length > 0) {
+    sections.push(renderManagedTaskContext(input.managedTaskContext));
+  } else if (input.phase.kind !== "bootstrap" && input.taskHistory && input.taskHistory.length > 0) {
     sections.push(renderTaskHistory(input.taskHistory));
   }
   sections.push(CONTRACT);
@@ -177,6 +181,25 @@ export function renderTaskHistory(tasks: TaskRecord[]): string {
   return lines.join("\n");
 }
 
+export function renderManagedTaskContext(tasks: ManagedTaskContextRecord[]): string {
+  return [
+    "## Task history (SQLite authority; prose claims do not override it)",
+    "",
+    ...tasks.map((task) => {
+      const lineage = task.parentTaskId ? ` (child of ${task.parentTaskId})` : "";
+      const criteria = task.criteria.length > 0
+        ? task.criteria.map((criterion) => `${criterion.id}=${criterion.outcome}`).join(", ")
+        : "no frozen criteria";
+      const cited = task.lastCitedCriteria.length > 0 ? ` citing [${task.lastCitedCriteria.join(", ")}]` : "";
+      const judge = task.lastJudgeVerdict ? ` judge=${task.lastJudgeVerdict}` : "";
+      const delivery = task.lastDeliveryStatus ? ` delivery=${task.lastDeliveryStatus}` : "";
+      const summary = task.lastSafeSummary ? ` | last: ${task.lastSafeSummary}` : "";
+      return `- ${task.id} "${task.title}"${lineage} [${task.status}] attempts=${task.attemptCount} ` +
+        `rejections=${task.substantiveRejectionCount}${cited} | ${criteria}${judge}${delivery}${summary}`;
+    }),
+  ].join("\n");
+}
+
 /**
  * Appendix appended to a worker child's prompt at dispatch: the frozen
  * acceptance contract and the structured-result reporting format.
@@ -199,6 +222,38 @@ export function buildWorkerContractAppendix(acceptance: TaskAcceptanceCriterion[
       })),
       tests: [{ command: "<exact command>", exitCode: 0, summary: "<short result>" }],
       claimedFiles: ["path/to/changed/file"],
+    }),
+  ].join("\n");
+}
+
+export function buildJudgeContractAppendix(input: {
+  workerDelegationRequestId: string;
+  acceptance: TaskAcceptanceCriterion[];
+  resultSummary: AgentRuntimeDelegationSummary;
+}): string {
+  return [
+    "## Independent Judge contract (no apply or commit authority)",
+    "",
+    `Worker attempt: ${input.workerDelegationRequestId}`,
+    `Worker safe summary: ${input.resultSummary.safeSummary}`,
+    `Backend-attested files: ${(input.resultSummary.attestedFiles ?? []).join(", ") || "none"}`,
+    "",
+    "Decide every frozen criterion from the candidate diff and evidence:",
+    ...input.acceptance.map((criterion) => `- ${criterion.id}: ${criterion.text}`),
+    "",
+    "Emit exactly one structured decision. Do not modify, apply, stage, or commit files:",
+    "",
+    controlExample({
+      type: "managed_review.decision",
+      workerDelegationRequestId: input.workerDelegationRequestId,
+      verdict: "accepted",
+      decisions: input.acceptance.map((criterion) => ({
+        criterionId: criterion.id,
+        outcome: "PASS",
+        safeSummary: "What directly supports this decision.",
+      })),
+      safeSummary: "Short overall judge summary.",
+      deferredFindings: [],
     }),
   ].join("\n");
 }

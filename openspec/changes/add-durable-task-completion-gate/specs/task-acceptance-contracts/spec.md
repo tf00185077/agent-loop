@@ -1,0 +1,66 @@
+## MODIFIED Requirements
+
+### Requirement: Frozen per-task acceptance criteria
+The system SHALL represent task acceptance as a list of criteria with immutable identifiers and binary, testable text, frozen when the task is announced and persisted as first-class managed task state; later task lists and delegations for the same task SHALL use the frozen criteria from SQLite rather than criteria restated by the supervisor or recovered from AI prose.
+
+#### Scenario: Task list carries acceptance criteria
+- **WHEN** a supervisor announces a task list whose entries include acceptance criteria
+- **THEN** the backend persists each task and criterion definition before accepting a worker delegation
+
+#### Scenario: Restated criteria do not mutate the contract
+- **WHEN** a later task list or worker delegation for a known task presents criteria that differ from the frozen definitions
+- **THEN** the backend uses the persisted criteria, records that the mutation attempt was ignored, and proceeds only under the original contract
+
+#### Scenario: Restart preserves frozen criteria
+- **WHEN** the backend restarts after a task contract is frozen
+- **THEN** the next delegation, review, and completion gate use the same persisted criterion ids and text
+
+### Requirement: Structured machine results
+The system SHALL support structured child results carrying per-criterion evidence and executed tests through a `managed_task.result` control block, SHALL persist those results on the worker attempt, and SHALL treat them as claims requiring authoritative judge and backend validation rather than task acceptance.
+
+#### Scenario: Child emits a structured result
+- **WHEN** a child's output contains a valid `managed_task.result` control block with criterion evidence and test entries
+- **THEN** the backend persists the result and attested file evidence on the worker attempt
+- **AND** the task remains unaccepted until the required judge and delivery gates pass
+
+#### Scenario: Child emits no structured result
+- **WHEN** a child completes without a valid `managed_task.result` control block
+- **THEN** the backend records the safe terminal summary and empty executor evidence
+- **AND** no criterion becomes `PASS` solely because the child process completed successfully
+
+### Requirement: Cite-only review verdicts
+The system SHALL accept a substantive review verdict only through a validated structured judge decision that references the frozen task and covers known criterion identifiers; objections that cite no known criterion SHALL be recorded as deferred findings and SHALL NOT change criterion outcomes or task status.
+
+#### Scenario: Cited structured rejection is substantive
+- **WHEN** a judge decision rejects a task result and marks one or more frozen criteria `FAIL` or `BLOCKED`
+- **THEN** the backend persists those outcomes, increments the task's substantive rejection count once for the reviewed attempt, and records the cited criteria
+
+#### Scenario: Uncited objection becomes a deferred finding
+- **WHEN** review output raises an objection outside a valid structured decision or cites no existing criterion identifier
+- **THEN** the backend records it durably as a deferred finding and leaves criterion outcomes, rejection count, and task status unchanged
+
+## ADDED Requirements
+
+### Requirement: Contracted task acceptance requires authoritative criterion decisions
+The system SHALL mark a contracted task accepted only when every required criterion has an authoritative `PASS` decision from the judge and any required backend delivery has succeeded; worker success, supervisor prose, executor evidence, or an empty evidence result SHALL NOT independently accept a task.
+
+#### Scenario: Some criteria remain unknown
+- **WHEN** a worker attempt succeeds but one or more frozen criteria remain `UNKNOWN`
+- **THEN** the task remains awaiting review or evidence and cannot satisfy goal completion
+
+#### Scenario: All criteria pass without workspace changes
+- **WHEN** the judge marks every required criterion `PASS` and the attempt has no attested workspace changes
+- **THEN** the backend marks the task accepted without requiring a delivery commit
+
+#### Scenario: All criteria pass with workspace changes
+- **WHEN** the judge marks every required criterion `PASS` and the attempt has attested workspace changes
+- **THEN** the task remains awaiting delivery until backend apply, validation, and commit succeed
+
+### Requirement: Uncontracted work cannot satisfy completion
+The system SHALL continue to record compatible ad-hoc delegations as uncontracted, but an uncontracted result SHALL NOT count as an accepted managed task or satisfy the goal completion gate.
+
+#### Scenario: Supervisor completes after ad-hoc work
+- **WHEN** a supervisor requests goal completion after performing only uncontracted work
+- **THEN** the backend rejects completion and instructs the supervisor to register contracted tasks representing the delivered work
+
+

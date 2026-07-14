@@ -6,15 +6,17 @@ import type {
   AgentRuntimeReviewMergeApplyOutcome,
   AgentRuntimeReviewMergeCheckpoint,
   AgentRuntimeWorktreeMetadata,
+  ManagedReviewDecisionControlEvent,
   TaskAcceptanceCriterion,
 } from "../../domain/index.js";
+import type { ManagedTaskRepository } from "../../persistence/managed-task-repository.js";
 import type {
   AgentSessionRepository,
   EventRepository,
   RunRepository,
 } from "../../persistence/runtime-repositories.js";
-import { validateManagedTaskResult, type ManagedTaskResult } from "./delegation-control-event.js";
-import { buildWorkerContractAppendix } from "./supervisor-prompt.js";
+import { validateManagedReviewDecision, validateManagedTaskResult, type ManagedTaskResult } from "./delegation-control-event.js";
+import { buildJudgeContractAppendix, buildWorkerContractAppendix } from "./supervisor-prompt.js";
 import {
   attestWorktreeFiles,
   createGitWorktreeService,
@@ -40,6 +42,7 @@ export interface DelegationCoordinatorDeps {
   reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;
+  managedTaskRepo?: ManagedTaskRepository;
 }
 
 export interface StartWorkerDelegationInput {
@@ -73,6 +76,9 @@ export interface SupervisorContinuationInput {
   worktreePath: string | null;
   resultSummary: AgentRuntimeDelegationSummary;
   reviewMergeOutcome: string | null;
+  reviewDecision: ManagedReviewDecisionControlEvent | null;
+  reviewDecisionError: string | null;
+  workerDelegationRequestId: string | null;
 }
 
 export interface DelegationCoordinator {
@@ -93,7 +99,9 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       }
       const workerResult = input.role === "review_merge" ? requireWorkerResult(deps, parent, input.workerDelegationRequestId) : null;
       const checkpoint =
-        input.role === "review_merge" ? await prepareReviewMerge(reviewMergeWorkspaceService, supervisorCwd) : null;
+        input.role === "review_merge" && !deps.managedTaskRepo
+          ? await prepareReviewMerge(reviewMergeWorkspaceService, supervisorCwd)
+          : null;
       const childEventData = {
         ...input.eventData,
         ...(checkpoint ? { reviewMergeCheckpoint: checkpoint } : {}),
@@ -110,6 +118,18 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         acceptance: input.acceptance ?? null,
       });
       const accepted = deps.agentSessionRepo.acceptDelegationRequest(request.id);
+      if (input.role === "worker" && input.taskId && deps.managedTaskRepo?.getTask(input.taskId)) {
+        deps.managedTaskRepo.beginAttempt(input.taskId, accepted.id, parent.runId);
+      }
+      if (input.role === "review_merge" && workerResult?.taskId && deps.managedTaskRepo?.getTask(workerResult.taskId)) {
+        deps.managedTaskRepo.beginReview({
+          taskId: workerResult.taskId,
+          workerDelegationRequestId: workerResult.id,
+          judgeDelegationRequestId: accepted.id,
+          safeSummary: "Independent judge review started.",
+          runId: parent.runId,
+        });
+      }
       deps.eventRepo.create({
         goalId: parent.goalId,
         runId: parent.runId,
@@ -146,14 +166,19 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       const childCwd =
         input.role === "worker"
           ? await createWorkerCwd(worktreeService, supervisorCwd, childSession.id, deps.agentSessionRepo)
-          : { path: supervisorCwd, worktree: null };
+          : { path: workerResult?.worktreePath ?? supervisorCwd, worktree: null };
       const contractedPrompt =
         input.role === "worker" && input.acceptance && input.acceptance.length > 0
           ? `${input.prompt}\n\n${buildWorkerContractAppendix(input.acceptance, input.taskId ?? null)}`
           : input.prompt;
-      const childPrompt = input.promptAppendix
-        ? `${contractedPrompt}\n\n${input.promptAppendix}`
+      const judgePrompt = input.role === "review_merge" && workerResult && deps.managedTaskRepo
+        ? `${contractedPrompt}\n\n${buildJudgeContractAppendix({
+            workerDelegationRequestId: workerResult.id,
+            acceptance: workerResult.acceptance ?? [],
+            resultSummary: workerResult.resultSummary,
+          })}`
         : contractedPrompt;
+      const childPrompt = input.promptAppendix ? `${judgePrompt}\n\n${input.promptAppendix}` : judgePrompt;
       const handle = await input.adapter.startSession({
         sessionId: childSession.id,
         goalId: parent.goalId,
@@ -217,8 +242,10 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         role: input.role,
         taskId: input.taskId ?? null,
         workerTaskId: workerResult?.taskId ?? null,
-        worktreePath: childCwd.worktree?.path ?? null,
+        worktreePath: childCwd.worktree?.path ?? workerResult?.worktreePath ?? null,
         pending: {},
+        workerDelegationRequestId: workerResult?.id ?? null,
+        frozenAcceptance: workerResult?.acceptance ?? [],
         reviewMergeVerificationService,
         supervisorCwd,
         onChildOutcome: input.onChildOutcome,
@@ -275,6 +302,10 @@ function requireWorkerResult(
     id: workerResult.id,
     taskId: workerResult.taskId ?? null,
     resultSummary: workerResult.resultSummary,
+    acceptance: workerResult.acceptance ?? null,
+    worktreePath: workerResult.childSessionId
+      ? deps.agentSessionRepo.getSession(workerResult.childSessionId)?.worktree?.path ?? null
+      : null,
   };
 }
 
@@ -301,6 +332,9 @@ async function consumeChildEvents(deps: DelegationCoordinatorDeps, input: Consum
           worktreePath: input.worktreePath,
           resultSummary: outcome.resultSummary,
           reviewMergeOutcome: outcome.reviewMergeOutcome,
+          reviewDecision: outcome.reviewDecision,
+          reviewDecisionError: outcome.reviewDecisionError,
+          workerDelegationRequestId: input.workerDelegationRequestId,
         });
       }
       return;
@@ -317,7 +351,14 @@ interface RecordChildEventInput {
   eventData: Record<string, unknown>;
   worktreePath: string | null;
   /** Mutable per-child scratch: the latest structured result the child emitted. */
-  pending: { taskResult?: ManagedTaskResult };
+  pending: {
+    taskResult?: ManagedTaskResult;
+    reviewDecision?: ManagedReviewDecisionControlEvent;
+    reviewDecisionError?: string;
+  };
+  role: AgentRuntimeDelegationRole;
+  workerDelegationRequestId: string | null;
+  frozenAcceptance: TaskAcceptanceCriterion[];
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;
   onChildOutcome?: (input: SupervisorContinuationInput) => Promise<void>;
@@ -328,6 +369,8 @@ interface ChildTerminalOutcome {
   detached: boolean;
   resultSummary: AgentRuntimeDelegationSummary;
   reviewMergeOutcome: string | null;
+  reviewDecision: ManagedReviewDecisionControlEvent | null;
+  reviewDecisionError: string | null;
 }
 
 function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEventInput): ChildTerminalOutcome | null {
@@ -366,10 +409,26 @@ function recordChildEvent(deps: DelegationCoordinatorDeps, input: RecordChildEve
       reviewMergeOutcome: isReviewMergeApplyOutcome(input.event.metadata?.reviewMergeApplyOutcome)
         ? input.event.metadata.reviewMergeApplyOutcome.status
         : null,
+      reviewDecision: input.pending.reviewDecision ?? null,
+      reviewDecisionError: input.pending.reviewDecisionError ?? null,
     };
   }
 
   if (input.event.metadata?.delegationControlEvent !== undefined) {
+    if (input.role === "review_merge" && input.workerDelegationRequestId) {
+      const reviewed = validateManagedReviewDecision({
+        controlEvent: input.event.metadata.delegationControlEvent,
+        expectedWorkerDelegationRequestId: input.workerDelegationRequestId,
+        frozenCriteria: input.frozenAcceptance,
+      });
+      if (reviewed.ok) {
+        input.pending.reviewDecision = reviewed.decision;
+        input.pending.reviewDecisionError = undefined;
+      } else {
+        input.pending.reviewDecisionError = reviewed.safeReason;
+      }
+      return null;
+    }
     const parsed = validateManagedTaskResult(input.event.metadata.delegationControlEvent);
     if (parsed.ok) {
       input.pending.taskResult = parsed.result;

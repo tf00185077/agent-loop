@@ -218,7 +218,17 @@ The database path should be configurable, with a default such as:
 data/auto-agent.sqlite
 ```
 
-SQLite is the system of record for goal, run, step, and event state. In-memory runtime state can exist only as a short-lived execution detail.
+SQLite is the system of record for goal, run, step, session, delegation attempt,
+managed task, frozen criterion, authoritative criterion outcome, Judge review,
+delivery, and event state. AI responses and event prose are transcript/audit
+inputs, not current-state authority. In-memory runtime state can exist only as a
+short-lived execution detail; every completion decision is rebuilt from the
+structured SQLite projection.
+
+The existing `review_merge` role id is retained for provider and settings
+compatibility, but its runtime responsibility is independent judging only.
+Backend-owned git operations create and apply candidate commits, run fixed
+validation, and verify rollback before a file-producing task becomes accepted.
 
 ## Agent Runtime
 

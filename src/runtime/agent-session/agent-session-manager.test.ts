@@ -12,6 +12,7 @@ import type {
 import { openDatabase } from "../../persistence/database.js";
 import type { EventBus } from "../../persistence/event-bus.js";
 import { createGoalRepository } from "../../persistence/goal-repository.js";
+import { createManagedTaskRepository } from "../../persistence/managed-task-repository.js";
 import {
   createAgentSessionRepository,
   createEventRepository,
@@ -3621,6 +3622,126 @@ function delegationRequestEvent(sessionId: string, goalId: string, runId: string
     },
   };
 }
+
+test("uses durable task, structured Judge, and completion gates without fixture-only merge metadata", async () => {
+  const fixture = createManagerFixture("durable judge flow");
+  const managedTaskRepo = createManagedTaskRepository(fixture.db);
+  let supervisorTurn = 0;
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        if (input.prompt.includes("Independent Judge contract")) {
+          const workerId = fixture.agentSessionRepo
+            .listSessionsForGoal(fixture.goal.id)
+            .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id))
+            .find((request) => request.role === "worker")!.id;
+          return createHandle(input.sessionId, [
+            {
+              type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Judged.", occurredAt: "2026-07-14T00:00:04.000Z",
+              metadata: { delegationControlEvent: {
+                type: "managed_review.decision", workerDelegationRequestId: workerId, verdict: "accepted",
+                decisions: [{ criterionId: "A1", outcome: "PASS", safeSummary: "Evidence is sufficient." }],
+                safeSummary: "Criterion passes.", deferredFindings: [],
+              } },
+            },
+            { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Judge completed.", occurredAt: "2026-07-14T00:00:05.000Z" },
+          ]);
+        }
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Evidence.", occurredAt: "2026-07-14T00:00:02.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_task.result", taskId: "task-1",
+              criterionEvidence: [{ criterionId: "A1", evidence: "Focused test passed." }], tests: [],
+              claimedFiles: ["src/change.ts"],
+            } },
+          },
+          { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Worker completed.", occurredAt: "2026-07-14T00:00:03.000Z" },
+        ]);
+      }
+      supervisorTurn += 1;
+      if (supervisorTurn === 1) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Contract.", occurredAt: "2026-07-14T00:00:00.000Z",
+            metadata: { delegationControlEvent: { type: "managed_delegation.task_list", tasks: [
+              { id: "task-1", title: "Text-only task", acceptance: [{ id: "A1", text: "Evidence is verified." }] },
+            ] } },
+          },
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Delegate.", occurredAt: "2026-07-14T00:00:01.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "worker", taskId: "task-1", prompt: "Do task.", summary: "Do task.",
+            } },
+          },
+        ]);
+      }
+      const workerId = fixture.agentSessionRepo
+        .listSessionsForGoal(fixture.goal.id)
+        .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id))
+        .find((request) => request.role === "worker")!.id;
+      if (supervisorTurn === 2) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Premature completion.", occurredAt: "2026-07-14T00:00:03.100Z",
+            metadata: { delegationControlEvent: { type: "managed_delegation.complete", summary: "Claimed early." } },
+          },
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Request judge.", occurredAt: "2026-07-14T00:00:03.200Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: workerId,
+              prompt: "Judge independently.", summary: "Judge independently.",
+            } },
+          },
+        ]);
+      }
+      return createHandle(input.sessionId, [{
+        type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+        message: "Complete.", occurredAt: "2026-07-14T00:00:06.000Z",
+        metadata: { delegationControlEvent: { type: "managed_delegation.complete", summary: "Durably accepted." } },
+      }]);
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    database: fixture.db,
+    managedTaskRepo,
+    worktreeAttestor: () => ["src/change.ts"],
+    managedDeliveryService: {
+      deliver() {
+        return {
+          status: "committed", safeSummary: "Backend mock delivery committed.", checkpointHead: "base",
+          checkpointStatus: "clean", candidateCommitSha: "candidate", commitSha: "delivered",
+          validationCommand: "npm test", validationExitCode: 0, validationSummary: "passed", rollbackSummary: null,
+        };
+      },
+    },
+  });
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
+
+  assert.equal(managedTaskRepo.getTask("task-1")?.status, "accepted");
+  assert.equal(managedTaskRepo.listReviews("task-1")[0]?.verdict, "accepted");
+  assert.equal(managedTaskRepo.listDeliveries("task-1")[0]?.status, "committed");
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  assert.ok(events.some((event) => event.data.completionGaps));
+  assert.equal(events.find((event) => event.type === "goal.completed")?.message, "Durably accepted.");
+  fixture.db.close();
+});
 
 function createManagerFixture(title: string) {
   const db = openDatabase({

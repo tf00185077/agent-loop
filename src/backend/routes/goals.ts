@@ -7,6 +7,7 @@ import {
 } from "../../domain/index.js";
 import type { EventBus } from "../../persistence/event-bus.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
+import type { ManagedTaskRepository } from "../../persistence/managed-task-repository.js";
 import type {
   AgentSessionRepository,
   EventRepository,
@@ -17,6 +18,7 @@ import {
   sanitizeAgentRuntimeDelegationRequest,
   sanitizeAgentRuntimeSession,
 } from "../../runtime/safety/agent-runtime-control-plane-sanitizer.js";
+import { projectManagedTaskContext } from "../../runtime/agent-session/managed-context-projection.js";
 
 const TERMINAL_EVENT_TYPES = new Set<Event["type"]>([
   "goal.completed",
@@ -38,6 +40,7 @@ interface GoalRouterDeps {
   eventBus: EventBus;
   runtime: RuntimeRunner;
   agentSessionRepo: AgentSessionRepository;
+  managedTaskRepo?: ManagedTaskRepository;
 }
 
 export function createGoalRouter(deps: GoalRouterDeps): Router {
@@ -157,6 +160,7 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
             .map(sanitizeAgentRuntimeDelegationRequest),
         ),
         mergeOutcomes,
+        managedTasks: deps.managedTaskRepo ? projectManagedTaskContext(deps.managedTaskRepo, goal.id) : [],
       });
     } catch (err) {
       next(err);

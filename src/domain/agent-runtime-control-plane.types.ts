@@ -166,6 +166,124 @@ export const delegationTerminalOutcomeTypes = ["success", "failure", "timeout", 
 
 export type AgentRuntimeDelegationTerminalOutcome = (typeof delegationTerminalOutcomeTypes)[number];
 
+export const managedTaskStatuses = [
+  "registered",
+  "delegated",
+  "awaiting_review",
+  "rejected",
+  "split",
+  "failed",
+  "blocked",
+  "awaiting_delivery",
+  "accepted",
+] as const;
+
+export type ManagedTaskStatus = (typeof managedTaskStatuses)[number];
+
+export const managedCriterionOutcomes = ["UNKNOWN", "PASS", "FAIL", "BLOCKED"] as const;
+
+export type ManagedCriterionOutcome = (typeof managedCriterionOutcomes)[number];
+
+export const managedJudgeVerdicts = ["accepted", "rejected", "blocked"] as const;
+
+export type ManagedJudgeVerdict = (typeof managedJudgeVerdicts)[number];
+
+export const managedDeliveryOutcomes = [
+  "pending",
+  "committed",
+  "rejected",
+  "conflict",
+  "test_failed_reverted",
+  "revert_failed",
+  "failed",
+  "verification_failed",
+] as const;
+
+export type ManagedDeliveryOutcome = (typeof managedDeliveryOutcomes)[number];
+
+export const managedCompletionGapTypes = [
+  "unaccepted_leaf_task",
+  "criterion_not_passed",
+  "active_attempt",
+  "pending_review",
+  "pending_delivery",
+  "undelivered_changes",
+  "uncontracted_only_work",
+  "unarchived_change",
+] as const;
+
+export type ManagedCompletionGapType = (typeof managedCompletionGapTypes)[number];
+
+export interface ManagedCompletionGap {
+  type: ManagedCompletionGapType;
+  safeSummary: string;
+  taskId?: string | null;
+  criterionId?: string | null;
+  changeId?: string | null;
+  delegationRequestId?: string | null;
+}
+
+export interface ManagedTaskRecord {
+  id: string;
+  goalId: string;
+  changeId: string | null;
+  parentTaskId: string | null;
+  title: string;
+  status: ManagedTaskStatus;
+  attemptCount: number;
+  substantiveRejectionCount: number;
+  lastCitedCriteria: string[];
+  lastSafeSummary: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedTaskCriterionRecord {
+  taskId: string;
+  criterionId: string;
+  text: string;
+  outcome: ManagedCriterionOutcome;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedJudgeCriterionDecision {
+  criterionId: string;
+  outcome: Exclude<ManagedCriterionOutcome, "UNKNOWN">;
+  safeSummary: string;
+}
+
+export interface ManagedTaskReviewRecord {
+  id: string;
+  taskId: string;
+  workerDelegationRequestId: string;
+  judgeDelegationRequestId: string | null;
+  verdict: ManagedJudgeVerdict;
+  decisions: ManagedJudgeCriterionDecision[];
+  citedCriteria: string[];
+  safeSummary: string;
+  deferredFindings: string[];
+  createdAt: string;
+}
+
+export interface ManagedTaskDeliveryRecord {
+  id: string;
+  taskId: string;
+  workerDelegationRequestId: string;
+  status: ManagedDeliveryOutcome;
+  checkpointHead: string | null;
+  checkpointStatus: string | null;
+  candidateCommitSha: string | null;
+  commitSha: string | null;
+  validationCommand: string | null;
+  validationExitCode: number | null;
+  validationSummary: string | null;
+  rollbackSummary: string | null;
+  safeSummary: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AgentRuntimeDelegationSummary {
   kind: AgentRuntimeDelegationTerminalOutcome;
   safeSummary: string;
@@ -187,6 +305,7 @@ export const managedControlEventTypes = [
   "managed_delegation.complete",
   "managed_delegation.task_list",
   "managed_task.result",
+  "managed_review.decision",
   "managed_change.plan",
 ] as const;
 
@@ -271,11 +390,21 @@ export interface ManagedTaskResultControlEvent {
   claimedFiles?: string[];
 }
 
+export interface ManagedReviewDecisionControlEvent {
+  type: "managed_review.decision";
+  workerDelegationRequestId: string;
+  verdict: ManagedJudgeVerdict;
+  decisions: ManagedJudgeCriterionDecision[];
+  safeSummary: string;
+  deferredFindings?: string[];
+}
+
 export type ManagedControlEvent =
   | ManagedDelegationRequestControlEvent
   | ManagedDelegationCompleteControlEvent
   | ManagedTaskListControlEvent
   | ManagedTaskResultControlEvent
+  | ManagedReviewDecisionControlEvent
   | ManagedChangePlanControlEvent;
 
 export interface AgentRuntimeDelegationRequest {
@@ -289,6 +418,8 @@ export interface AgentRuntimeDelegationRequest {
   changeId?: string | null;
   /** Frozen acceptance criteria snapshot in force at dispatch. */
   acceptance?: TaskAcceptanceCriterion[] | null;
+  /** Monotonically increasing worker attempt number within a contracted task. */
+  attemptNumber?: number | null;
   resultSummary: AgentRuntimeDelegationSummary | null;
   detachedReason: string | null;
   createdAt: string;

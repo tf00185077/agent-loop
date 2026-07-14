@@ -8,6 +8,7 @@ import {
 import type { AppDatabase } from "../persistence/database.js";
 import { createEventBus } from "../persistence/event-bus.js";
 import { createGoalRepository } from "../persistence/goal-repository.js";
+import { createManagedTaskRepository } from "../persistence/managed-task-repository.js";
 import {
   createProviderSettingsRepository,
   type ProviderSettingsRepository,
@@ -81,6 +82,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
   const runRepo = createRunRepository(db);
   const stepRepo = createStepRepository(db);
   const agentSessionRepo = createAgentSessionRepository(db);
+  const managedTaskRepo = createManagedTaskRepository(db);
   const eventBus = createEventBus();
   const eventRepo = createEventRepository(db, { eventBus });
   const providerSettingsRepo = createProviderSettingsRepository(db);
@@ -89,6 +91,8 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     runRepo,
     eventRepo,
     agentSessionRepo,
+    database: db,
+    managedTaskRepo,
     maxSupervisorContinuations: options.maxSupervisorContinuations,
     roleAdapterResolver: createRoleAdapterResolver({
       getSettings: () => providerSettingsRepo.get(),
@@ -133,7 +137,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     res.json({ status: "ok" });
   });
 
-  app.use("/api/goals", createGoalRouter({ goalRepo, eventRepo, eventBus, runtime, agentSessionRepo }));
+  app.use("/api/goals", createGoalRouter({ goalRepo, eventRepo, eventBus, runtime, agentSessionRepo, managedTaskRepo }));
   app.use("/api/agent-sessions", createAgentSessionRouter({ agentSessionRepo, agentSessionManager }));
   app.use(
     "/api/provider-settings",
