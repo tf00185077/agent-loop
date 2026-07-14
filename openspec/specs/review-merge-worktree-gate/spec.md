@@ -42,19 +42,34 @@ The system SHALL require a clean supervisor workspace and checkpoint before revi
 - **THEN** the backend rejects or fails review merge before applying worker changes
 
 ### Requirement: Merge outcome validation
-The system SHALL derive delivery outcomes from backend-controlled apply, validation, commit, and rollback operations and SHALL persist `committed`, `rejected`, `conflict`, `test_failed_reverted`, `revert_failed`, `failed`, or `verification_failed` as typed outcomes.
+The system SHALL derive delivery outcomes from backend-controlled apply, conditional integration recovery, validation, commit, and rollback operations and SHALL persist `committed`, `rejected`, `conflict`, `integration_failed`, `test_failed_reverted`, `revert_failed`, `failed`, or `verification_failed` as typed outcomes.
 
 #### Scenario: Delivery succeeds
-- **WHEN** the judge accepts the attempt, the backend applies the runtime-owned candidate commit, and required validation passes
-- **THEN** the backend records `committed` with diff summary, validation evidence, and resulting commit SHA
+- **WHEN** the judge accepts the exact candidate being delivered, the backend applies it, and required validation passes
+- **THEN** the backend records `committed` with diff summary, validation evidence, resulting commit SHA, and integration identity when present
 
 #### Scenario: Judge rejects delivery
 - **WHEN** the judge decision contains a required criterion that is not `PASS`
 - **THEN** the backend records the review outcome without applying the candidate and leaves the supervisor workspace unchanged
 
-#### Scenario: Conflict prevents apply
-- **WHEN** backend delivery cannot apply the candidate because of conflicts
-- **THEN** it records `conflict`, keeps the task unaccepted, and verifies the supervisor workspace remains at its checkpoint
+#### Scenario: First conflict enters conditional recovery
+- **WHEN** backend delivery cannot apply an accepted worker candidate because of conflicts and verified rollback succeeds
+- **THEN** it records `conflict`, keeps the task unaccepted, and starts conditional integration recovery when no prior attempt exists
+
+#### Scenario: Recovery cannot safely deliver
+- **WHEN** conditional integration fails, the resolved candidate is not re-accepted, or final apply conflicts again
+- **THEN** the backend records `integration_failed`, keeps the task unaccepted, verifies the supervisor checkpoint, and returns control to the Supervisor
+
+### Requirement: Judge decisions authorize an exact candidate
+The system SHALL bind every Judge decision used for delivery to the exact reviewed content identity, and a decision for an earlier candidate SHALL NOT authorize a resolved integration candidate.
+
+#### Scenario: Candidate identity matches review
+- **WHEN** backend delivery evaluates an accepted Judge decision
+- **THEN** the decision's reviewed candidate identity matches the candidate selected for apply
+
+#### Scenario: Candidate changed after acceptance
+- **WHEN** integration or any other operation changes the candidate content after Judge acceptance
+- **THEN** delivery remains blocked until a fresh valid decision covers the new candidate identity
 
 ### Requirement: Fixed test gate
 The system SHALL run the configured fixed test command in the backend after applying an accepted candidate and SHALL require a successful exit before recording delivery as committed.
