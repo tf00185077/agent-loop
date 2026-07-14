@@ -1623,6 +1623,21 @@ describe("Backend API", () => {
           ((body.childSessionRequests as Array<Record<string, unknown>>)[0]).id,
           childRequest.id,
         );
+        assert.deepEqual(body.liveStatus, {
+          state: "waiting",
+          phase: "approval",
+          summary: "Run tests",
+          lastActivityAt: approval.createdAt,
+          provider: "codex-local",
+          model: "gpt-5-codex",
+          sessionId: session.id,
+          parentSessionId: null,
+          delegationRequestId: null,
+          role: null,
+          taskId: null,
+          integrationAttemptId: null,
+          resolvedCandidateCommitSha: null,
+        });
       } finally {
         await providerServer.close();
       }
@@ -1661,7 +1676,8 @@ describe("Backend API", () => {
     it("returns a sanitized durable integration read model", async () => {
       const providerServer = await startServer();
       try {
-        const { goal, session } = seedManagedSession(providerServer.db);
+        const { goal, session, approval } = seedManagedSession(providerServer.db);
+        createAgentSessionRepository(providerServer.db).resolveApprovalRequest(approval.id, "approved", "Fixture setup");
         const tasks = createManagedTaskRepository(providerServer.db);
         tasks.registerTasks({
           goalId: goal.id,
@@ -1695,6 +1711,72 @@ describe("Backend API", () => {
         assert.equal("allowedFiles" in managed, false);
         assert.equal(JSON.stringify(managed).includes("private integrator prompt"), false);
         assert.equal(JSON.stringify(managed).includes("checkpoint-secret"), false);
+        const liveStatus = body.liveStatus as Record<string, unknown>;
+        assert.equal(liveStatus.phase, "integrator");
+        assert.equal(liveStatus.integrationAttemptId, integration.id);
+        assert.deepEqual(Object.keys(liveStatus).sort(), [
+          "delegationRequestId", "integrationAttemptId", "lastActivityAt", "model", "parentSessionId",
+          "phase", "provider", "resolvedCandidateCommitSha", "role", "sessionId", "state", "summary", "taskId",
+        ]);
+        assert.equal(JSON.stringify(liveStatus).includes("private integrator prompt"), false);
+        assert.equal(JSON.stringify(liveStatus).includes("src/private.ts"), false);
+        assert.equal(JSON.stringify(liveStatus).includes("checkpoint-secret"), false);
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("returns renderable historical and terminal live status without an active session", async () => {
+      const providerServer = await startServer();
+      try {
+        const goals = createGoalRepository(providerServer.db);
+        const historical = goals.create({ title: "Historical", description: "No managed runtime" });
+        createEventRepository(providerServer.db).create({
+          goalId: historical.id,
+          type: "agent.message",
+          message: "Authorization: Bearer super-secret-credential",
+          data: { prompt: "raw prompt", diff: "private diff", command: "private command", diagnostics: "private diagnostics" },
+        });
+        let res = await fetch(`${providerServer.url}/api/goals/${historical.id}/agent-session`);
+        let body = (await json(res)) as Record<string, unknown>;
+        const historicalStatus = body.liveStatus as Record<string, unknown>;
+        assert.equal(historicalStatus.state, "unknown");
+        assert.equal(historicalStatus.phase, "none");
+        assert.equal(historicalStatus.summary, "[redacted]");
+        assert.equal(historicalStatus.sessionId, null);
+        assert.equal(JSON.stringify(historicalStatus).includes("super-secret-credential"), false);
+        assert.equal(JSON.stringify(historicalStatus).includes("private diff"), false);
+        assert.equal(JSON.stringify(historicalStatus).includes("private command"), false);
+        assert.equal(JSON.stringify(historicalStatus).includes("private diagnostics"), false);
+
+        goals.updateStatus(historical.id, "blocked", { completedAt: "2026-07-14T02:00:00.000Z" });
+        res = await fetch(`${providerServer.url}/api/goals/${historical.id}/agent-session`);
+        body = (await json(res)) as Record<string, unknown>;
+        assert.equal((body.liveStatus as Record<string, unknown>).state, "blocked");
+        assert.equal((body.liveStatus as Record<string, unknown>).phase, "none");
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("projects an active Worker through the existing sanitized snapshot", async () => {
+      const providerServer = await startServer();
+      try {
+        const { goal, session, approval } = seedManagedSession(providerServer.db);
+        const sessions = createAgentSessionRepository(providerServer.db);
+        sessions.resolveApprovalRequest(approval.id, "approved", "Fixture setup");
+        const worker = sessions.createDelegationRequest({
+          parentSessionId: session.id, role: "worker", taskId: "task-worker",
+          promptSummary: "token=super-secret-worker-token implement task",
+        });
+        const res = await fetch(`${providerServer.url}/api/goals/${goal.id}/agent-session`);
+        const body = (await json(res)) as Record<string, unknown>;
+        const liveStatus = body.liveStatus as Record<string, unknown>;
+        assert.equal(liveStatus.state, "waiting");
+        assert.equal(liveStatus.phase, "worker");
+        assert.equal(liveStatus.delegationRequestId, worker.id);
+        assert.equal(liveStatus.taskId, "task-worker");
+        assert.equal(JSON.stringify(liveStatus).includes("super-secret-worker-token"), false);
       } finally {
         await providerServer.close();
       }

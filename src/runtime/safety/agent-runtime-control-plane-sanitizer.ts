@@ -101,7 +101,7 @@ function sanitizeNullableText<T extends string | null | undefined>(value: T): T 
   return (typeof value === "string" ? sanitizeControlPlaneText(value) : value) as T;
 }
 
-function sanitizeControlPlaneText(value: string): string {
+export function sanitizeControlPlaneText(value: string): string {
   return sanitizeAuthCachePath(sanitizeProcessOutput(value))
     .replace(/\b[A-Z0-9_]*(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|ID_TOKEN|AUTH_TOKEN)=[^\s;]+/gi, "[redacted]")
     .trim();

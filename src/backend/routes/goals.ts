@@ -17,8 +17,10 @@ import {
   sanitizeAgentRuntimeChildSessionRequest,
   sanitizeAgentRuntimeDelegationRequest,
   sanitizeAgentRuntimeSession,
+  sanitizeControlPlaneText,
 } from "../../runtime/safety/agent-runtime-control-plane-sanitizer.js";
 import { projectManagedTaskContext } from "../../runtime/agent-session/managed-context-projection.js";
+import { projectAgentLiveStatus } from "../../runtime/agent-session/agent-live-status.js";
 
 const TERMINAL_EVENT_TYPES = new Set<Event["type"]>([
   "goal.completed",
@@ -129,10 +131,15 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
         return;
       }
 
-      const session = agentSessionRepo.listSessionsForGoal(goal.id).at(-1) ?? null;
       const sessions = agentSessionRepo.listSessionsForGoal(goal.id);
-      const mergeOutcomes = eventRepo
-        .listForGoal(goal.id)
+      const session = sessions.at(-1) ?? null;
+      const events = eventRepo.listForGoal(goal.id);
+      const liveStatusEvents = events.map((event) => ({
+        ...event,
+        message: sanitizeControlPlaneText(event.message),
+        data: {},
+      }));
+      const mergeOutcomes = events
         .filter((event) => event.data.runtimeEventType === "review_merge.apply_outcome")
         .map((event) => ({
           delegationRequestId: stringValue(event.data.delegationRequestId),
@@ -143,24 +150,32 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
           fixedTest: recordValue(event.data.fixedTest),
           revertEvidence: recordValue(event.data.revertEvidence),
         }));
+      const sanitizedSessions = sessions.map(sanitizeAgentRuntimeSession);
+      const approvals = sessions.flatMap((managedSession) =>
+        agentSessionRepo.listApprovalRequests(managedSession.id).map(sanitizeAgentRuntimeApprovalRequest));
+      const delegationRequests = sessions.flatMap((managedSession) =>
+        agentSessionRepo.listDelegationRequests(managedSession.id).map(sanitizeAgentRuntimeDelegationRequest));
+      const managedTasks = deps.managedTaskRepo ? projectManagedTaskContext(deps.managedTaskRepo, goal.id) : [];
       res.json({
         session: session ? sanitizeAgentRuntimeSession(session) : null,
-        sessions: sessions.map(sanitizeAgentRuntimeSession),
-        approvals: session
-          ? agentSessionRepo.listApprovalRequests(session.id).map(sanitizeAgentRuntimeApprovalRequest)
-          : [],
+        sessions: sanitizedSessions,
+        approvals: session ? approvals.filter((approval) => approval.sessionId === session.id) : [],
         childSessionRequests: session
           ? agentSessionRepo
               .listChildSessionRequests(session.id)
               .map(sanitizeAgentRuntimeChildSessionRequest)
           : [],
-        delegationRequests: sessions.flatMap((managedSession) =>
-          agentSessionRepo
-            .listDelegationRequests(managedSession.id)
-            .map(sanitizeAgentRuntimeDelegationRequest),
-        ),
+        delegationRequests,
         mergeOutcomes,
-        managedTasks: deps.managedTaskRepo ? projectManagedTaskContext(deps.managedTaskRepo, goal.id) : [],
+        managedTasks,
+        liveStatus: projectAgentLiveStatus({
+          goal,
+          sessions: sanitizedSessions,
+          approvals,
+          delegations: delegationRequests,
+          managedTasks,
+          events: liveStatusEvents,
+        }),
       });
     } catch (err) {
       next(err);

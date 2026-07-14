@@ -3,6 +3,7 @@ import type {
   AgentRuntimeChildSessionRequest,
   AgentRuntimeDelegationRequest,
   AgentRuntimeSession,
+  AgentLiveStatus,
 } from "../domain/index.js";
 
 const BASE = "/api";
@@ -32,6 +33,7 @@ export interface GoalEvent {
 }
 
 export interface AgentSessionSnapshot {
+  liveStatus?: AgentLiveStatus;
   session: AgentRuntimeSession | null;
   sessions?: AgentRuntimeSession[];
   approvals: AgentRuntimeApprovalRequest[];

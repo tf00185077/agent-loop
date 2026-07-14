@@ -130,6 +130,15 @@ export type {
 } from "./event.types.js";
 export type { GoalStatus, RunStatus, StepStatus } from "./status.types.js";
 export type {
+  AgentLiveStatus,
+  AgentLiveStatusPhase,
+  AgentLiveStatusState,
+} from "./agent-live-status.types.js";
+export {
+  agentLiveStatusPhases,
+  agentLiveStatusStates,
+} from "./agent-live-status.types.js";
+export type {
   AgentAssignableRole,
   AgentRoleAssignment,
   ClaudeLocalProviderSettings,

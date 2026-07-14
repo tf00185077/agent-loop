@@ -18,6 +18,10 @@ test("goal detail renders managed session state approvals cancellation and unsup
   );
 
   assert.match(html, /Managed session/);
+  assert.match(html, /Agent live status/);
+  assert.match(html, /Waiting · Approval/);
+  assert.match(html, /Run tests/);
+  assert.match(html, /session-1/);
   assert.match(html, /waiting_approval/);
   assert.match(html, /codex-local/);
   assert.match(html, /gpt-5-codex/);
@@ -181,6 +185,48 @@ test("goal detail renders durable integration recovery state", () => {
   assert.match(html, /resolved candidate candidate-2/);
 });
 
+test("live status panel renders every pipeline family and tolerates partial or future metadata", () => {
+  const cases = [
+    ["waiting", "worker", "Waiting · Worker"],
+    ["waiting", "judge", "Waiting · Judge"],
+    ["waiting", "integrator", "Waiting · Integrator"],
+    ["waiting", "rejudge", "Waiting · Rejudge"],
+    ["running", "delivery", "Running · Delivery"],
+    ["stalled", "validation", "Stalled · Validation"],
+    ["completed", "none", "Completed · None"],
+  ] as const;
+  for (const [state, phase, label] of cases) {
+    const snapshot = sessionSnapshot();
+    snapshot.liveStatus = { ...snapshot.liveStatus!, state, phase, summary: `${phase} summary` };
+    const html = renderToStaticMarkup(
+      <GoalDetailPanel goal={goal()} latestMetadata={null} agentSessionSnapshot={snapshot}
+        starting={false} onStart={() => undefined} />,
+    );
+    assert.ok(html.indexOf("Agent live status") < html.indexOf("Managed session"));
+    assert.ok(html.includes(label));
+    assert.ok(html.includes(`${phase} summary`));
+  }
+
+  const partial = sessionSnapshot();
+  partial.liveStatus = {
+    ...partial.liveStatus!, state: "unknown", phase: "none", provider: null, model: null,
+    sessionId: null, lastActivityAt: null,
+  };
+  const partialHtml = renderToStaticMarkup(
+    <GoalDetailPanel goal={goal()} latestMetadata={null} agentSessionSnapshot={partial}
+      starting={false} onStart={() => undefined} />,
+  );
+  assert.match(partialHtml, /Unknown · None/);
+
+  const future = sessionSnapshot();
+  future.liveStatus = { ...future.liveStatus!, state: "unknown", phase: "future_phase" as never };
+  const futureHtml = renderToStaticMarkup(
+    <GoalDetailPanel goal={goal()} latestMetadata={null} agentSessionSnapshot={future}
+      starting={false} onStart={() => undefined} />,
+  );
+  assert.match(futureHtml, /Unknown · Future phase/);
+});
+
 
 function goal(): Goal {
   return {
@@ -199,6 +245,12 @@ function goal(): Goal {
 
 function sessionSnapshot(): AgentSessionSnapshot {
   return {
+    liveStatus: {
+      state: "waiting", phase: "approval", summary: "Run tests",
+      lastActivityAt: "2026-06-22T01:02:00.000Z", provider: "codex-local", model: "gpt-5-codex",
+      sessionId: "session-1", parentSessionId: null, delegationRequestId: null, role: null, taskId: null,
+      integrationAttemptId: null, resolvedCandidateCommitSha: null,
+    },
     session: {
       id: "session-1",
       goalId: "goal-1",

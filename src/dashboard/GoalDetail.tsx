@@ -175,6 +175,9 @@ export function GoalDetailPanel({
           )}
         </tbody>
       </table>
+      {agentSessionSnapshot?.liveStatus && (
+        <AgentLiveStatusPanel status={agentSessionSnapshot.liveStatus} />
+      )}
       {session && (
         <section style={{ marginTop: 12, marginBottom: 20 }}>
           <h3 style={{ fontSize: 16, margin: "0 0 8px" }}>Managed session</h3>
@@ -289,6 +292,35 @@ export function GoalDetailPanel({
       )}
     </div>
   );
+}
+
+function AgentLiveStatusPanel({ status }: {
+  status: NonNullable<AgentSessionSnapshot["liveStatus"]>;
+}) {
+  const identities = [
+    status.sessionId && `session ${status.sessionId}`,
+    status.role && `role ${status.role}`,
+    status.taskId && `task ${status.taskId}`,
+    status.delegationRequestId && `delegation ${status.delegationRequestId}`,
+    status.integrationAttemptId && `integration ${status.integrationAttemptId}`,
+  ].filter(Boolean).join(" · ");
+  return (
+    <section style={{ margin: "12px 0 20px", padding: 12, border: "1px solid #ddd", borderRadius: 6 }}>
+      <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>Agent live status</h3>
+      <div style={{ fontWeight: 600 }}>{humanize(status.state)} · {humanize(status.phase)}</div>
+      <p style={{ margin: "6px 0" }}>{status.summary}</p>
+      <div style={{ color: "#666", fontSize: 12 }}>
+        {[status.provider, status.model].filter(Boolean).join(" · ")}
+        {status.lastActivityAt ? ` · ${fmt(status.lastActivityAt)}` : ""}
+      </div>
+      {identities && <div style={{ color: "#666", fontSize: 12, marginTop: 3 }}>{identities}</div>}
+    </section>
+  );
+}
+
+function humanize(value: string): string {
+  const normalized = value.replace(/_/g, " ");
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
 function MergeOutcomeDetails({

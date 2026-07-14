@@ -69,3 +69,18 @@ criteria, and a bounded allowed-file set. Its only authoritative output is one
 `managed_integration.result` block. Backend Git checks create the resolved
 candidate, then an immediate `review_merge` child must judge that exact SHA.
 The Supervisor resumes only after this sequential recovery finishes or fails.
+
+## Durable Live Status
+
+`projectAgentLiveStatus` produces the compact status shown by the dashboard. It
+does not add a second state store: each request reconstructs the view from the
+goal, managed sessions, pending approvals, delegations, managed tasks,
+delivery records, and integration records already persisted in SQLite.
+
+Authority is evaluated in this order: terminal goal, human approval/input,
+integration recovery, active delegation, managed task review/delivery, then
+session lifecycle. Sanitized events can supply only bounded summary text and
+activity time; event prose cannot override structured state. The output keeps
+`state` separate from the pipeline `phase` and caps normalized summaries at
+500 characters. Raw prompts, commands, diffs, diagnostics, provider payloads,
+and credentials are not part of the read model.

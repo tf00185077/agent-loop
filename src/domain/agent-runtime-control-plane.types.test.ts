@@ -31,8 +31,27 @@ import {
 } from "./agent-runtime-control-plane.types.js";
 import {
   agentRuntimeCapabilityNames as publicAgentRuntimeCapabilityNames,
+  agentLiveStatusPhases,
+  agentLiveStatusStates,
+  type AgentLiveStatus,
   type AgentRuntimeAdapter as PublicAgentRuntimeAdapter,
 } from "./index.js";
+
+test("defines the closed live status contract and nullable safe metadata", () => {
+  assert.deepEqual(agentLiveStatusStates, [
+    "running", "waiting", "stalled", "completed", "failed", "blocked", "cancelled", "unknown",
+  ]);
+  assert.deepEqual(agentLiveStatusPhases, [
+    "supervisor", "continuation", "worker", "judge", "integrator", "rejudge", "delivery",
+    "validation", "rollback", "approval", "user_input", "none",
+  ]);
+  const fixture: AgentLiveStatus = {
+    state: "unknown", phase: "none", summary: "No session", lastActivityAt: null,
+    provider: null, model: null, sessionId: null, parentSessionId: null, delegationRequestId: null,
+    role: null, taskId: null, integrationAttemptId: null, resolvedCandidateCommitSha: null,
+  };
+  assert.equal(fixture.sessionId, null);
+});
 
 test("defines managed session lifecycle states in control-plane order", () => {
   assert.deepEqual(agentSessionLifecycleStates, [
