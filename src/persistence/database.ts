@@ -152,7 +152,89 @@ function initializeSchema(db: AppDatabase): void {
       updated_at TEXT NOT NULL,
       accepted_at TEXT,
       started_at TEXT,
-      completed_at TEXT
+      completed_at TEXT,
+      attempt_number INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS managed_tasks (
+      id TEXT PRIMARY KEY,
+      goal_id TEXT NOT NULL REFERENCES goals(id),
+      change_id TEXT,
+      parent_task_id TEXT REFERENCES managed_tasks(id),
+      title TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN (
+        'registered', 'delegated', 'awaiting_review', 'rejected', 'split',
+        'failed', 'blocked', 'awaiting_delivery', 'accepted'
+      )),
+      attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+      substantive_rejection_count INTEGER NOT NULL DEFAULT 0 CHECK (substantive_rejection_count >= 0),
+      last_cited_criteria TEXT NOT NULL DEFAULT '[]',
+      last_safe_summary TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (goal_id, id)
+    );
+
+    CREATE TABLE IF NOT EXISTS managed_task_criteria (
+      task_id TEXT NOT NULL REFERENCES managed_tasks(id) ON DELETE CASCADE,
+      criterion_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      outcome TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (outcome IN ('UNKNOWN', 'PASS', 'FAIL', 'BLOCKED')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (task_id, criterion_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS managed_task_criterion_results (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      worker_delegation_request_id TEXT NOT NULL REFERENCES agent_delegation_requests(id),
+      criterion_id TEXT NOT NULL,
+      executor_evidence TEXT,
+      judge_outcome TEXT CHECK (judge_outcome IN ('PASS', 'FAIL', 'BLOCKED')),
+      judge_safe_summary TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (task_id, criterion_id) REFERENCES managed_task_criteria(task_id, criterion_id),
+      UNIQUE (worker_delegation_request_id, criterion_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS managed_task_reviews (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES managed_tasks(id),
+      worker_delegation_request_id TEXT NOT NULL REFERENCES agent_delegation_requests(id),
+      judge_delegation_request_id TEXT REFERENCES agent_delegation_requests(id),
+      status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'blocked', 'malformed')),
+      verdict TEXT CHECK (verdict IN ('accepted', 'rejected', 'blocked')),
+      decisions TEXT NOT NULL DEFAULT '[]',
+      cited_criteria TEXT NOT NULL DEFAULT '[]',
+      safe_summary TEXT NOT NULL,
+      deferred_findings TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (judge_delegation_request_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS managed_task_deliveries (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES managed_tasks(id),
+      worker_delegation_request_id TEXT NOT NULL REFERENCES agent_delegation_requests(id),
+      status TEXT NOT NULL CHECK (status IN (
+        'pending', 'committed', 'rejected', 'conflict', 'test_failed_reverted',
+        'revert_failed', 'failed', 'verification_failed'
+      )),
+      checkpoint_head TEXT,
+      checkpoint_status TEXT,
+      candidate_commit_sha TEXT,
+      commit_sha TEXT,
+      validation_command TEXT,
+      validation_exit_code INTEGER,
+      validation_summary TEXT,
+      rollback_summary TEXT,
+      safe_summary TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (worker_delegation_request_id)
     );
   `);
 
@@ -163,7 +245,9 @@ function initializeSchema(db: AppDatabase): void {
   ensureColumn(db, "agent_delegation_requests", "task_id", "TEXT");
   ensureColumn(db, "agent_delegation_requests", "acceptance", "TEXT");
   ensureColumn(db, "agent_delegation_requests", "change_id", "TEXT");
+  ensureColumn(db, "agent_delegation_requests", "attempt_number", "INTEGER");
   ensureColumn(db, "provider_settings", "role_assignments", "TEXT");
+  backfillManagedTaskState(db);
 }
 
 function ensureColumn(db: AppDatabase, table: string, column: string, type: string): void {
@@ -171,4 +255,101 @@ function ensureColumn(db: AppDatabase, table: string, column: string, type: stri
   if (!columns.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
+}
+
+function backfillManagedTaskState(db: AppDatabase): void {
+  db.transaction(() => {
+    const rows = db.prepare(`
+      SELECT e.goal_id, e.run_id, e.data, e.created_at
+      FROM events e JOIN goals g ON g.id = e.goal_id
+      WHERE g.status NOT IN ('completed', 'failed')
+      ORDER BY e.created_at, e.rowid
+    `).all() as Array<{ goal_id: string; run_id: string | null; data: string; created_at: string }>;
+    for (const row of rows) {
+      const data = parseRecord(row.data);
+      if (data?.runtimeEventType !== "supervisor.task_list" || !Array.isArray(data.taskList)) continue;
+      for (const rawTask of data.taskList) {
+        const task = asRecord(rawTask);
+        if (!task || typeof task.id !== "string" || typeof task.title !== "string") continue;
+        db.prepare(`
+          INSERT OR IGNORE INTO managed_tasks (
+            id, goal_id, change_id, parent_task_id, title, status, attempt_count,
+            substantive_rejection_count, last_cited_criteria, last_safe_summary, created_at, updated_at
+          ) VALUES (?, ?, ?, NULL, ?, 'registered', 0, 0, '[]', NULL, ?, ?)
+        `).run(
+          task.id, row.goal_id, typeof data.changeId === "string" ? data.changeId : null,
+          task.title, row.created_at, row.created_at,
+        );
+        if (Array.isArray(task.acceptance)) {
+          for (const rawCriterion of task.acceptance) {
+            const criterion = asRecord(rawCriterion);
+            if (!criterion || typeof criterion.id !== "string" || typeof criterion.text !== "string") continue;
+            db.prepare(`
+              INSERT OR IGNORE INTO managed_task_criteria
+                (task_id, criterion_id, text, outcome, created_at, updated_at)
+              VALUES (?, ?, ?, 'UNKNOWN', ?, ?)
+            `).run(task.id, criterion.id, criterion.text, row.created_at, row.created_at);
+          }
+        }
+      }
+      for (const rawTask of data.taskList) {
+        const task = asRecord(rawTask);
+        if (!task || typeof task.id !== "string" || typeof task.parentTaskId !== "string") continue;
+        db.prepare(`
+          UPDATE managed_tasks SET parent_task_id = ?
+          WHERE id = ? AND goal_id = ? AND EXISTS (SELECT 1 FROM managed_tasks WHERE id = ? AND goal_id = ?)
+        `).run(task.parentTaskId, task.id, row.goal_id, task.parentTaskId, row.goal_id);
+      }
+    }
+
+    const taskRows = db.prepare(`
+      SELECT id, goal_id FROM managed_tasks
+      WHERE goal_id IN (SELECT id FROM goals WHERE status NOT IN ('completed', 'failed'))
+    `).all() as Array<{ id: string; goal_id: string }>;
+    for (const task of taskRows) {
+      const attempts = db.prepare(`
+        SELECT d.id, d.status, d.result_summary, d.updated_at, d.attempt_number
+        FROM agent_delegation_requests d
+        JOIN agent_sessions s ON s.id = d.parent_session_id
+        WHERE s.goal_id = ? AND d.task_id = ? AND d.role = 'worker'
+        ORDER BY d.created_at, d.rowid
+      `).all(task.goal_id, task.id) as Array<{
+        id: string;
+        status: string;
+        result_summary: string | null;
+        updated_at: string;
+        attempt_number: number | null;
+      }>;
+      attempts.forEach((attempt, index) => {
+        if (attempt.attempt_number === null) {
+          db.prepare("UPDATE agent_delegation_requests SET attempt_number = ? WHERE id = ?").run(index + 1, attempt.id);
+        }
+      });
+      if (attempts.length === 0) continue;
+      const latest = attempts.at(-1)!;
+      const summary = latest.result_summary ? parseRecord(latest.result_summary) : null;
+      const safeSummary = typeof summary?.safeSummary === "string" ? summary.safeSummary.slice(0, 500) : null;
+      const status = ["requested", "accepted", "running"].includes(latest.status)
+        ? "delegated"
+        : latest.status === "completed" ? "awaiting_review" : "failed";
+      db.prepare(`
+        UPDATE managed_tasks SET status = ?, attempt_count = ?, last_safe_summary = ?, updated_at = ?
+        WHERE id = ? AND status = 'registered' AND attempt_count = 0
+      `).run(status, attempts.length, safeSummary, latest.updated_at, task.id);
+    }
+  })();
+}
+
+function parseRecord(value: string): Record<string, unknown> | null {
+  try {
+    return asRecord(JSON.parse(value));
+  } catch {
+    return null;
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }

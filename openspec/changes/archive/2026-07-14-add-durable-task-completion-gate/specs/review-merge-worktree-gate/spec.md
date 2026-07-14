@@ -1,15 +1,4 @@
-# review-merge-worktree-gate Specification
-
-## Purpose
-
-Define worker worktree isolation and the gated review/merge flow that applies worker output only after explicit supervisor review, clean workspace checkpointing, fixed-test verification, and revert validation.
-## Requirements
-### Requirement: Worker worktree isolation
-The system SHALL run worker children in isolated local git worktrees and persist safe worktree metadata.
-
-#### Scenario: Worker receives isolated worktree
-- **WHEN** the backend spawns a worker child for delegated implementation work
-- **THEN** the child runs with its cwd set to a dedicated git worktree and the worktree path or label is recorded durably
+## MODIFIED Requirements
 
 ### Requirement: Review merge role
 The system SHALL use the existing `review_merge` transport role as an independent judge that inspects a worker attempt, frozen criteria, candidate diff, and attested evidence and emits a validated structured decision; workspace apply and commit authority SHALL belong to deterministic backend delivery code.
@@ -29,17 +18,6 @@ The system SHALL use the existing `review_merge` transport role as an independen
 #### Scenario: Review is not automatic
 - **WHEN** a worker child completes successfully
 - **THEN** the backend records the worker attempt without automatically accepting the task or treating the worker's claims as a judge decision
-
-### Requirement: Supervisor workspace checkpoint
-The system SHALL require a clean supervisor workspace and checkpoint before review merge applies changes.
-
-#### Scenario: Workspace is clean
-- **WHEN** review merge starts and the supervisor workspace is clean
-- **THEN** the backend records a pre-merge checkpoint before allowing apply behavior
-
-#### Scenario: Workspace is dirty
-- **WHEN** review merge starts and the supervisor workspace has uncommitted or untracked changes outside the accepted checkpoint policy
-- **THEN** the backend rejects or fails review merge before applying worker changes
 
 ### Requirement: Merge outcome validation
 The system SHALL derive delivery outcomes from backend-controlled apply, validation, commit, and rollback operations and SHALL persist `committed`, `rejected`, `conflict`, `test_failed_reverted`, `revert_failed`, `failed`, or `verification_failed` as typed outcomes.
@@ -71,16 +49,7 @@ The system SHALL run the configured fixed test command in the backend after appl
 - **WHEN** judge output claims validation passed but the backend fixed test command fails or was not run
 - **THEN** the backend ignores the claim for delivery acceptance and follows the backend-observed result
 
-### Requirement: Revert verification
-The system SHALL verify supervisor workspace state after failed test or failed apply outcomes that require revert.
-
-#### Scenario: Revert succeeds
-- **WHEN** review merge reverts after a failed test
-- **THEN** the backend verifies the workspace matches the pre-merge checkpoint and records revert evidence
-
-#### Scenario: Revert fails
-- **WHEN** review merge cannot restore the pre-merge checkpoint state
-- **THEN** the backend records `revert_failed` or `verification_failed` with a safe summary
+## ADDED Requirements
 
 ### Requirement: Judge decisions use a strict structured protocol
 The system SHALL validate a `managed_review.decision` control block that identifies the worker attempt, declares an overall verdict, and provides exactly one `PASS`, `FAIL`, or `BLOCKED` decision for every frozen criterion.
@@ -103,3 +72,5 @@ The system SHALL create any candidate commit from the worker worktree under back
 #### Scenario: Worktree changed after review
 - **WHEN** the worker worktree no longer matches the attested and reviewed state
 - **THEN** the backend records verification failure and does not create, apply, or commit the candidate
+
+

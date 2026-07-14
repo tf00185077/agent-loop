@@ -5,6 +5,7 @@ import type { AgentRuntimeSession } from "../../domain/index.js";
 import {
   validateDelegationControlEvent,
   validateManagedControlEvent,
+  validateManagedReviewDecision,
 } from "./delegation-control-event.js";
 
 test("accepts provider-neutral worker delegation control events", () => {
@@ -401,6 +402,47 @@ test("rejects unknown managed control event types with a safe reason", () => {
     ok: false,
     safeReason: "Unsupported control event type: managed_delegation.pause.",
   });
+});
+
+test("validates strict managed review decisions against the frozen attempt contract", () => {
+  const valid = validateManagedReviewDecision({
+    controlEvent: {
+      type: "managed_review.decision",
+      workerDelegationRequestId: "worker-2",
+      verdict: "accepted",
+      decisions: [
+        { criterionId: "A1", outcome: "PASS", safeSummary: "Tests pass." },
+        { criterionId: "A2", outcome: "PASS", safeSummary: "Docs exist." },
+      ],
+      safeSummary: "All criteria pass.",
+    },
+    expectedWorkerDelegationRequestId: "worker-2",
+    frozenCriteria: [{ id: "A1", text: "Tests" }, { id: "A2", text: "Docs" }],
+  });
+  assert.equal(valid.ok, true);
+
+  const incomplete = validateManagedReviewDecision({
+    controlEvent: {
+      type: "managed_review.decision", workerDelegationRequestId: "worker-2", verdict: "accepted",
+      decisions: [{ criterionId: "A1", outcome: "PASS", safeSummary: "Pass" }], safeSummary: "Incomplete",
+    },
+    expectedWorkerDelegationRequestId: "worker-2",
+    frozenCriteria: [{ id: "A1", text: "Tests" }, { id: "A2", text: "Docs" }],
+  });
+  assert.deepEqual(incomplete, { ok: false, safeReason: "Judge decision must cover every frozen criterion exactly once." });
+
+  const wrongAttempt = validateManagedReviewDecision({
+    controlEvent: {
+      type: "managed_review.decision", workerDelegationRequestId: "worker-1", verdict: "blocked",
+      decisions: [
+        { criterionId: "A1", outcome: "BLOCKED", safeSummary: "Unavailable" },
+        { criterionId: "A2", outcome: "PASS", safeSummary: "Pass" },
+      ], safeSummary: "Blocked",
+    },
+    expectedWorkerDelegationRequestId: "worker-2",
+    frozenCriteria: [{ id: "A1", text: "Tests" }, { id: "A2", text: "Docs" }],
+  });
+  assert.deepEqual(wrongAttempt, { ok: false, safeReason: "Judge decision targets a different worker attempt." });
 });
 
 function supervisorSession(overrides: Partial<AgentRuntimeSession> = {}): AgentRuntimeSession {

@@ -6,6 +6,8 @@ import type {
   AgentSessionHandle,
 } from "../../domain/index.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
+import type { AppDatabase } from "../../persistence/database.js";
+import type { ManagedTaskRepository } from "../../persistence/managed-task-repository.js";
 import type {
   AgentSessionRepository,
   EventRepository,
@@ -14,6 +16,9 @@ import type {
 import { GoalChangeRegistry, specTaskAcceptance, specTaskId, specValidationVerdict } from "./change-registry.js";
 import { createDelegationCoordinator, type SupervisorContinuationInput } from "./delegation-coordinator.js";
 import { validateManagedControlEvent } from "./delegation-control-event.js";
+import { evaluateManagedCompletion } from "./managed-completion-evaluator.js";
+import { createManagedDeliveryService, type ManagedDeliveryService } from "./managed-delivery-service.js";
+import { projectManagedTaskContext } from "./managed-context-projection.js";
 import {
   createOpenSpecWorkspaceService,
   type OpenSpecWorkspaceService,
@@ -29,6 +34,9 @@ export interface AgentSessionManagerDeps {
   runRepo: RunRepository;
   eventRepo: EventRepository;
   agentSessionRepo: AgentSessionRepository;
+  database?: AppDatabase;
+  managedTaskRepo?: ManagedTaskRepository;
+  managedDeliveryService?: ManagedDeliveryService;
   worktreeService?: WorktreeService;
   worktreeAttestor?: WorktreeAttestor;
   openSpecWorkspaceService?: OpenSpecWorkspaceService;
@@ -481,6 +489,12 @@ async function persistDelegationControlEvent(
     }
     const registry = getTaskRegistry(input.state, input.goalId);
     const registered = registry.registerTaskList(validation.tasks);
+    deps.managedTaskRepo?.registerTasks({
+      goalId: input.goalId,
+      changeId: changeResolution.changeId,
+      runId: input.runId,
+      tasks: validation.tasks,
+    });
     if (changeResolution.changeId) {
       for (const task of validation.tasks) {
         // Tasks already owned by another change (e.g. a later change's spec
@@ -527,36 +541,55 @@ async function persistDelegationControlEvent(
         return;
       }
     }
-    const finishedAt = new Date().toISOString();
-    input.state.completedGoals.add(input.goalId);
-    deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
-    deps.runRepo.updateStatus(input.runId, "completed", { finishedAt });
-    deps.goalRepo.updateStatus(input.goalId, "completed", { completedAt: finishedAt });
-    deps.eventRepo.create({
-      goalId: input.goalId,
-      runId: input.runId,
-      type: "run.completed",
-      message: "Supervisor signalled goal completion.",
-      data: {
-        ...data,
-        delegationControlEvent: undefined,
-        runtimeEventType: "supervisor.completed",
-        safeSummary: validation.summary,
-      },
-    });
-    deps.eventRepo.create({
-      goalId: input.goalId,
-      runId: input.runId,
-      type: "goal.completed",
-      message: validation.summary,
-      data: {
-        ...data,
-        delegationControlEvent: undefined,
-        runtimeEventType: "supervisor.completed",
+    if (deps.database && deps.managedTaskRepo) {
+      const evaluated = evaluateManagedCompletion(deps.database, {
         goalId: input.goalId,
-        safeSummary: validation.summary,
-      },
-    });
+        unarchivedChangeIds: completionChangeRegistry.hasPlan() ? completionChangeRegistry.unarchivedIds() : [],
+      });
+      if (!evaluated.ok) {
+        recordControlRejection(
+          deps,
+          input,
+          { ...data, completionGaps: evaluated.gaps },
+          `Completion blocked by durable gaps: ${evaluated.gaps.map((gap) => gap.safeSummary).join(" ")}`.slice(0, 1000),
+        );
+        return;
+      }
+    }
+    const complete = () => {
+      const finishedAt = new Date().toISOString();
+      deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
+      deps.runRepo.updateStatus(input.runId, "completed", { finishedAt });
+      deps.goalRepo.updateStatus(input.goalId, "completed", { completedAt: finishedAt });
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        runId: input.runId,
+        type: "run.completed",
+        message: "Supervisor signalled goal completion.",
+        data: {
+          ...data,
+          delegationControlEvent: undefined,
+          runtimeEventType: "supervisor.completed",
+          safeSummary: validation.summary,
+        },
+      });
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        runId: input.runId,
+        type: "goal.completed",
+        message: validation.summary,
+        data: {
+          ...data,
+          delegationControlEvent: undefined,
+          runtimeEventType: "supervisor.completed",
+          goalId: input.goalId,
+          safeSummary: validation.summary,
+        },
+      });
+    };
+    if (deps.database) deps.database.transaction(complete)();
+    else complete();
+    input.state.completedGoals.add(input.goalId);
     return;
   }
 
@@ -615,6 +648,16 @@ async function persistDelegationControlEvent(
         parentTaskId: null,
       })),
     );
+    deps.managedTaskRepo?.registerTasks({
+      goalId: input.goalId,
+      runId: input.runId,
+      tasks: specTasks.map((task) => ({
+        id: task.taskId,
+        title: `Author OpenSpec artifacts for change ${task.changeId}`,
+        acceptance: task.acceptance,
+        parentTaskId: null,
+      })),
+    });
 
     deps.eventRepo.create({
       goalId: input.goalId,
@@ -710,6 +753,42 @@ async function persistDelegationControlEvent(
   let dispatchAcceptance = validation.request.acceptance ?? null;
   let uncontracted = false;
   if (validation.request.role === "worker") {
+    if (deps.managedTaskRepo) {
+      const durableTask = validation.request.taskId
+        ? deps.managedTaskRepo.getTask(validation.request.taskId)
+        : null;
+      if (!durableTask) {
+        uncontracted = true;
+      } else {
+        const criteria = deps.managedTaskRepo.listCriteria(durableTask.id);
+        if (criteria.length === 0) {
+          recordControlRejection(
+            deps, input, data,
+            `Task ${durableTask.id} has no frozen acceptance criteria. Register a testable contract before delegating.`,
+          );
+          return;
+        }
+        if (durableTask.status === "split") {
+          recordControlRejection(deps, input, data, `Task ${durableTask.id} was split; delegate its leaf descendants.`);
+          return;
+        }
+        if (durableTask.substantiveRejectionCount >= 2 || durableTask.attemptCount >= 3) {
+          if (durableTask.status !== "accepted") {
+            deps.managedTaskRepo.transition(durableTask.id, "split", {
+              safeSummary: `Task ${durableTask.id} exhausted its retry budget and must be narrowed.`,
+              runId: input.runId,
+              citedCriteria: durableTask.lastCitedCriteria,
+            });
+          }
+          recordControlRejection(
+            deps, input, data,
+            `Task ${durableTask.id} reached its durable retry budget. Split the cited criteria into narrower child tasks.`,
+          );
+          return;
+        }
+        dispatchAcceptance = criteria.map((criterion) => ({ id: criterion.criterionId, text: criterion.text }));
+      }
+    } else {
     const task = validation.request.taskId ? registry.getTask(validation.request.taskId) : undefined;
     if (task && task.attemptCount > 0 && !specChange) {
       // Re-delegating a task implies its previous attempt was rejected. The
@@ -754,6 +833,7 @@ async function persistDelegationControlEvent(
     }
     dispatchAcceptance = gate.acceptance;
     uncontracted = gate.uncontracted;
+    }
   }
 
   const childAgent = await resolveChildAgent(deps, input, validation.request.role);
@@ -879,6 +959,9 @@ function recordChildOutcomeInRegistry(
   input: PersistRuntimeEventInput,
   outcome: SupervisorContinuationInput,
 ): string | null {
+  if (deps.managedTaskRepo) {
+    return recordDurableChildOutcome({ ...deps, managedTaskRepo: deps.managedTaskRepo }, input, outcome);
+  }
   const registry = getTaskRegistry(input.state, input.goalId);
   const changeRegistry = getChangeRegistry(input.state, input.goalId);
   if (outcome.role === "worker" && outcome.taskId) {
@@ -949,6 +1032,118 @@ function recordChildOutcomeInRegistry(
     },
   });
   return null;
+}
+
+function recordDurableChildOutcome(
+  deps: AgentSessionManagerDeps & { managedTaskRepo: ManagedTaskRepository },
+  input: PersistRuntimeEventInput,
+  outcome: SupervisorContinuationInput,
+): string | null {
+  const tasks = deps.managedTaskRepo;
+  if (outcome.role === "worker" && outcome.taskId && tasks.getTask(outcome.taskId)) {
+    if (outcome.resultSummary.kind === "success") {
+      tasks.recordExecutorEvidence({
+        taskId: outcome.taskId,
+        workerDelegationRequestId: outcome.delegationRequestId,
+        safeSummary: outcome.resultSummary.safeSummary,
+        criterionEvidence: outcome.resultSummary.criterionEvidence ?? [],
+        runId: input.runId,
+      });
+      const change = getChangeRegistry(input.state, input.goalId).findChangeByTask(outcome.taskId);
+      if (change && (outcome.resultSummary.attestedFiles?.length ?? 0) > 0) {
+        getChangeRegistry(input.state, input.goalId).recordAttestedWorkerChanges(change.id);
+      }
+    } else {
+      tasks.transition(outcome.taskId, "failed", {
+        safeSummary: outcome.resultSummary.safeSummary,
+        runId: input.runId,
+      });
+      getTaskRegistry(input.state, input.goalId).markFailed(outcome.taskId);
+    }
+    return null;
+  }
+  if (outcome.role !== "review_merge" || !outcome.workerTaskId || !outcome.workerDelegationRequestId) {
+    return null;
+  }
+  if (outcome.reviewDecisionError || !outcome.reviewDecision) {
+    const safeReason = outcome.reviewDecisionError ?? "Judge completed without a managed_review.decision block.";
+    tasks.recordInvalidReview({
+      taskId: outcome.workerTaskId,
+      workerDelegationRequestId: outcome.workerDelegationRequestId,
+      judgeDelegationRequestId: outcome.delegationRequestId,
+      safeSummary: safeReason,
+      deferredFindings: outcome.observation ? [outcome.observation.slice(0, 500)] : [],
+      runId: input.runId,
+    });
+    return safeReason;
+  }
+
+  const worker = findDelegationForGoal(deps, input.goalId, outcome.workerDelegationRequestId);
+  if (!worker?.resultSummary) {
+    return "Reviewed worker attempt could not be reloaded from durable delegation state.";
+  }
+  const attestedFiles = worker.resultSummary.attestedFiles ?? [];
+  const review = tasks.recordReview({
+    taskId: outcome.workerTaskId,
+    workerDelegationRequestId: outcome.workerDelegationRequestId,
+    judgeDelegationRequestId: outcome.delegationRequestId,
+    verdict: outcome.reviewDecision.verdict,
+    decisions: outcome.reviewDecision.decisions,
+    safeSummary: outcome.reviewDecision.safeSummary,
+    deferredFindings: outcome.reviewDecision.deferredFindings ?? [],
+    hasAttestedChanges: attestedFiles.length > 0,
+    runId: input.runId,
+  });
+  if (review.verdict !== "accepted") {
+    return null;
+  }
+
+  if (attestedFiles.length > 0) {
+    if (!outcome.worktreePath) {
+      tasks.recordDelivery({
+        taskId: outcome.workerTaskId,
+        workerDelegationRequestId: outcome.workerDelegationRequestId,
+        status: "verification_failed",
+        safeSummary: "Reviewed worker worktree path is unavailable for backend delivery.",
+        runId: input.runId,
+      });
+      return "Reviewed worker worktree path is unavailable for backend delivery.";
+    }
+    const delivered = (deps.managedDeliveryService ?? createManagedDeliveryService()).deliver({
+      workerCwd: outcome.worktreePath,
+      supervisorCwd: input.state.supervisorCwd,
+      attestedFiles,
+      safeSummary: review.safeSummary,
+    });
+    tasks.recordDelivery({
+      taskId: outcome.workerTaskId,
+      workerDelegationRequestId: outcome.workerDelegationRequestId,
+      ...delivered,
+      runId: input.runId,
+    });
+    if (delivered.status !== "committed") {
+      return delivered.safeSummary;
+    }
+  }
+
+  getTaskRegistry(input.state, input.goalId).recordOutcome(outcome.workerTaskId, worker.resultSummary);
+  const changeRegistry = getChangeRegistry(input.state, input.goalId);
+  const change = changeRegistry.findChangeByTask(outcome.workerTaskId);
+  if (change) changeRegistry.recordMerged(change.id);
+  const specMerge = approveSpecChangeAfterMerge(deps, input, outcome.workerTaskId, changeRegistry);
+  if (!specMerge) tryArchiveActiveChange(deps, input);
+  return null;
+}
+
+function findDelegationForGoal(
+  deps: AgentSessionManagerDeps,
+  goalId: string,
+  delegationRequestId: string,
+) {
+  return deps.agentSessionRepo
+    .listSessionsForGoal(goalId)
+    .flatMap((session) => deps.agentSessionRepo.listDelegationRequests(session.id))
+    .find((request) => request.id === delegationRequestId) ?? null;
 }
 
 /**
@@ -1234,6 +1429,9 @@ async function startCompletionlessContinuation(
     goal,
     phase: rejectionReason ? { kind: "rejection", safeReason: rejectionReason } : { kind: "nudge" },
     taskHistory: getTaskRegistry(input.state, input.goalId).listTasks(),
+    managedTaskContext: deps.managedTaskRepo
+      ? projectManagedTaskContext(deps.managedTaskRepo, input.goalId)
+      : undefined,
     changeHistory: getChangeRegistry(input.state, input.goalId).listChanges(),
   });
 
@@ -1335,6 +1533,9 @@ async function continueSupervisorAfterChild(
           goal,
           phase: { kind: "continuation", observation },
           taskHistory: getTaskRegistry(input.state, input.goalId).listTasks(),
+          managedTaskContext: deps.managedTaskRepo
+            ? projectManagedTaskContext(deps.managedTaskRepo, input.goalId)
+            : undefined,
           changeHistory: getChangeRegistry(input.state, input.goalId).listChanges(),
         })
       : message,

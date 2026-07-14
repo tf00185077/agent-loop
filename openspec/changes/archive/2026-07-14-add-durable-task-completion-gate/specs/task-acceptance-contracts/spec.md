@@ -1,9 +1,5 @@
-# task-acceptance-contracts Specification
+## MODIFIED Requirements
 
-## Purpose
-
-Define the frozen per-task acceptance contract model: immutable criterion identifiers enforced by backend validators, cite-only review verdicts with deferred findings, structured machine results with backend-attested file evidence, and the two-rejection narrowing rule that bounds reviewer/coder ping-pong.
-## Requirements
 ### Requirement: Frozen per-task acceptance criteria
 The system SHALL represent task acceptance as a list of criteria with immutable identifiers and binary, testable text, frozen when the task is announced and persisted as first-class managed task state; later task lists and delegations for the same task SHALL use the frozen criteria from SQLite rather than criteria restated by the supervisor or recovered from AI prose.
 
@@ -19,17 +15,6 @@ The system SHALL represent task acceptance as a list of criteria with immutable 
 - **WHEN** the backend restarts after a task contract is frozen
 - **THEN** the next delegation, review, and completion gate use the same persisted criterion ids and text
 
-### Requirement: Worker delegations require an acceptance contract
-The system SHALL reject a worker delegation request for a known task that has no acceptance criteria in the task registry, with a durable safe reason instructing the supervisor to announce criteria first.
-
-#### Scenario: Delegation without criteria is rejected
-- **WHEN** a supervisor delegates a known task whose registry entry has no acceptance criteria
-- **THEN** the backend records `delegation.rejected` with a reason that names the missing acceptance contract
-
-#### Scenario: Ad-hoc delegations are marked uncontracted
-- **WHEN** a supervisor delegates work without any task identifier
-- **THEN** the backend accepts it, records it durably as uncontracted, and still applies rejection-lineage bounding to it
-
 ### Requirement: Structured machine results
 The system SHALL support structured child results carrying per-criterion evidence and executed tests through a `managed_task.result` control block, SHALL persist those results on the worker attempt, and SHALL treat them as claims requiring authoritative judge and backend validation rather than task acceptance.
 
@@ -43,17 +28,6 @@ The system SHALL support structured child results carrying per-criterion evidenc
 - **THEN** the backend records the safe terminal summary and empty executor evidence
 - **AND** no criterion becomes `PASS` solely because the child process completed successfully
 
-### Requirement: Backend-attested file evidence
-The system SHALL determine a worker's changed files by inspecting the worker worktree's version-control status at child terminal, SHALL persist the attested list as the authoritative `filesChanged`, and SHALL record a durable discrepancy note when a child-claimed list disagrees with attestation.
-
-#### Scenario: Worker files are attested from the worktree
-- **WHEN** a worker child reaches a terminal outcome in an isolated worktree
-- **THEN** the backend records the worktree's dirty paths as the attested changed files, independent of the child's claims
-
-#### Scenario: Claimed files disagree with attestation
-- **WHEN** a child-declared file list differs from the attested worktree status
-- **THEN** the backend persists both, marks the discrepancy durably, and treats the attested list as authoritative
-
 ### Requirement: Cite-only review verdicts
 The system SHALL accept a substantive review verdict only through a validated structured judge decision that references the frozen task and covers known criterion identifiers; objections that cite no known criterion SHALL be recorded as deferred findings and SHALL NOT change criterion outcomes or task status.
 
@@ -65,20 +39,7 @@ The system SHALL accept a substantive review verdict only through a validated st
 - **WHEN** review output raises an objection outside a valid structured decision or cites no existing criterion identifier
 - **THEN** the backend records it durably as a deferred finding and leaves criterion outcomes, rejection count, and task status unchanged
 
-### Requirement: Two-rejection narrowing rule
-The system SHALL refuse to start a third worker delegation for a task that has accumulated two substantive rejections with unchanged criterion scope, and SHALL instruct the supervisor to split the remaining failing criteria into strictly narrower tasks or mark the task failed and re-plan.
-
-#### Scenario: Third identical-scope retry is refused
-- **WHEN** a supervisor delegates a task again after two substantive rejections without narrowing its criteria
-- **THEN** the backend records `delegation.rejected` with a reason naming the narrowing rule and the failing criteria
-
-#### Scenario: Narrower split proceeds
-- **WHEN** the supervisor announces new tasks covering strictly fewer criteria than the failed task and delegates one of them
-- **THEN** the backend accepts the delegation and records the lineage from the failed parent task
-
-#### Scenario: Rejection lineage is durable
-- **WHEN** substantive rejections are recorded for a task
-- **THEN** the rejection count, cited criteria, and lineage survive in durable events and delegation rows in timeline order
+## ADDED Requirements
 
 ### Requirement: Contracted task acceptance requires authoritative criterion decisions
 The system SHALL mark a contracted task accepted only when every required criterion has an authoritative `PASS` decision from the judge and any required backend delivery has succeeded; worker success, supervisor prose, executor evidence, or an empty evidence result SHALL NOT independently accept a task.
@@ -101,3 +62,5 @@ The system SHALL continue to record compatible ad-hoc delegations as uncontracte
 #### Scenario: Supervisor completes after ad-hoc work
 - **WHEN** a supervisor requests goal completion after performing only uncontracted work
 - **THEN** the backend rejects completion and instructs the supervisor to register contracted tasks representing the delivered work
+
+

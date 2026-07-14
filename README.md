@@ -168,12 +168,17 @@ session by default:
    `managed_delegation.task_list`, `managed_delegation.request`, and
    `managed_delegation.complete`. Only fenced blocks are honored; the
    surrounding prose is recorded as sanitized progress.
-3. Worker children run in isolated git worktrees; `review_merge` children
-   apply/revert changes in the supervisor workspace behind the fixed-test gate.
+3. Worker children run in isolated git worktrees. The compatibility role id
+   `review_merge` now means an independent Judge: it reads the frozen contract,
+   worker evidence, attested files, and candidate diff, then emits a strict
+   `managed_review.decision`. It has no apply or commit authority.
 4. Child outcomes return to the supervisor as observations. Providers with true
    resume continue in place; others get a fresh continuation prompt that
    re-carries the full contract.
-5. A managed goal completes only on a `managed_delegation.complete` block. A
+5. A `managed_delegation.complete` block is only a completion request. The
+   backend completes the goal only when every durable leaf task is accepted,
+   every criterion is `PASS`, no attempt/review/delivery is pending, all
+   attested changes are delivered, and planned changes are archived. A
    session that exits without completing (and with no pending delegation)
    triggers a bounded "continue or complete" continuation (default 10 per
    goal); exhausting the bound marks the goal `blocked`.
@@ -207,17 +212,23 @@ backend validators rather than prompt text:
   `managed_task.result` control block (per-criterion evidence, tests run,
   claimed files). The backend attests changed files from the worker worktree's
   git status — the attested list is authoritative, and claimed-vs-attested
-  discrepancies are recorded.
-- Reviews are cite-only: a rejection counts as substantive only when it cites
-  frozen criterion ids; uncited objections become durable deferred findings
-  that cannot block the task.
+  discrepancies are recorded. Worker evidence remains a claim and never marks
+  a criterion `PASS` by itself.
+- The Judge must decide every frozen criterion exactly once as `PASS`, `FAIL`,
+  or `BLOCKED`. Valid decisions update authoritative SQLite outcomes; malformed
+  or uncited objections become durable deferred findings without changing task
+  state.
+- For accepted file-producing attempts, backend code verifies the attestation,
+  creates a runtime-owned candidate commit, checkpoints a clean supervisor
+  workspace, cherry-picks the candidate, runs the configured fixed validation,
+  and records the commit or verified rollback outcome.
 - After two substantive rejections (or three attempts), the backend refuses
   identical-scope retries and requires the supervisor to split the failing
   criteria into strictly narrower tasks with `parentTaskId` lineage — the
   reviewer/coder ping-pong loop is structurally bounded.
-- Continuation prompts carry the durable task history (statuses, criterion
-  outcomes, rejection counts, lineage) so fresh continuations do not
-  re-decompose the goal from scratch.
+- Continuation prompts are projections of durable tasks, attempts, criteria,
+  Judge reviews, and deliveries with bounded safe summaries. Raw AI responses
+  remain transcript/audit material, not runtime authority.
 
 ### Goal-Scale Decomposition (OpenSpec Change Plans)
 
@@ -272,9 +283,10 @@ Direction anchors:
   is allowed to finish; late results are stored as detached/ignored instead of
   force-cancelling a process that may be writing files.
 - The supervisor decides when to spawn a dedicated `review_merge` child.
-- `review_merge` may apply/revert changes in the supervisor workspace, must run
-  the configured fixed test command, and reports explicit outcomes such as
-  `merged`, `conflict`, `test_failed_reverted`, or `verification_failed`.
+- `review_merge` is the compatibility transport id for the independent Judge;
+  deterministic backend delivery owns apply, fixed validation, commit, and
+  rollback and records outcomes such as `committed`, `conflict`,
+  `test_failed_reverted`, `revert_failed`, or `verification_failed`.
 - Paperclip is a reference for robust Codex session handling, resume fallback,
   managed runtime home, JSONL parsing, and diagnostics. auto-agent should not
   copy Paperclip's broader organization/remote workspace model until the local

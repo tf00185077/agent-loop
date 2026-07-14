@@ -9,6 +9,11 @@ import {
   delegationRequestStatuses,
   delegationRoles,
   delegationTerminalOutcomeTypes,
+  managedTaskStatuses,
+  managedCriterionOutcomes,
+  managedJudgeVerdicts,
+  managedDeliveryOutcomes,
+  managedCompletionGapTypes,
   commandRecordStatuses,
   type AgentRuntimeCapabilities,
   type AgentRuntimeCommandRecord,
@@ -232,4 +237,40 @@ test("represents durable managed delegation contracts", () => {
 
   assert.equal(request.resultSummary?.kind, "failure");
   assert.equal(event.metadata?.delegationRequestId, request.id);
+});
+
+test("defines closed durable task decision vocabularies", () => {
+  assert.deepEqual(managedTaskStatuses, [
+    "registered",
+    "delegated",
+    "awaiting_review",
+    "rejected",
+    "split",
+    "failed",
+    "blocked",
+    "awaiting_delivery",
+    "accepted",
+  ]);
+  assert.deepEqual(managedCriterionOutcomes, ["UNKNOWN", "PASS", "FAIL", "BLOCKED"]);
+  assert.deepEqual(managedJudgeVerdicts, ["accepted", "rejected", "blocked"]);
+  assert.deepEqual(managedDeliveryOutcomes, [
+    "pending",
+    "committed",
+    "rejected",
+    "conflict",
+    "test_failed_reverted",
+    "revert_failed",
+    "failed",
+    "verification_failed",
+  ]);
+  assert.deepEqual(managedCompletionGapTypes, [
+    "unaccepted_leaf_task",
+    "criterion_not_passed",
+    "active_attempt",
+    "pending_review",
+    "pending_delivery",
+    "undelivered_changes",
+    "uncontracted_only_work",
+    "unarchived_change",
+  ]);
 });

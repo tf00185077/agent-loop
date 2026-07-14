@@ -3,6 +3,7 @@ import type {
   AgentRuntimeSession,
   ManagedChangePlanEntry,
   ManagedTaskListEntry,
+  ManagedReviewDecisionControlEvent,
   TaskAcceptanceCriterion,
   TaskCriterionEvidence,
   TaskTestEvidence,
@@ -27,6 +28,73 @@ export interface ManagedTaskResult {
   criterionEvidence: TaskCriterionEvidence[];
   tests: TaskTestEvidence[];
   claimedFiles: string[];
+}
+
+export type ManagedReviewDecisionValidation =
+  | { ok: true; decision: ManagedReviewDecisionControlEvent }
+  | { ok: false; safeReason: string };
+
+export function validateManagedReviewDecision(input: {
+  controlEvent: unknown;
+  expectedWorkerDelegationRequestId: string;
+  frozenCriteria: TaskAcceptanceCriterion[];
+}): ManagedReviewDecisionValidation {
+  const value = input.controlEvent;
+  if (!isRecord(value) || value.type !== "managed_review.decision") {
+    return { ok: false, safeReason: "Not a managed_review.decision control event." };
+  }
+  if (value.workerDelegationRequestId !== input.expectedWorkerDelegationRequestId) {
+    return { ok: false, safeReason: "Judge decision targets a different worker attempt." };
+  }
+  if (value.verdict !== "accepted" && value.verdict !== "rejected" && value.verdict !== "blocked") {
+    return { ok: false, safeReason: "Judge verdict must be accepted, rejected, or blocked." };
+  }
+  if (typeof value.safeSummary !== "string" || value.safeSummary.trim().length === 0 || !Array.isArray(value.decisions)) {
+    return { ok: false, safeReason: "Judge decision requires a safe summary and criterion decisions." };
+  }
+  const decisions: ManagedReviewDecisionControlEvent["decisions"] = [];
+  for (const item of value.decisions) {
+    if (!isRecord(item) || typeof item.criterionId !== "string" ||
+        (item.outcome !== "PASS" && item.outcome !== "FAIL" && item.outcome !== "BLOCKED") ||
+        typeof item.safeSummary !== "string" || item.safeSummary.trim().length === 0) {
+      return { ok: false, safeReason: "Each judge criterion decision requires criterionId, outcome, and safeSummary." };
+    }
+    decisions.push({
+      criterionId: item.criterionId.trim(),
+      outcome: item.outcome,
+      safeSummary: item.safeSummary.trim(),
+    });
+  }
+  const expected = new Set(input.frozenCriteria.map((criterion) => criterion.id));
+  const actual = new Set(decisions.map((decision) => decision.criterionId));
+  if (actual.size !== decisions.length || actual.size !== expected.size || [...actual].some((id) => !expected.has(id))) {
+    return { ok: false, safeReason: "Judge decision must cover every frozen criterion exactly once." };
+  }
+  const outcomes = decisions.map((decision) => decision.outcome);
+  if (value.verdict === "accepted" && outcomes.some((outcome) => outcome !== "PASS")) {
+    return { ok: false, safeReason: "Accepted judge verdict requires every criterion to PASS." };
+  }
+  if (value.verdict === "rejected" && !outcomes.includes("FAIL")) {
+    return { ok: false, safeReason: "Rejected judge verdict requires a FAIL criterion." };
+  }
+  if (value.verdict === "blocked" && !outcomes.includes("BLOCKED")) {
+    return { ok: false, safeReason: "Blocked judge verdict requires a BLOCKED criterion." };
+  }
+  const deferredFindings = value.deferredFindings === undefined ? [] : value.deferredFindings;
+  if (!Array.isArray(deferredFindings) || deferredFindings.some((finding) => typeof finding !== "string")) {
+    return { ok: false, safeReason: "Deferred findings must be a list of strings." };
+  }
+  return {
+    ok: true,
+    decision: {
+      type: "managed_review.decision",
+      workerDelegationRequestId: input.expectedWorkerDelegationRequestId,
+      verdict: value.verdict,
+      decisions,
+      safeSummary: value.safeSummary.trim(),
+      deferredFindings: deferredFindings.map((finding) => (finding as string).trim()).filter(Boolean),
+    },
+  };
 }
 
 export type DelegationControlEventValidationResult =

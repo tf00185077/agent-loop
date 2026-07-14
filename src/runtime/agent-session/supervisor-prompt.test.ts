@@ -4,9 +4,22 @@ import test from "node:test";
 import {
   buildSupervisorPrompt,
   buildWorkerContractAppendix,
+  buildJudgeContractAppendix,
   renderChangeHistory,
   renderTaskHistory,
 } from "./supervisor-prompt.js";
+
+test("judge appendix requires exact criterion decisions and denies commit authority", () => {
+  const prompt = buildJudgeContractAppendix({
+    workerDelegationRequestId: "worker-1",
+    acceptance: [{ id: "A1", text: "Tests pass" }],
+    resultSummary: { kind: "success", safeSummary: "Claim", attestedFiles: ["src/a.ts"] },
+  });
+  assert.match(prompt, /managed_review\.decision/);
+  assert.match(prompt, /worker-1/);
+  assert.match(prompt, /A1: Tests pass/);
+  assert.match(prompt, /no apply or commit authority/i);
+});
 import type { ChangeRecord } from "./change-registry.js";
 import type { TaskRecord } from "./task-registry.js";
 
