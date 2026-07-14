@@ -3,9 +3,7 @@
 ## Purpose
 
 Define how a managed supervisor session turns one large user goal into an executed result: the bootstrap prompt contract, durable task decomposition, sequential per-task worker delegation, iterate-until-done continuation behavior, explicit completion signaling, and provider-neutral control-block extraction.
-
 ## Requirements
-
 ### Requirement: Supervisor bootstrap prompt contract
 The system SHALL start a managed supervisor session with a generated bootstrap prompt that includes the goal title and description, the supervisor role framing, instructions to decompose the goal into an ordered task list with per-task acceptance criteria before delegating, instructions to delegate exactly one worker task at a time, instructions to request a review-merge child after worker results that changed files, the rule that criterion identifiers are frozen and rejections must cite them, and the exact fenced control-block output format with the rule that only fenced control blocks are honored.
 
@@ -33,15 +31,19 @@ The system SHALL record the supervisor's announced task decomposition as durable
 - **THEN** the backend rejects the delegation with a durable reason naming the missing acceptance contract
 
 ### Requirement: Continuations carry the durable task history
-The system SHALL render the goal's durable task history into supervisor continuation and nudge prompts: each announced task's identifier, title, status, per-criterion outcome when known, and last result summary, so a continuation does not require the supervisor to re-derive prior decomposition.
+The system SHALL render the goal's SQLite-backed task history into supervisor continuation and nudge prompts: each task's identifier, title, status, attempt count, substantive rejection count, per-criterion authoritative outcome, last safe result summary, last judge decision, and delivery state, so a continuation does not require the supervisor to re-derive prior work from AI response history.
 
-#### Scenario: Continuation after a worker result includes history
-- **WHEN** a supervisor continuation starts after a child outcome for a goal with an announced task list
-- **THEN** the continuation prompt lists every announced task with its current status and shows which criteria of the affected task passed or failed
+#### Scenario: Continuation after a worker result includes durable history
+- **WHEN** a supervisor continuation starts after a child outcome for a goal with registered tasks
+- **THEN** the continuation lists every task with its persisted current status and shows which criteria passed, failed, are blocked, or remain unknown
 
-#### Scenario: History reflects rejections and splits
-- **WHEN** a task has accumulated substantive rejections or was split into narrower tasks
-- **THEN** the continuation prompt shows the rejection count, the cited failing criteria, and the lineage to the narrower tasks
+#### Scenario: History reflects review, delivery, and splits
+- **WHEN** a task has a judge decision, pending or completed delivery, substantive rejections, or narrower descendants
+- **THEN** the continuation shows the decision, delivery status, rejection count, cited criteria, and lineage from durable state
+
+#### Scenario: Continuation is rebuilt after restart
+- **WHEN** the backend builds a continuation after reopening SQLite
+- **THEN** the rendered task history is equivalent to the last committed durable state before restart
 
 ### Requirement: Iterate until explicit completion
 The system SHALL continue a managed supervisor across multiple delegation cycles until the supervisor emits an explicit completion signal or a terminal failure, cancellation, or configured bound is reached; provider process exit alone SHALL NOT complete the goal.
@@ -59,15 +61,24 @@ The system SHALL continue a managed supervisor across multiple delegation cycles
 - **THEN** the backend marks the goal blocked with a durable reason instead of continuing indefinitely
 
 ### Requirement: Explicit supervisor completion signal
-The system SHALL complete a managed goal when the supervisor emits a valid completion control block containing a safe result summary.
+The system SHALL treat a valid `managed_delegation.complete` control block as a completion request and SHALL complete the managed goal only when the backend completion evaluator verifies the durable task, criterion, review, delivery, and change-plan gates.
 
-#### Scenario: Supervisor signals completion
-- **WHEN** supervisor output contains a valid `managed_delegation.complete` control block
-- **THEN** the backend marks the run and goal completed and records the safe result summary in durable events
+#### Scenario: Completion request passes all gates
+- **WHEN** supervisor output contains a valid completion block and every registered leaf task is accepted, every required criterion is `PASS`, no attempt/review/delivery is pending, no attested changes are undelivered, and all planned changes are archived when a plan exists
+- **THEN** the backend atomically marks the run and goal completed and records the safe result summary in terminal events
+
+#### Scenario: Completion request has durable gaps
+- **WHEN** a valid completion block is emitted while any required task, criterion, review, delivery, or change-plan condition is incomplete
+- **THEN** the backend rejects the request without completing the goal
+- **AND** it records and returns a structured safe list of completion gaps in the next continuation
 
 #### Scenario: Malformed completion block
-- **WHEN** supervisor output contains an invalid completion control block
+- **WHEN** supervisor output contains an invalid completion block
 - **THEN** the backend records a rejection with a safe reason and the goal remains in its current state
+
+#### Scenario: Split task completion follows accepted descendants
+- **WHEN** a parent task was split under the narrowing rule
+- **THEN** the completion evaluator treats it as satisfied only when it has at least one narrower descendant and every required leaf descendant is accepted
 
 ### Requirement: Control-block extraction from provider text
 The system SHALL extract fenced control blocks from provider assistant text through a provider-neutral extraction step, strip them from user-visible progress messages, and pass surrounding text through normal sanitized progress handling.
