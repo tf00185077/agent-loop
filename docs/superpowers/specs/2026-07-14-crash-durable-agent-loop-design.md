@@ -177,6 +177,19 @@ Best-effort: managed-mode resume is capability-gated (Codex) or unsupported
 When this live smoke passes, the system has moved from "crash = death" to the
 "loop until deliverable" vision.
 
+## Future candidates (not scheduled)
+
+- **Proactive decomposition-granularity bound.** Today over-sizing is bounded
+  only reactively (the two-rejection narrowing rule in task-acceptance-contracts,
+  keyed on the measurable "rejection count" signal). "Too big" is a semantic
+  judgment and cannot be reliably measured up front, so any proactive *size gate*
+  is a gameable proxy and a prompt/skill guideline is a frequency nudge, not a
+  guarantee (prompt is not enforcement). A genuinely reliable proactive bound
+  would key on another *measurable* signal — e.g. a per-worker-attempt resource
+  budget (time / turns / tokens) whose exhaustion is treated as an over-size
+  signal that forces narrowing. Philosophy matches this whole effort: do not
+  measure bigness, make mis-sized decomposition cheap to recover from.
+
 ## Non-goals (whole effort)
 
 - Multi-user, distributed workers, or parallel children (still deferred).
