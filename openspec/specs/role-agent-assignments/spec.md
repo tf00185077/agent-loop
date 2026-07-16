@@ -7,7 +7,7 @@ Define user-configured role→agent assignments for child delegations: the confi
 ## Requirements
 
 ### Requirement: User-configured role assignments
-The system SHALL let the user assign, per child role (`worker`, `spec_writer`, `review_merge`, `integrator`), a provider, model label, and optional command path in persisted provider settings; roles without an assignment SHALL inherit the goal's selected provider and model.
+The system SHALL let the user assign, per child role (`worker`, `spec_writer`, `review_merge`, `integrator`), a provider and model in persisted provider settings; the model SHALL be chosen from a provider-appropriate list (the live Codex model catalog for `codex-local`; the stable Claude tier aliases for `claude-local`) rather than free text, and the role command path SHALL be auto-detected rather than user-entered. Roles without an assignment SHALL inherit the goal's selected provider and model.
 
 #### Scenario: Assigned role uses its configured agent
 - **WHEN** a child delegation is dispatched while its role is assigned to a different provider/model than the goal's
@@ -20,6 +20,10 @@ The system SHALL let the user assign, per child role (`worker`, `spec_writer`, `
 #### Scenario: Unassigned roles inherit the goal provider
 - **WHEN** a delegation is dispatched for a role with no assignment
 - **THEN** the child runs through the parent session's adapter with the goal's provider and model, exactly as before
+
+#### Scenario: Role model is chosen from a provider-appropriate dropdown
+- **WHEN** the user assigns a `codex-local` or `claude-local` provider to a role
+- **THEN** the editor offers the role's model as a dropdown — the Codex catalog for `codex-local`, the stable Claude tier aliases for `claude-local` — and does not present a command-path input, which is auto-detected
 
 ### Requirement: Backend-only assignment resolution
 The system SHALL resolve role assignments in the backend at dispatch time; delegation control blocks SHALL NOT select providers, and provider fields in supervisor output SHALL have no effect on resolution.
