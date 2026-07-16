@@ -228,6 +228,7 @@ export const managedCompletionGapTypes = [
   "undelivered_changes",
   "uncontracted_only_work",
   "unarchived_change",
+  "invalid_split_lineage",
 ] as const;
 
 export type ManagedCompletionGapType = (typeof managedCompletionGapTypes)[number];
@@ -239,6 +240,8 @@ export interface ManagedCompletionGap {
   criterionId?: string | null;
   changeId?: string | null;
   delegationRequestId?: string | null;
+  reasonCode?: string | null;
+  taskIds?: string[];
 }
 
 export interface ManagedTaskRecord {

@@ -186,7 +186,13 @@ test("tracks attempts, executor claims, judge outcomes, rejection counts, delive
 test("validates legal transitions and split lineage", () => {
   const { db, goalId } = managedFixture();
   const tasks = createManagedTaskRepository(db, { now: fixedNow });
-  tasks.registerTasks({ goalId, tasks: [{ id: "parent", title: "Large", acceptance: [{ id: "A1", text: "Done" }] }] });
+  tasks.registerTasks({
+    goalId,
+    tasks: [{
+      id: "parent", title: "Large",
+      acceptance: [{ id: "A1", text: "First" }, { id: "A2", text: "Second" }],
+    }],
+  });
   assert.throws(() => tasks.transition("parent", "accepted", { safeSummary: "claim" }), /Cannot transition/);
   tasks.transition("parent", "split", { safeSummary: "Narrowing" });
   tasks.registerTasks({
@@ -194,6 +200,162 @@ test("validates legal transitions and split lineage", () => {
     tasks: [{ id: "child", title: "Narrow", parentTaskId: "parent", acceptance: [{ id: "C1", text: "Done" }] }],
   });
   assert.equal(tasks.getTask("child")?.parentTaskId, "parent");
+  db.close();
+});
+
+test("registers an eligible split parent children and audit in one transaction", () => {
+  const { db, goalId } = managedFixture();
+  const tasks = createManagedTaskRepository(db, { now: fixedNow });
+  tasks.registerTasks({
+    goalId,
+    changeId: "change-a",
+    tasks: [{
+      id: "parent", title: "Large", acceptance: [
+        { id: "A1", text: "First behavior" },
+        { id: "A2", text: "Second behavior" },
+      ],
+    }],
+  });
+  db.prepare(`
+    UPDATE managed_tasks
+    SET status = 'rejected', attempt_count = 2, substantive_rejection_count = 2,
+      last_cited_criteria = '["A1"]'
+    WHERE goal_id = ? AND logical_task_id = 'parent'
+  `).run(goalId);
+
+  tasks.registerTasks({
+    goalId,
+    changeId: "change-a",
+    tasks: [
+      { id: "child-a", title: "First", parentTaskId: "parent", acceptance: [{ id: "A1", text: "First behavior" }] },
+      { id: "child-b", title: "Second", parentTaskId: "parent", acceptance: [{ id: "A2", text: "Second behavior" }] },
+    ],
+  });
+
+  assert.equal(tasks.getTask(goalId, "parent")?.status, "split");
+  assert.deepEqual(tasks.listForGoal(goalId).filter((task) => task.parentTaskId === "parent").map((task) => task.id), [
+    "child-a", "child-b",
+  ]);
+  const splitEvents = db.prepare(`
+    SELECT data FROM events WHERE goal_id = ? AND json_extract(data, '$.runtimeEventType') = 'managed_task.lineage_split'
+  `).all(goalId);
+  assert.equal(splitEvents.length, 1);
+  db.close();
+});
+
+test("rolls back an entire split when one child criterion insert fails", () => {
+  const { db, goalId } = managedFixture();
+  const tasks = createManagedTaskRepository(db, { now: fixedNow });
+  tasks.registerTasks({
+    goalId,
+    tasks: [{ id: "parent", title: "Large", acceptance: [{ id: "A1", text: "One" }, { id: "A2", text: "Two" }] }],
+  });
+  db.prepare(`UPDATE managed_tasks SET status = 'rejected', substantive_rejection_count = 2 WHERE goal_id = ?`).run(goalId);
+  db.exec(`
+    CREATE TRIGGER inject_split_criterion_failure
+    BEFORE INSERT ON managed_task_criteria
+    WHEN NEW.criterion_id = 'C2'
+    BEGIN
+      SELECT RAISE(ABORT, 'injected criterion insert failure');
+    END;
+  `);
+
+  assert.throws(() => tasks.registerTasks({
+    goalId,
+    tasks: [
+      { id: "child-a", title: "First", parentTaskId: "parent", acceptance: [{ id: "C1", text: "One" }] },
+      { id: "child-b", title: "Broken", parentTaskId: "parent", acceptance: [{ id: "C2", text: "Two" }] },
+    ],
+  }), /injected criterion insert failure/i);
+  assert.equal(tasks.getTask(goalId, "parent")?.status, "rejected");
+  assert.equal(tasks.getTask(goalId, "child-a"), null);
+  assert.equal(tasks.getTask(goalId, "child-b"), null);
+  db.close();
+});
+
+test("rejects a child whose parent belongs to another change", () => {
+  const { db, goalId } = managedFixture();
+  const tasks = createManagedTaskRepository(db, { now: fixedNow });
+  tasks.registerTasks({
+    goalId,
+    changeId: "change-a",
+    tasks: [{ id: "parent", title: "Large", acceptance: [{ id: "A1", text: "One" }, { id: "A2", text: "Two" }] }],
+  });
+  db.prepare(`UPDATE managed_tasks SET status = 'rejected', substantive_rejection_count = 2 WHERE goal_id = ?`).run(goalId);
+
+  assert.throws(() => tasks.registerTasks({
+    goalId,
+    changeId: "change-b",
+    tasks: [{ id: "child", title: "Wrong change", parentTaskId: "parent", acceptance: [{ id: "A1", text: "One" }] }],
+  }), /change/i);
+  assert.equal(tasks.getTask(goalId, "child"), null);
+  assert.equal(tasks.getTask(goalId, "parent")?.status, "rejected");
+  db.close();
+});
+
+test("freezes the durable child set and rejects active-parent narrowing", () => {
+  const { db, goalId } = managedFixture();
+  const tasks = createManagedTaskRepository(db, { now: fixedNow });
+  tasks.registerTasks({
+    goalId,
+    tasks: [{
+      id: "parent", title: "Large",
+      acceptance: [{ id: "A1", text: "One" }, { id: "A2", text: "Two" }],
+    }],
+  });
+  db.prepare(`UPDATE managed_tasks SET status = 'delegated', substantive_rejection_count = 2 WHERE goal_id = ?`)
+    .run(goalId);
+  const child = {
+    id: "child", title: "One", parentTaskId: "parent",
+    acceptance: [{ id: "A1", text: "One" }],
+  };
+  assert.throws(() => tasks.registerTasks({ goalId, tasks: [child] }), /active|pending/i);
+  assert.equal(tasks.getTask(goalId, "child"), null);
+
+  db.prepare(`UPDATE managed_tasks SET status = 'rejected' WHERE goal_id = ?`).run(goalId);
+  tasks.registerTasks({ goalId, tasks: [child] });
+  const before = tasks.listForGoal(goalId);
+  assert.deepEqual(tasks.registerTasks({ goalId, tasks: [child] }).map((task) => task.id), ["child"]);
+  assert.deepEqual(tasks.listForGoal(goalId), before);
+  assert.throws(() => tasks.registerTasks({
+    goalId,
+    tasks: [{ id: "late-child", title: "Late", parentTaskId: "parent", acceptance: [{ id: "A2", text: "Two" }] }],
+  }), /frozen/i);
+  assert.equal(tasks.getTask(goalId, "late-child"), null);
+  assert.equal((db.prepare(`
+    SELECT COUNT(*) AS count FROM events
+    WHERE goal_id = ? AND json_extract(data, '$.runtimeEventType') = 'managed_task.lineage_split'
+  `).get(goalId) as { count: number }).count, 1);
+  db.close();
+});
+
+test("rolls back the split when the lineage audit insert fails", () => {
+  const { db, goalId } = managedFixture();
+  const tasks = createManagedTaskRepository(db, { now: fixedNow });
+  tasks.registerTasks({
+    goalId,
+    tasks: [{
+      id: "parent", title: "Large",
+      acceptance: [{ id: "A1", text: "One" }, { id: "A2", text: "Two" }],
+    }],
+  });
+  db.prepare(`UPDATE managed_tasks SET status = 'rejected', substantive_rejection_count = 2 WHERE goal_id = ?`)
+    .run(goalId);
+  db.exec(`
+    CREATE TRIGGER inject_lineage_audit_failure
+    BEFORE INSERT ON events
+    WHEN json_extract(NEW.data, '$.runtimeEventType') = 'managed_task.lineage_split'
+    BEGIN
+      SELECT RAISE(ABORT, 'injected lineage audit failure');
+    END;
+  `);
+
+  assert.throws(() => tasks.registerTasks({
+    goalId,
+    tasks: [{ id: "child", title: "One", parentTaskId: "parent", acceptance: [{ id: "A1", text: "One" }] }],
+  }), /injected lineage audit failure/i);
+  assert.equal(tasks.getTask(goalId, "parent")?.status, "rejected");
+  assert.equal(tasks.getTask(goalId, "child"), null);
   db.close();
 });
 

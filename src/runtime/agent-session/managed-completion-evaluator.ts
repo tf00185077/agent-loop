@@ -1,5 +1,6 @@
 import type { AgentRuntimeDelegationSummary, ManagedCompletionGap, ManagedTaskStatus } from "../../domain/index.js";
 import type { AppDatabase } from "../../persistence/database.js";
+import { evaluateDurableManagedTaskLineage } from "./managed-task-lineage.js";
 
 export interface ManagedCompletionEvaluationInput {
   goalId: string;
@@ -19,7 +20,9 @@ export function evaluateManagedCompletion(
     SELECT id AS database_id, logical_task_id AS id, title, status
     FROM managed_tasks WHERE goal_id = ? ORDER BY created_at, rowid
   `).all(input.goalId) as Array<{ database_id: string; id: string; title: string; status: ManagedTaskStatus }>;
-  const gaps: ManagedCompletionGap[] = [];
+  const lineage = evaluateDurableManagedTaskLineage(db, input.goalId);
+  const leafTaskIds = new Set(lineage.leafTaskIds);
+  const gaps: ManagedCompletionGap[] = [...lineage.gaps];
   const hasUncontractedWork = tasks.length === 0 && Boolean(db.prepare(`
     SELECT 1
     FROM agent_delegation_requests d
@@ -39,9 +42,7 @@ export function evaluateManagedCompletion(
   }
 
   for (const task of tasks) {
-    const childCount = (db.prepare("SELECT COUNT(*) AS count FROM managed_tasks WHERE parent_task_id = ?")
-      .get(task.database_id) as { count: number }).count;
-    const isLeaf = childCount === 0;
+    const isLeaf = leafTaskIds.has(task.id);
     if (isLeaf && task.status !== "accepted") {
       gaps.push({
         type: "unaccepted_leaf_task",

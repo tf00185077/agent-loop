@@ -55,7 +55,13 @@ test("accepts completed leaf descendants with PASS criteria", () => {
   const db = openDatabase({ path: testDatabasePath() });
   const goal = createGoalRepository(db).create({ title: "Split", description: "Leaves" });
   const tasks = createManagedTaskRepository(db);
-  tasks.registerTasks({ goalId: goal.id, tasks: [{ id: "parent", title: "Large", acceptance: [{ id: "P1", text: "Split" }] }] });
+  tasks.registerTasks({
+    goalId: goal.id,
+    tasks: [{
+      id: "parent", title: "Large",
+      acceptance: [{ id: "P1", text: "First" }, { id: "P2", text: "Second" }],
+    }],
+  });
   tasks.transition("parent", "split", { safeSummary: "Narrowed" });
   tasks.registerTasks({
     goalId: goal.id,
@@ -70,6 +76,369 @@ test("accepts completed leaf descendants with PASS criteria", () => {
 
   assert.deepEqual(evaluateManagedCompletion(db, { goalId: goal.id }), { ok: true, gaps: [] });
   db.close();
+});
+
+test("fails closed when an accepted passing task has an ambiguous frozen contract migration", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({ title: "Ambiguous contract", description: "Must not complete" });
+  createManagedTaskRepository(db).registerTasks({
+    goalId: goal.id,
+    changeId: "change-a",
+    tasks: [{ id: "implementation", title: "Guessed contract", acceptance: [{ id: "A1", text: "Guessed pass" }] }],
+  });
+  db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE goal_id = ?").run(goal.id);
+  db.prepare("UPDATE managed_task_criteria SET outcome = 'PASS'").run();
+  db.prepare(`
+    UPDATE schema_migrations SET details = ?
+    WHERE name = 'managed-task-frozen-contract-repair-v1'
+  `).run(JSON.stringify({
+    mode: "initialized_repair",
+    ambiguousTaskCount: 1,
+    ambiguousTasks: [`${goal.id}:implementation`],
+  }));
+
+  const result = evaluateManagedCompletion(db, { goalId: goal.id });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.gaps.filter((gap) => gap.reasonCode === "ambiguous_frozen_contract"), [{
+    type: "invalid_split_lineage",
+    reasonCode: "ambiguous_frozen_contract",
+    taskId: "implementation",
+    taskIds: ["implementation"],
+    safeSummary: "Managed task implementation has an ambiguous frozen acceptance contract (ambiguous_frozen_contract).",
+  }]);
+  db.close();
+});
+
+test("fails closed on the 51st frozen-contract ambiguity while legal Goals remain unaffected", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goals = createGoalRepository(db);
+  const ambiguousGoal = goals.create({ title: "51st ambiguity", description: "Must not complete" });
+  const legalGoal = goals.create({ title: "Legal Goal", description: "Must remain unaffected" });
+  const tasks = createManagedTaskRepository(db);
+  for (const goal of [ambiguousGoal, legalGoal]) {
+    tasks.registerTasks({
+      goalId: goal.id,
+      changeId: "change-a",
+      tasks: [{ id: "implementation", title: "Passing task", acceptance: [{ id: "A1", text: "Pass" }] }],
+    });
+    db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE goal_id = ?").run(goal.id);
+    db.prepare(`UPDATE managed_task_criteria SET outcome = 'PASS'
+      WHERE task_id = (SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'implementation')`)
+      .run(goal.id);
+  }
+  const boundedDiagnostics = Array.from({ length: 50 }, (_, index) =>
+    `other-goal-${String(index + 1).padStart(3, "0")}:implementation`
+  );
+  db.prepare(`UPDATE schema_migrations SET details = ?
+    WHERE name = 'managed-task-frozen-contract-repair-v1'`).run(JSON.stringify({
+    mode: "initialized_repair",
+    ambiguousTaskCount: 51,
+    ambiguousTasks: boundedDiagnostics,
+    ambiguousTaskEnforcementIds: [...boundedDiagnostics, `${ambiguousGoal.id}:implementation`],
+  }));
+
+  const ambiguous = evaluateManagedCompletion(db, { goalId: ambiguousGoal.id });
+
+  assert.equal(ambiguous.ok, false);
+  assert.ok(ambiguous.gaps.some((gap) =>
+    gap.reasonCode === "ambiguous_frozen_contract" && gap.taskId === "implementation"
+  ));
+  assert.deepEqual(evaluateManagedCompletion(db, { goalId: legalGoal.id }), { ok: true, gaps: [] });
+  db.close();
+});
+
+test("fails closed globally for legacy truncated frozen-contract markers", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({ title: "Legacy marker", description: "Unknown omitted owners" });
+  createManagedTaskRepository(db).registerTasks({
+    goalId: goal.id,
+    changeId: "change-a",
+    tasks: [{ id: "implementation", title: "Passing task", acceptance: [{ id: "A1", text: "Pass" }] }],
+  });
+  db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE goal_id = ?").run(goal.id);
+  db.prepare("UPDATE managed_task_criteria SET outcome = 'PASS'").run();
+  db.prepare(`UPDATE schema_migrations SET details = ?
+    WHERE name = 'managed-task-frozen-contract-repair-v1'`).run(JSON.stringify({
+    mode: "initialized_repair",
+    ambiguousTaskCount: 51,
+    ambiguousTasks: Array.from({ length: 50 }, (_, index) => `unknown-goal-${index}:unknown-task`),
+  }));
+
+  const result = evaluateManagedCompletion(db, { goalId: goal.id });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.gaps.some((gap) =>
+    gap.reasonCode === "ambiguous_frozen_contract" && (gap.taskIds?.length ?? 0) === 0
+  ));
+  db.close();
+});
+
+test("fails closed for present frozen-contract markers with invalid details", async (t) => {
+  for (const marker of [
+    { name: "malformed JSON", details: "{not-json" },
+    { name: "valid JSON non-object", details: "[]" },
+  ]) {
+    await t.test(marker.name, () => {
+      const db = openDatabase({ path: testDatabasePath() });
+      const goal = createGoalRepository(db).create({ title: marker.name, description: "Invalid marker" });
+      createManagedTaskRepository(db).registerTasks({
+        goalId: goal.id,
+        changeId: "change-a",
+        tasks: [{ id: "implementation", title: "Passing task", acceptance: [{ id: "A1", text: "Pass" }] }],
+      });
+      db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE goal_id = ?").run(goal.id);
+      db.prepare("UPDATE managed_task_criteria SET outcome = 'PASS'").run();
+      db.prepare(`UPDATE schema_migrations SET details = ?
+        WHERE name = 'managed-task-frozen-contract-repair-v1'`).run(marker.details);
+
+      const result = evaluateManagedCompletion(db, { goalId: goal.id });
+
+      assert.equal(result.ok, false);
+      assert.ok(result.gaps.some((gap) =>
+        gap.reasonCode === "ambiguous_frozen_contract" && (gap.taskIds?.length ?? 0) === 0
+      ));
+      db.close();
+    });
+  }
+});
+
+test("keeps absent and valid frozen-contract marker forms non-global", async (t) => {
+  const cases: Array<{ name: string; details?: Record<string, unknown> }> = [
+    { name: "marker absent" },
+    { name: "fresh baseline", details: { mode: "fresh_baseline" } },
+    {
+      name: "zero ambiguity",
+      details: {
+        mode: "initialized_repair",
+        ambiguousTaskCount: 0,
+        ambiguousTasks: [],
+        ambiguousTaskEnforcementIds: [],
+      },
+    },
+    {
+      name: "task-scoped old marker",
+      details: {
+        mode: "initialized_repair",
+        ambiguousTaskCount: 1,
+        ambiguousTasks: ["another-goal:implementation"],
+      },
+    },
+    {
+      name: "full enforcement identities",
+      details: {
+        mode: "initialized_repair",
+        ambiguousTaskCount: 1,
+        ambiguousTasks: ["another-goal:implementation"],
+        ambiguousTaskEnforcementIds: ["another-goal:implementation"],
+      },
+    },
+  ];
+  for (const marker of cases) {
+    await t.test(marker.name, () => {
+      const db = openDatabase({ path: testDatabasePath() });
+      const goal = createGoalRepository(db).create({ title: marker.name, description: "Valid marker" });
+      createManagedTaskRepository(db).registerTasks({
+        goalId: goal.id,
+        changeId: "change-a",
+        tasks: [{ id: "implementation", title: "Passing task", acceptance: [{ id: "A1", text: "Pass" }] }],
+      });
+      db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE goal_id = ?").run(goal.id);
+      db.prepare("UPDATE managed_task_criteria SET outcome = 'PASS'").run();
+      if (marker.details) {
+        db.prepare(`UPDATE schema_migrations SET details = ?
+          WHERE name = 'managed-task-frozen-contract-repair-v1'`).run(JSON.stringify(marker.details));
+      } else {
+        db.prepare(`DELETE FROM schema_migrations
+          WHERE name = 'managed-task-frozen-contract-repair-v1'`).run();
+      }
+
+      assert.deepEqual(evaluateManagedCompletion(db, { goalId: goal.id }), { ok: true, gaps: [] });
+      db.close();
+    });
+  }
+});
+
+test("fails closed for a non-split parent with a child", () => {
+  const fixture = lineageFixture();
+  fixture.db.prepare("UPDATE managed_tasks SET status = 'rejected' WHERE goal_id = ? AND logical_task_id = 'parent'")
+    .run(fixture.goalId);
+
+  const result = evaluateManagedCompletion(fixture.db, { goalId: fixture.goalId });
+
+  assert.deepEqual(
+    result.gaps.filter((gap) => gap.type === "invalid_split_lineage")
+      .map((gap) => [gap.taskId, gap.safeSummary]),
+    [["parent", "Managed task parent has descendants but is not split (parent_not_split)."]],
+  );
+  fixture.db.close();
+});
+
+test("fails closed for a split parent without a child", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({ title: "Empty split", description: "Invalid lineage" });
+  const tasks = createManagedTaskRepository(db);
+  tasks.registerTasks({
+    goalId: goal.id,
+    tasks: [{ id: "parent", title: "Large", acceptance: [{ id: "P1", text: "One" }, { id: "P2", text: "Two" }] }],
+  });
+  db.prepare("UPDATE managed_tasks SET status = 'split' WHERE goal_id = ? AND logical_task_id = 'parent'").run(goal.id);
+
+  const result = evaluateManagedCompletion(db, { goalId: goal.id });
+
+  assert.ok(result.gaps.some((gap) =>
+    gap.type === "invalid_split_lineage" && gap.taskId === "parent" && /split_without_children/.test(gap.safeSummary)
+  ));
+  db.close();
+});
+
+test("fails closed for cross-change, missing-parent, and cyclic lineage", () => {
+  const scenarios = [
+    {
+      name: "cross_change",
+      corrupt(db: ReturnType<typeof openDatabase>, goalId: string) {
+        db.prepare("UPDATE managed_tasks SET change_id = 'change-b' WHERE goal_id = ? AND logical_task_id = 'child'")
+          .run(goalId);
+      },
+    },
+    {
+      name: "missing_parent",
+      corrupt(db: ReturnType<typeof openDatabase>, goalId: string) {
+        db.pragma("foreign_keys = OFF");
+        db.prepare("UPDATE managed_tasks SET parent_task_id = 'missing-row' WHERE goal_id = ? AND logical_task_id = 'child'")
+          .run(goalId);
+        db.pragma("foreign_keys = ON");
+      },
+    },
+    {
+      name: "cycle",
+      corrupt(db: ReturnType<typeof openDatabase>, goalId: string) {
+        const ids = db.prepare("SELECT logical_task_id, id FROM managed_tasks WHERE goal_id = ?")
+          .all(goalId) as Array<{ logical_task_id: string; id: string }>;
+        const byLogicalId = new Map(ids.map((row) => [row.logical_task_id, row.id]));
+        db.prepare("UPDATE managed_tasks SET parent_task_id = ? WHERE goal_id = ? AND logical_task_id = 'parent'")
+          .run(byLogicalId.get("child"), goalId);
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const fixture = lineageFixture();
+    scenario.corrupt(fixture.db, fixture.goalId);
+
+    const result = evaluateManagedCompletion(fixture.db, { goalId: fixture.goalId });
+
+    assert.ok(result.gaps.some((gap) =>
+      gap.type === "invalid_split_lineage" && gap.safeSummary.includes(`(${scenario.name})`)
+    ), `expected ${scenario.name} lineage diagnostic`);
+    fixture.db.close();
+  }
+});
+
+test("fails closed when a durable child points at a parent in another Goal", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goals = createGoalRepository(db);
+  const parentGoal = goals.create({ title: "Parent Goal", description: "Owns the parent" });
+  const childGoal = goals.create({ title: "Child Goal", description: "Must not borrow the parent" });
+  const tasks = createManagedTaskRepository(db);
+  tasks.registerTasks({
+    goalId: parentGoal.id,
+    tasks: [{
+      id: "parent", title: "Parent",
+      acceptance: [{ id: "P1", text: "One" }, { id: "P2", text: "Two" }],
+    }],
+  });
+  const parentDatabaseId = db.prepare(`
+    SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'parent'
+  `).pluck().get(parentGoal.id) as string;
+  db.prepare(`
+    INSERT INTO managed_tasks (
+      id, goal_id, logical_task_id, change_id, parent_task_id, title, status, attempt_count,
+      substantive_rejection_count, last_cited_criteria, last_safe_summary, created_at, updated_at
+    ) VALUES ('cross-goal-child-db', ?, 'child', NULL, ?, 'Child', 'accepted', 0, 0, '[]', NULL,
+      '2026-07-17T00:00:01.000Z', '2026-07-17T00:00:01.000Z')
+  `).run(childGoal.id, parentDatabaseId);
+  db.prepare(`
+    INSERT INTO managed_task_criteria (task_id, criterion_id, text, outcome, created_at, updated_at)
+    VALUES ('cross-goal-child-db', 'C1', 'Done', 'PASS',
+      '2026-07-17T00:00:01.000Z', '2026-07-17T00:00:01.000Z')
+  `).run();
+
+  const result = evaluateManagedCompletion(db, { goalId: childGoal.id });
+
+  assert.ok(result.gaps.some((gap) =>
+    gap.type === "invalid_split_lineage" && gap.reasonCode === "cross_goal"
+      && gap.taskIds?.includes("child") && gap.taskIds.includes("parent")
+  ));
+  db.close();
+});
+
+test("fails closed when durable descendants no longer match frozen split evidence", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({ title: "Frozen split", description: "Tamper detection" });
+  const tasks = createManagedTaskRepository(db);
+  tasks.registerTasks({
+    goalId: goal.id,
+    changeId: "change-a",
+    tasks: [{
+      id: "parent", title: "Parent",
+      acceptance: [{ id: "P1", text: "One" }, { id: "P2", text: "Two" }, { id: "P3", text: "Three" }],
+    }],
+  });
+  db.prepare(`
+    UPDATE managed_tasks SET status = 'rejected', substantive_rejection_count = 2
+    WHERE goal_id = ? AND logical_task_id = 'parent'
+  `).run(goal.id);
+  tasks.registerTasks({
+    goalId: goal.id,
+    changeId: "change-a",
+    tasks: [{
+      id: "child", title: "Original child", parentTaskId: "parent",
+      acceptance: [{ id: "C1", text: "One" }, { id: "C2", text: "Two" }],
+    }],
+  });
+  const parentDatabaseId = db.prepare(`
+    SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'parent'
+  `).pluck().get(goal.id) as string;
+  db.prepare(`
+    INSERT INTO managed_tasks (
+      id, goal_id, logical_task_id, change_id, parent_task_id, title, status, attempt_count,
+      substantive_rejection_count, last_cited_criteria, last_safe_summary, created_at, updated_at
+    ) VALUES ('tampered-child-db', ?, 'tampered-child', 'change-a', ?, 'Tampered child', 'accepted',
+      0, 0, '[]', NULL, '2026-07-17T00:00:02.000Z', '2026-07-17T00:00:02.000Z')
+  `).run(goal.id, parentDatabaseId);
+  db.prepare(`
+    INSERT INTO managed_task_criteria (task_id, criterion_id, text, outcome, created_at, updated_at)
+    VALUES ('tampered-child-db', 'T1', 'Tampered', 'PASS',
+      '2026-07-17T00:00:02.000Z', '2026-07-17T00:00:02.000Z')
+  `).run();
+
+  const result = evaluateManagedCompletion(db, { goalId: goal.id });
+
+  assert.ok(result.gaps.some((gap) =>
+    gap.type === "invalid_split_lineage" && gap.reasonCode === "frozen_child_set_mismatch"
+      && gap.taskIds?.includes("tampered-child")
+  ));
+  db.close();
+});
+
+test("accepts a valid nested split through its accepted leaf closure", () => {
+  const fixture = lineageFixture();
+  const tasks = createManagedTaskRepository(fixture.db);
+  fixture.db.prepare("UPDATE managed_tasks SET status = 'split' WHERE goal_id = ? AND logical_task_id = 'child'")
+    .run(fixture.goalId);
+  tasks.registerTasks({
+    goalId: fixture.goalId,
+    changeId: "change-a",
+    tasks: [{ id: "grandchild", title: "Leaf", parentTaskId: "child", acceptance: [{ id: "G1", text: "Done" }] }],
+  });
+  fixture.db.prepare("UPDATE managed_task_criteria SET outcome = 'PASS' WHERE task_id = (SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'grandchild')")
+    .run(fixture.goalId);
+  fixture.db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE goal_id = ? AND logical_task_id = 'grandchild'")
+    .run(fixture.goalId);
+
+  assert.deepEqual(evaluateManagedCompletion(fixture.db, { goalId: fixture.goalId }), { ok: true, gaps: [] });
+  fixture.db.close();
 });
 
 test("rejects completion while integration recovery is nonterminal or failed", () => {
@@ -336,6 +705,35 @@ function completionFixture(title: string) {
     tasks: [{ id: "task-1", title: "Implement", acceptance: [{ id: "A1", text: "Done" }] }],
   });
   return { db, goal, run, sessions, supervisor, tasks };
+}
+
+function lineageFixture() {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goal = createGoalRepository(db).create({ title: "Lineage", description: "Shared projection" });
+  const tasks = createManagedTaskRepository(db);
+  tasks.registerTasks({
+    goalId: goal.id,
+    changeId: "change-a",
+    tasks: [{
+      id: "parent",
+      title: "Large",
+      acceptance: [{ id: "P1", text: "One" }, { id: "P2", text: "Two" }, { id: "P3", text: "Three" }],
+    }],
+  });
+  tasks.transition("parent", "split", { goalId: goal.id, safeSummary: "Narrowed" });
+  tasks.registerTasks({
+    goalId: goal.id,
+    changeId: "change-a",
+    tasks: [{
+      id: "child", title: "Narrow", parentTaskId: "parent",
+      acceptance: [{ id: "C1", text: "One" }, { id: "C2", text: "Two" }],
+    }],
+  });
+  db.prepare("UPDATE managed_task_criteria SET outcome = 'PASS' WHERE task_id = (SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'child')")
+    .run(goal.id);
+  db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE goal_id = ? AND logical_task_id = 'child'")
+    .run(goal.id);
+  return { db, goalId: goal.id };
 }
 
 function completeWorkerAttempt(fixture: CompletionFixture, summary: string, candidate: string): string {

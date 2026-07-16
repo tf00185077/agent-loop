@@ -309,6 +309,7 @@ test("defines closed durable task decision vocabularies", () => {
     "undelivered_changes",
     "uncontracted_only_work",
     "unarchived_change",
+    "invalid_split_lineage",
   ]);
 });
 
