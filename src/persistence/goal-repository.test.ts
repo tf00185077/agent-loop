@@ -9,7 +9,9 @@ import { createGoalRepository } from "./goal-repository.js";
 
 test("creates, lists, and gets persisted goals", () => {
   const db = openDatabase({ path: testDatabasePath() });
-  const goals = createGoalRepository(db);
+  const createdAt = ["2026-06-15T08:00:00.000Z", "2026-06-15T08:00:01.000Z"];
+  let createdAtIndex = 0;
+  const goals = createGoalRepository(db, { now: () => createdAt[createdAtIndex++]! });
 
   const first = goals.create({
     title: "Plan the MVP",

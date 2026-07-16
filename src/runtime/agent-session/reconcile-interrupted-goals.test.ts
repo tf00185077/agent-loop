@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -11,7 +11,7 @@ import { createManagedTaskRepository } from "../../persistence/managed-task-repo
 import { createAgentSessionRepository, createEventRepository, createRunRepository } from "../../persistence/runtime-repositories.js";
 import { createAgentSessionManager } from "./agent-session-manager.js";
 import { createGitWorktreeService } from "./worktree-service.js";
-import { createManagedDeliveryService } from "./managed-delivery-service.js";
+import { createManagedDeliveryService, type ManagedDeliveryService } from "./managed-delivery-service.js";
 
 const CAPS = { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
 
@@ -26,12 +26,16 @@ function gitRepo(): string {
 }
 const git = (repo: string, args: string[]) => spawnSync("git", args, { cwd: repo, encoding: "utf8" });
 
-function managerFor(db: AppDatabase, supervisorCwd: string) {
+function managerFor(
+  db: AppDatabase,
+  supervisorCwd: string,
+  managedDeliveryService: ManagedDeliveryService = createManagedDeliveryService(),
+) {
   return createAgentSessionManager({
     goalRepo: createGoalRepository(db), runRepo: createRunRepository(db),
     eventRepo: createEventRepository(db), agentSessionRepo: createAgentSessionRepository(db),
     managedTaskRepo: createManagedTaskRepository(db), database: db,
-    worktreeService: createGitWorktreeService(), managedDeliveryService: createManagedDeliveryService(),
+    worktreeService: createGitWorktreeService(), managedDeliveryService,
     supervisorCwd,
   });
 }
@@ -140,4 +144,224 @@ test("recovery is idempotent across restarts", () => {
   assert.equal(goals.getById(goalId)?.status, "interrupted");
   assert.equal(recoveryEvents(db).length, 1, "no duplicate recovery event on the second boot");
   db.close();
+});
+
+test("recovery durably blocks instead of resuming when a real pending-delivery reset fails", () => {
+  const repo = gitRepo();
+  const checkpoint = git(repo, ["rev-parse", "HEAD"]).stdout.trim();
+  const db = openDatabase({ path: join(mkdtempSync(join(tmpdir(), "reconcile-reset-failed-")), "r.sqlite") });
+  const goals = createGoalRepository(db);
+  const runs = createRunRepository(db);
+  const sessions = createAgentSessionRepository(db);
+  const tasks = createManagedTaskRepository(db);
+  const goal = goals.create({ title: "Reset failure", description: "Must fail closed" });
+  goals.updateStatus(goal.id, "running", { startedAt: "2026-07-17T00:00:00.000Z" });
+  const run = runs.create({ goalId: goal.id, provider: "mock", model: "m" });
+  const supervisor = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "mock",
+    modelLabel: "m",
+    lifecycleState: "running",
+    capabilities: CAPS,
+  });
+  tasks.registerTasks({
+    goalId: goal.id,
+    tasks: [{ id: "task-1", title: "Pending", acceptance: [{ id: "A1", text: "Done" }] }],
+  });
+  const worker = sessions.createDelegationRequest({
+    parentSessionId: supervisor.id,
+    role: "worker",
+    taskId: "task-1",
+    promptSummary: "Pending delivery",
+  });
+  tasks.beginAttempt("task-1", worker.id);
+  tasks.recordDelivery({
+    taskId: "task-1",
+    workerDelegationRequestId: worker.id,
+    status: "pending",
+    checkpointHead: checkpoint,
+    safeSummary: "Pending",
+  });
+  writeFileSync(join(repo, "base.txt"), "dirty after checkpoint\n");
+  writeFileSync(join(repo, ".git", "index.lock"), "locked\n");
+
+  managerFor(db, repo).recoverOrphanedSessions();
+
+  assert.equal(goals.getById(goal.id)?.status, "blocked");
+  const blockers = (db.prepare("SELECT data FROM events WHERE goal_id = ? ORDER BY rowid").all(goal.id) as
+    Array<{ data: string }>).map((row) => JSON.parse(row.data) as Record<string, unknown>)
+    .filter((data) => data.runtimeEventType === "recovery.reconciliation_blocked");
+  assert.equal(blockers.length, 1);
+  assert.equal(blockers[0]?.blockerType, "pending_delivery_reset_failed");
+  assert.match(String(blockers[0]?.safeReason), /rollback|reset|checkpoint/i);
+  assert.equal(recoveryEvents(db).length, 0);
+  db.close();
+});
+
+test("recovery blocks when an ignored generated artifact prevents exact checkpoint proof", async () => {
+  const repo = gitRepo();
+  writeFileSync(join(repo, ".gitignore"), "generated/\n", "utf8");
+  git(repo, ["add", ".gitignore"]);
+  git(repo, ["-c", "user.name=R", "-c", "user.email=r@x.invalid", "commit", "-m", "ignore generated"]);
+  const checkpoint = git(repo, ["rev-parse", "HEAD"]).stdout.trim();
+  const db = openDatabase({ path: join(mkdtempSync(join(tmpdir(), "reconcile-ignored-artifact-")), "r.sqlite") });
+  const goals = createGoalRepository(db);
+  const runs = createRunRepository(db);
+  const sessions = createAgentSessionRepository(db);
+  const tasks = createManagedTaskRepository(db);
+  const goal = goals.create({ title: "Ignored artifact", description: "Must not become resumable" });
+  goals.updateStatus(goal.id, "running", { startedAt: "2026-07-17T00:00:00.000Z" });
+  const run = runs.create({ goalId: goal.id, provider: "mock", model: "m" });
+  const supervisor = sessions.createSession({
+    goalId: goal.id,
+    runId: run.id,
+    providerId: "mock",
+    modelLabel: "m",
+    lifecycleState: "running",
+    capabilities: CAPS,
+  });
+  tasks.registerTasks({
+    goalId: goal.id,
+    tasks: [{ id: "task-1", title: "Pending", acceptance: [{ id: "A1", text: "Done" }] }],
+  });
+  const worker = sessions.createDelegationRequest({
+    parentSessionId: supervisor.id,
+    role: "worker",
+    taskId: "task-1",
+    promptSummary: "Pending delivery",
+  });
+  tasks.beginAttempt("task-1", worker.id);
+  tasks.recordDelivery({
+    taskId: "task-1",
+    workerDelegationRequestId: worker.id,
+    status: "pending",
+    checkpointHead: checkpoint,
+    safeSummary: "Pending",
+  });
+  mkdirSync(join(repo, "generated"), { recursive: true });
+  writeFileSync(join(repo, "generated", "stale.log"), "stale runtime output\n", "utf8");
+  const manager = managerFor(db, repo);
+
+  manager.recoverOrphanedSessions();
+
+  assert.equal(goals.getById(goal.id)?.status, "blocked");
+  assert.equal(existsSync(join(repo, "generated", "stale.log")), true, "non-disposable ignored input is not deleted");
+  const blockers = (db.prepare("SELECT data FROM events WHERE goal_id = ? ORDER BY rowid").all(goal.id) as
+    Array<{ data: string }>).map((row) => JSON.parse(row.data) as Record<string, unknown>)
+    .filter((data) => data.runtimeEventType === "recovery.reconciliation_blocked");
+  assert.equal(blockers.length, 1);
+  assert.equal(blockers[0]?.blockerType, "pending_delivery_reset_failed");
+  assert.match(String(blockers[0]?.safeReason), /ignored workspace artifacts prevent exact checkpoint reconciliation/i);
+  assert.equal(recoveryEvents(db).length, 0);
+
+  let providerStarts = 0;
+  await manager.resumeInterruptedGoal({
+    goalId: goal.id,
+    providerId: "mock",
+    modelLabel: "m",
+    adapter: {
+      providerId: "mock",
+      async detectCapabilities() { return CAPS; },
+      async startSession() {
+        providerStarts += 1;
+        throw new Error("blocked Goal must not start a provider");
+      },
+    },
+  });
+  assert.equal(providerStarts, 0);
+  db.close();
+});
+
+test("recovery durably blocks pending deliveries missing a checkpoint or reconciler and never resumes", async (t) => {
+  const unavailableService: ManagedDeliveryService = {
+    prepareCandidate() {
+      throw new Error("prepareCandidate must not run during restart reconciliation");
+    },
+    deliverCandidate() {
+      throw new Error("deliverCandidate must not run during restart reconciliation");
+    },
+  };
+  const scenarios = [
+    {
+      name: "checkpoint missing",
+      blockerType: "pending_delivery_checkpoint_missing",
+      checkpoint: null,
+      service: createManagedDeliveryService() as ManagedDeliveryService,
+    },
+    {
+      name: "reconciler missing",
+      blockerType: "pending_delivery_reconciler_unavailable",
+      checkpoint: "recorded-checkpoint",
+      service: unavailableService,
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      const repo = gitRepo();
+      const db = openDatabase({ path: join(mkdtempSync(join(tmpdir(), "reconcile-authority-missing-")), "r.sqlite") });
+      const goals = createGoalRepository(db);
+      const runs = createRunRepository(db);
+      const sessions = createAgentSessionRepository(db);
+      const tasks = createManagedTaskRepository(db);
+      const goal = goals.create({ title: scenario.name, description: "Must fail closed" });
+      goals.updateStatus(goal.id, "running", { startedAt: "2026-07-17T00:00:00.000Z" });
+      const run = runs.create({ goalId: goal.id, provider: "mock", model: "m" });
+      const supervisor = sessions.createSession({
+        goalId: goal.id,
+        runId: run.id,
+        providerId: "mock",
+        modelLabel: "m",
+        lifecycleState: "running",
+        capabilities: CAPS,
+      });
+      tasks.registerTasks({
+        goalId: goal.id,
+        tasks: [{ id: "task-1", title: "Pending", acceptance: [{ id: "A1", text: "Done" }] }],
+      });
+      const worker = sessions.createDelegationRequest({
+        parentSessionId: supervisor.id,
+        role: "worker",
+        taskId: "task-1",
+        promptSummary: "Pending delivery",
+      });
+      tasks.beginAttempt("task-1", worker.id);
+      tasks.recordDelivery({
+        taskId: "task-1",
+        workerDelegationRequestId: worker.id,
+        status: "pending",
+        ...(scenario.checkpoint ? { checkpointHead: scenario.checkpoint } : {}),
+        safeSummary: "Pending",
+      });
+      const manager = managerFor(db, repo, scenario.service);
+
+      manager.recoverOrphanedSessions();
+
+      assert.equal(goals.getById(goal.id)?.status, "blocked", scenario.name);
+      const blockers = (db.prepare("SELECT data FROM events WHERE goal_id = ? ORDER BY rowid").all(goal.id) as
+        Array<{ data: string }>).map((row) => JSON.parse(row.data) as Record<string, unknown>)
+        .filter((data) => data.runtimeEventType === "recovery.reconciliation_blocked");
+      assert.equal(blockers.length, 1, scenario.name);
+      assert.equal(blockers[0]?.blockerType, scenario.blockerType, scenario.name);
+      assert.equal(recoveryEvents(db).length, 0, scenario.name);
+
+      let providerStarts = 0;
+      await manager.resumeInterruptedGoal({
+        goalId: goal.id,
+        providerId: "mock",
+        modelLabel: "m",
+        adapter: {
+          providerId: "mock",
+          async detectCapabilities() { return CAPS; },
+          async startSession() {
+            providerStarts += 1;
+            throw new Error("blocked Goal must not start a provider");
+          },
+        },
+      });
+      assert.equal(providerStarts, 0, scenario.name);
+      db.close();
+    });
+  }
 });
