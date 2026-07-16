@@ -190,13 +190,14 @@ test("recovers orphaned non-terminal sessions as stalled visible state", () => {
   assert.deepEqual(recovered.map((session) => session.id), [running.id]);
   assert.equal(agentSessionRepo.getSession(running.id)?.lifecycleState, "stalled");
   assert.equal(agentSessionRepo.getSession(completed.id)?.lifecycleState, "completed");
+  // The goal is reconciled to a resumable `interrupted` state, not force-failed.
   const recoveryEvent = eventRepo
     .listForGoal(goal.id)
-    .find((event) => event.type === "error" && event.data.sessionId === running.id);
+    .find((event) => event.data.runtimeEventType === "recovery.reconciled" && event.data.sessionId === running.id);
   assert.ok(recoveryEvent);
-  assert.match(recoveryEvent.message, /lost adapter control/i);
+  assert.match(recoveryEvent.message, /reconciled/i);
   assert.equal(runRepo.getById(run.id)?.status, "failed");
-  assert.equal(goalRepo.getById(goal.id)?.status, "failed");
+  assert.equal(goalRepo.getById(goal.id)?.status, "interrupted");
   assert.deepEqual(publishedEventIds, eventRepo.listForGoal(goal.id).map((event) => event.id));
 
   db.close();

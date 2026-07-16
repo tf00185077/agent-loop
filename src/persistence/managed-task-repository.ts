@@ -125,6 +125,7 @@ export interface ManagedTaskRepository {
   listCriteria(taskId: string): ManagedTaskCriterionRecord[];
   beginAttempt(taskId: string, workerDelegationRequestId: string, runId?: string | null): number;
   transition(taskId: string, status: ManagedTaskStatus, options: ManagedTaskTransitionOptions): ManagedTaskRecord;
+  resetTaskForReDispatch(taskId: string, runId?: string | null): ManagedTaskRecord;
   recordExecutorEvidence(input: RecordExecutorEvidenceInput): ManagedTaskRecord;
   listCriterionResults(workerDelegationRequestId: string): ManagedCriterionResultRecord[];
   beginReview(input: {
@@ -312,6 +313,30 @@ export function createManagedTaskRepository(
     },
     transition(taskId, status, transitionOptions) {
       return transitionTransaction(taskId, status, transitionOptions);
+    },
+    resetTaskForReDispatch(taskId, runId) {
+      return db.transaction(() => {
+        const task = requireTask(db, taskId);
+        const now = clock();
+        // Reset to a re-dispatchable state without charging the interrupted,
+        // never-reviewed attempt against the retry/narrowing budget: decrement
+        // attempt_count by the one in-flight attempt and preserve the frozen
+        // criteria and substantive rejection count.
+        db.prepare(`
+          UPDATE managed_tasks
+          SET status = 'registered',
+              attempt_count = CASE WHEN attempt_count > 0 THEN attempt_count - 1 ELSE 0 END,
+              last_safe_summary = ?, updated_at = ?
+          WHERE id = ?
+        `).run("Task reset for re-dispatch after restart recovery.", now, taskId);
+        insertAuditEvent(db, {
+          goalId: task.goalId, runId: runId ?? null,
+          message: "Task reset for re-dispatch after restart recovery.",
+          runtimeEventType: "managed_task.reset_for_redispatch",
+          data: { taskId }, now,
+        });
+        return requireTask(db, taskId);
+      })();
     },
     recordExecutorEvidence(input) {
       return db.transaction(() => {

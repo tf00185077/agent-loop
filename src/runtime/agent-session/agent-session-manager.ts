@@ -168,36 +168,25 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
 
     recoverOrphanedSessions() {
       const recovered: AgentRuntimeSession[] = [];
-      const interruptedGoals = new Set<string>();
+      const reconciledGoals = new Set<string>();
+      const worktreeService = deps.worktreeService ?? createGitWorktreeService();
+      const deliveryService = deps.managedDeliveryService ?? createManagedDeliveryService();
       for (const session of deps.agentSessionRepo.listNonTerminalSessions()) {
-        if (!interruptedGoals.has(session.goalId)) {
-          deps.managedTaskRepo?.interruptNonterminalIntegrations(
-            session.goalId,
-            "Integration attempt interrupted because backend adapter control was lost during restart.",
-            session.runId,
-          );
-          interruptedGoals.add(session.goalId);
-        }
+        // The adapter process is gone; this session and its run attempt are over.
         const stalled = deps.agentSessionRepo.updateLifecycleState(session.id, "stalled");
-        const finishedAt = new Date().toISOString();
         deps.runRepo.updateStatus(session.runId, "failed", {
-          finishedAt,
+          finishedAt: new Date().toISOString(),
           error: "Managed agent session lost adapter control.",
         });
-        deps.goalRepo.updateStatus(session.goalId, "failed", { completedAt: finishedAt });
-        deps.eventRepo.create({
-          goalId: session.goalId,
-          runId: session.runId,
-          type: "error",
-          message: "Managed agent session lost adapter control during backend restart.",
-          data: {
-            sessionId: session.id,
-            provider: session.providerId,
-            model: session.modelLabel,
-            recoveryState: "stalled",
-          },
-        });
         recovered.push(stalled);
+        // Reconcile each goal once into a clean, resumable `interrupted` state
+        // instead of force-failing it. Skip goals already reconciled (idempotent
+        // across restarts) or already terminal.
+        if (reconciledGoals.has(session.goalId)) continue;
+        reconciledGoals.add(session.goalId);
+        const goal = deps.goalRepo.getById(session.goalId);
+        if (goal && ["interrupted", "completed", "failed", "blocked", "cancelled"].includes(goal.status)) continue;
+        reconcileInterruptedGoal(deps, deliveryService, worktreeService, state, session);
       }
 
       return recovered;
@@ -270,6 +259,75 @@ async function deliverControl(
   deliveredControls.add(key);
   await deliver(handle);
   return true;
+}
+
+/**
+ * Reconcile one restart-interrupted goal into a clean, resumable `interrupted`
+ * state (Phase 3a): reset pending deliveries to their recorded checkpoint,
+ * interrupt in-flight worker attempts and reset their tasks, discard their
+ * worktrees, interrupt non-terminal integrations, and record durable evidence.
+ * Does not resume execution — that is Phase 3b.
+ */
+function reconcileInterruptedGoal(
+  deps: AgentSessionManagerDeps,
+  deliveryService: ManagedDeliveryService,
+  worktreeService: WorktreeService,
+  state: SupervisorState,
+  session: AgentRuntimeSession,
+): void {
+  const { goalId, runId } = session;
+  let deliveriesReset = 0;
+  let attemptsInterrupted = 0;
+  let tasksReset = 0;
+
+  // 1. Reset every pending delivery to its recorded clean checkpoint so git and
+  //    the ledger agree and no candidate is double-applied or left unvalidated.
+  for (const delivery of deps.managedTaskRepo?.listPendingDeliveries(goalId) ?? []) {
+    if (!delivery.checkpointHead || !deliveryService.reconcilePendingDelivery) continue;
+    deliveryService.reconcilePendingDelivery({ supervisorCwd: state.supervisorCwd, checkpointHead: delivery.checkpointHead });
+    deliveriesReset += 1;
+  }
+
+  // 2. Interrupt in-flight worker attempts, reset their tasks for re-dispatch,
+  //    and discard their (never-committed) worktrees.
+  for (const attempt of deps.agentSessionRepo.listInFlightWorkerAttemptsForGoal(goalId)) {
+    deps.agentSessionRepo.detachDelegationRequest(
+      attempt.delegationRequestId,
+      { kind: "cancelled", safeSummary: "Worker attempt interrupted for restart recovery." },
+      "Worker attempt interrupted because backend adapter control was lost during restart.",
+    );
+    attemptsInterrupted += 1;
+    if (attempt.taskId && deps.managedTaskRepo?.getTask(attempt.taskId)) {
+      deps.managedTaskRepo.resetTaskForReDispatch(attempt.taskId, runId);
+      tasksReset += 1;
+    }
+    const path = attempt.worktree?.path;
+    if (path) void worktreeService.removeWorktree({ parentCwd: state.supervisorCwd, path }).catch(() => undefined);
+  }
+
+  // 3. Interrupt non-terminal integrations (existing recovery behavior).
+  deps.managedTaskRepo?.interruptNonterminalIntegrations(
+    goalId,
+    "Integration attempt interrupted because backend adapter control was lost during restart.",
+    runId,
+  );
+
+  // 4. Leave the goal in a clean, resumable, non-terminal interrupted state.
+  deps.goalRepo.updateStatus(goalId, "interrupted");
+  deps.eventRepo.create({
+    goalId,
+    runId,
+    type: "agent.progress",
+    message: "Restart-interrupted goal reconciled to a resumable state.",
+    data: {
+      runtimeEventType: "recovery.reconciled",
+      sessionId: session.id,
+      deliveriesReset,
+      attemptsInterrupted,
+      tasksReset,
+      recoveryState: "interrupted",
+    },
+  });
 }
 
 interface SupervisorState {

@@ -98,6 +98,13 @@ export interface TerminalGoalWorktree {
   worktree: AgentRuntimeWorktreeMetadata;
 }
 
+export interface InFlightWorkerAttempt {
+  delegationRequestId: string;
+  taskId: string | null;
+  childSessionId: string | null;
+  worktree: AgentRuntimeWorktreeMetadata | null;
+}
+
 export interface AgentSessionRepository {
   createSession(input: CreateAgentRuntimeSessionInput): AgentRuntimeSession;
   updateSessionWorktree(id: string, worktree: AgentRuntimeWorktreeMetadata | null): AgentRuntimeSession;
@@ -106,6 +113,7 @@ export interface AgentSessionRepository {
   listSessionsForGoal(goalId: string): AgentRuntimeSession[];
   listNonTerminalSessions(): AgentRuntimeSession[];
   listWorktreesForTerminalGoals(): TerminalGoalWorktree[];
+  listInFlightWorkerAttemptsForGoal(goalId: string): InFlightWorkerAttempt[];
   recordCommand(input: CreateAgentRuntimeCommandInput): AgentRuntimeCommandRecord;
   createApprovalRequest(input: CreateAgentRuntimeApprovalInput): AgentRuntimeApprovalRequest;
   resolveApprovalRequest(
@@ -416,6 +424,35 @@ export function createAgentSessionRepository(
             sessionId: value.session_id,
             goalId: value.goal_id,
             worktree: JSON.parse(value.worktree) as AgentRuntimeWorktreeMetadata,
+          };
+        });
+    },
+
+    listInFlightWorkerAttemptsForGoal(goalId) {
+      return db
+        .prepare(`
+          SELECT d.id AS delegation_request_id, d.task_id AS task_id,
+                 d.child_session_id AS child_session_id, cs.worktree AS worktree
+          FROM agent_delegation_requests d
+          JOIN agent_sessions ps ON ps.id = d.parent_session_id
+          LEFT JOIN agent_sessions cs ON cs.id = d.child_session_id
+          WHERE ps.goal_id = ? AND d.role = 'worker'
+            AND d.status IN ('requested', 'accepted', 'running')
+          ORDER BY d.created_at ASC, d.rowid ASC
+        `)
+        .all(goalId)
+        .map((row) => {
+          const value = row as {
+            delegation_request_id: string;
+            task_id: string | null;
+            child_session_id: string | null;
+            worktree: string | null;
+          };
+          return {
+            delegationRequestId: value.delegation_request_id,
+            taskId: value.task_id,
+            childSessionId: value.child_session_id,
+            worktree: value.worktree ? (JSON.parse(value.worktree) as AgentRuntimeWorktreeMetadata) : null,
           };
         });
     },

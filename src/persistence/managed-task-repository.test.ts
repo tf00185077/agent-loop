@@ -339,3 +339,19 @@ test("listPendingDeliveries returns only pending rows for the goal", () => {
   assert.equal(pending[0]?.taskId, "task-1");
   db.close();
 });
+
+test("resetTaskForReDispatch resets to registered without charging the interrupted attempt", () => {
+  const { db, goalId, delegationId } = managedFixture();
+  const tasks = createManagedTaskRepository(db, { now: fixedNow });
+  tasks.registerTasks({ goalId, tasks: [{ id: "task-1", title: "T", acceptance: [{ id: "A1", text: "x" }] }] });
+  tasks.beginAttempt("task-1", delegationId);
+  assert.equal(tasks.getTask("task-1")?.attemptCount, 1);
+  assert.equal(tasks.getTask("task-1")?.status, "delegated");
+
+  const reset = tasks.resetTaskForReDispatch("task-1");
+  assert.equal(reset.status, "registered");
+  assert.equal(reset.attemptCount, 0);
+  assert.equal(reset.substantiveRejectionCount, 0);
+  assert.equal(tasks.listCriteria("task-1").length, 1);
+  db.close();
+});

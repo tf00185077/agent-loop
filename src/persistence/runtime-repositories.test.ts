@@ -566,3 +566,45 @@ test("listWorktreesForTerminalGoals returns only worktrees of terminal goals", (
   assert.equal(found[0]?.worktree.path, "/wt/terminal");
   db.close();
 });
+
+test("listInFlightWorkerAttemptsForGoal returns only in-flight worker delegations", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goals = createGoalRepository(db);
+  const runs = createRunRepository(db);
+  const sessions = createAgentSessionRepository(db);
+  const caps = { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+  const goal = goals.create({ title: "G", description: "d" });
+  const run = runs.create({ goalId: goal.id, provider: "mock", model: "m" });
+  const parent = sessions.createSession({
+    goalId: goal.id, runId: run.id, providerId: "mock", modelLabel: "m", lifecycleState: "running", capabilities: caps,
+  });
+
+  // A completed worker delegation (must be terminal before the next is created,
+  // because a supervisor allows only one active delegation at a time).
+  const doneReq = sessions.createDelegationRequest({ parentSessionId: parent.id, role: "worker", promptSummary: "t2", taskId: "task-2" });
+  const doneChildRun = runs.create({ goalId: goal.id, provider: "mock", model: "m" });
+  const doneChild = sessions.createSession({
+    goalId: goal.id, runId: doneChildRun.id, providerId: "mock", modelLabel: "m", lifecycleState: "completed", capabilities: caps,
+  });
+  sessions.acceptDelegationRequest(doneReq.id);
+  sessions.startDelegationRequest(doneReq.id, doneChild.id);
+  sessions.completeDelegationRequest(doneReq.id, { kind: "success", safeSummary: "done" });
+
+  // The current in-flight worker delegation with a child worktree.
+  const inflightReq = sessions.createDelegationRequest({ parentSessionId: parent.id, role: "worker", promptSummary: "t1", taskId: "task-1" });
+  const childRun = runs.create({ goalId: goal.id, provider: "mock", model: "m" });
+  const child = sessions.createSession({
+    goalId: goal.id, runId: childRun.id, providerId: "mock", modelLabel: "m", lifecycleState: "running", capabilities: caps,
+    worktree: { path: "/wt/x", label: "child-x" },
+  });
+  sessions.acceptDelegationRequest(inflightReq.id);
+  sessions.startDelegationRequest(inflightReq.id, child.id);
+
+  const inflight = sessions.listInFlightWorkerAttemptsForGoal(goal.id);
+  assert.equal(inflight.length, 1);
+  assert.equal(inflight[0]?.delegationRequestId, inflightReq.id);
+  assert.equal(inflight[0]?.taskId, "task-1");
+  assert.equal(inflight[0]?.childSessionId, child.id);
+  assert.equal(inflight[0]?.worktree?.path, "/wt/x");
+  db.close();
+});

@@ -3,6 +3,7 @@ export type GoalStatus =
   | "running"
   | "waiting_user"
   | "blocked"
+  | "interrupted"
   | "completed"
   | "failed"
   | "cancelled";
