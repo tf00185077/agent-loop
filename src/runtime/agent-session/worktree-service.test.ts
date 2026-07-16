@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { createGitWorktreeService } from "./worktree-service.js";
 
 test("creates isolated child git worktrees with safe labels", async () => {
   const calls: Array<{ cwd: string; args: string[] }> = [];
+  const parentCwd = join(mkdtempSync(join(tmpdir(), "auto-agent-parent-repo-")), "repo");
   const baseDir = join(mkdtempSync(join(tmpdir(), "auto-agent-worktree-service-")), "children");
   const service = createGitWorktreeService({
     baseDir,
@@ -18,7 +19,7 @@ test("creates isolated child git worktrees with safe labels", async () => {
   });
 
   const metadata = await service.createChildWorktree({
-    parentCwd: "C:\\repo",
+    parentCwd,
     childSessionId: "session:one",
   });
 
@@ -26,7 +27,7 @@ test("creates isolated child git worktrees with safe labels", async () => {
   assert.equal(metadata.path, join(baseDir, "child-session-one"));
   assert.deepEqual(calls, [
     {
-      cwd: "C:\\repo",
+      cwd: resolve(parentCwd),
       args: ["worktree", "add", "--detach", metadata.path, "HEAD"],
     },
   ]);
@@ -51,6 +52,7 @@ test("surfaces sanitized git worktree failures", async () => {
 
 test("creates an integration worktree at an exact checkpoint and removes it idempotently", async () => {
   const calls: Array<{ cwd: string; args: string[] }> = [];
+  const parentCwd = join(mkdtempSync(join(tmpdir(), "auto-agent-parent-repo-")), "repo");
   const baseDir = join(mkdtempSync(join(tmpdir(), "auto-agent-integration-worktree-")), "children");
   const service = createGitWorktreeService({
     baseDir,
@@ -61,16 +63,16 @@ test("creates an integration worktree at an exact checkpoint and removes it idem
   });
 
   const metadata = await service.createIntegrationWorktree!({
-    parentCwd: "C:\\repo",
+    parentCwd,
     integrationAttemptId: "integration:one",
     checkpointHead: "abc123",
   });
-  await service.removeWorktree!({ parentCwd: "C:\\repo", path: metadata.path });
+  await service.removeWorktree!({ parentCwd, path: metadata.path });
 
   assert.equal(metadata.label, "integration-integration-one");
   assert.deepEqual(calls, [
-    { cwd: "C:\\repo", args: ["worktree", "add", "--detach", metadata.path, "abc123"] },
-    { cwd: "C:\\repo", args: ["worktree", "remove", "--force", metadata.path] },
-    { cwd: "C:\\repo", args: ["worktree", "prune"] },
+    { cwd: resolve(parentCwd), args: ["worktree", "add", "--detach", metadata.path, "abc123"] },
+    { cwd: resolve(parentCwd), args: ["worktree", "remove", "--force", metadata.path] },
+    { cwd: resolve(parentCwd), args: ["worktree", "prune"] },
   ]);
 });

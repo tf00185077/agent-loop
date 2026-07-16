@@ -234,7 +234,10 @@ function fakeCodexWithStdoutProgress(progressText: string, response: string): st
     scriptPath,
     `#!/usr/bin/env node
 import { writeFileSync } from "node:fs";
-process.stdout.write(${JSON.stringify(progressText)});
+process.stdout.write(JSON.stringify({
+  type: "item.completed",
+  item: { type: "reasoning", text: ${JSON.stringify(progressText)} },
+}) + "\\n");
 let stdin = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { stdin += chunk; });
@@ -245,7 +248,7 @@ process.stdin.on("end", () => {
 `,
   );
   chmodSync(scriptPath, 0o755);
-  return scriptPath;
+  return commandPathForScript(scriptPath, "fake-codex-progress");
 }
 
 function fakeCodexThatNeverExits(commandName = "fake-codex-hang"): string {
@@ -310,10 +313,10 @@ test("provider omits --model for blank, legacy, and mock labels", skipOnWindows,
   }
 });
 
-test("provider forwards stdout chunks to onProgress while still using --output-last-message for the final text", skipOnWindows, async () => {
+test("provider forwards stdout chunks to onProgress while still using --output-last-message for the final text", async () => {
   const provider = createCodexCliProvider({
     config: {
-      commandPath: fakeCodexWithStdoutProgress("reasoning: thinking about it...", "final answer"),
+      commandPath: fakeCodexWithStdoutProgress("thinking about it...", "final answer"),
       modelLabel: "gpt-5-codex",
       timeoutMs: 10_000,
     },
@@ -323,7 +326,7 @@ test("provider forwards stdout chunks to onProgress while still using --output-l
   const output = await provider.complete({
     ...input,
     onProgress: (chunk) => {
-      if (typeof chunk === "string") progressChunks.push(chunk);
+      progressChunks.push(typeof chunk === "string" ? chunk : chunk.message);
     },
   });
 
