@@ -41,6 +41,20 @@ export interface AgentSessionSnapshot {
   delegationRequests: AgentRuntimeDelegationRequest[];
   mergeOutcomes?: ReviewMergeOutcomeReadModel[];
   managedTasks?: ManagedTaskReadModel[];
+  planningEpochs?: PlanningEpochReadModel[];
+}
+
+export interface PlanningEpochReadModel {
+  sequence: number;
+  rationale: string | null;
+  status: "executing" | "reassessing" | "gaps_found" | "completed" | "blocked";
+  changes: Array<{ id: string; title: string; status: string }>;
+  reassessment: {
+    goalSatisfied: boolean;
+    evidence: string[];
+    remainingGaps: string[];
+    nextEpochRationale: string | null;
+  } | null;
 }
 
 export interface ManagedTaskReadModel {

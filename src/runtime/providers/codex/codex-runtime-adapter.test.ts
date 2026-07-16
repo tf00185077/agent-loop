@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { argv0 } from "node:process";
@@ -313,7 +313,9 @@ test("starts Codex exec JSONL process and completes from streamed final message"
   assert.equal(captured.args[modelIndex + 1], "gpt-5-codex");
   assert.equal(captured.args.at(-1), "-");
   assert.equal(captured.stdin, "Run from process");
-  assert.equal(captured.cwd, cwd);
+  // realpath both sides: macOS reports the child cwd through /private/var
+  // while mkdtemp returns the /var symlink form.
+  assert.equal(realpathSync(captured.cwd), realpathSync(cwd));
 });
 
 test("maps Codex process startup or non-zero exit into a failed managed session", async () => {

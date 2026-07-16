@@ -38,27 +38,47 @@ export function rehydrateChangeRegistry(
   goalId: string,
   events: Event[],
 ): void {
-  const planEvent = events.find((event) => event.data.runtimeEventType === "supervisor.change_plan");
-  const changePlan = planEvent?.data.changePlan;
-  if (!Array.isArray(changePlan) || changePlan.length === 0) return;
-
-  const gate = changeRegistry.registerPlan(changePlan as ManagedChangePlanEntry[]);
-  if (!gate.ok) return;
-
-  // Re-link tasks to their change from the durable task rows.
-  for (const task of managedTaskRepo.listForGoal(goalId)) {
-    if (task.changeId) changeRegistry.registerTask(task.changeId, task.id);
-  }
-
-  // Replay the durable change transition events in chronological order.
+  // Replay plans, reassessments, and change transitions in one chronological
+  // pass: later epochs are only admissible after their unsatisfied
+  // reassessment, exactly as they were recorded live.
   for (const event of events) {
     const type = event.data.runtimeEventType;
+    if (type === "supervisor.change_plan") {
+      const changePlan = event.data.changePlan;
+      if (!Array.isArray(changePlan) || changePlan.length === 0) continue;
+      if (!changeRegistry.hasPlan()) {
+        changeRegistry.registerPlan(changePlan as ManagedChangePlanEntry[]);
+      } else {
+        changeRegistry.registerNextEpoch(changePlan as ManagedChangePlanEntry[]);
+      }
+      continue;
+    }
+    if (type === "supervisor.reassessment") {
+      changeRegistry.recordReassessment({
+        goalSatisfied: event.data.goalSatisfied === true,
+        evidence: replayedStringList(event.data.evidence),
+        remainingGaps: replayedStringList(event.data.remainingGaps),
+        nextEpochRationale:
+          typeof event.data.nextEpochRationale === "string" ? event.data.nextEpochRationale : null,
+      });
+      continue;
+    }
     const changeId = event.data.changeId;
     if (typeof changeId !== "string") continue;
     if (type === "change.spec_approved") changeRegistry.markSpecApproved(changeId);
     else if (type === "change.archived") changeRegistry.markArchived(changeId);
     else if (type === "change.blocked") changeRegistry.markBlocked(changeId);
   }
+  if (!changeRegistry.hasPlan()) return;
+
+  // Re-link tasks to their change from the durable task rows.
+  for (const task of managedTaskRepo.listForGoal(goalId)) {
+    if (task.changeId) changeRegistry.registerTask(task.changeId, task.id);
+  }
+}
+
+function replayedStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
 function toTaskStatus(status: ManagedTaskStatus): TaskStatus {

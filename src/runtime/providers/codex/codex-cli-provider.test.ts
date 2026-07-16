@@ -56,7 +56,11 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { stdin += chunk; });
 process.stdin.on("end", () => {
   const outputIndex = process.argv.indexOf("--output-last-message");
-  writeFileSync(process.argv[outputIndex + 1], ${JSON.stringify(response)});
+  // Guard the flag lookup: indexOf() === -1 would resolve to argv[0] (the
+  // node executable) and clobber it with the fake response.
+  if (outputIndex >= 0 && process.argv[outputIndex + 1]) {
+    writeFileSync(process.argv[outputIndex + 1], ${JSON.stringify(response)});
+  }
   writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
 });
 `,
@@ -243,7 +247,11 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { stdin += chunk; });
 process.stdin.on("end", () => {
   const outputIndex = process.argv.indexOf("--output-last-message");
-  writeFileSync(process.argv[outputIndex + 1], ${JSON.stringify(response)});
+  // Guard the flag lookup: indexOf() === -1 would resolve to argv[0] (the
+  // node executable) and clobber it with the fake response.
+  if (outputIndex >= 0 && process.argv[outputIndex + 1]) {
+    writeFileSync(process.argv[outputIndex + 1], ${JSON.stringify(response)});
+  }
 });
 `,
   );

@@ -9,6 +9,7 @@ import {
   startGoal,
   Goal,
   type AgentSessionSnapshot,
+  type PlanningEpochReadModel,
   type StartGoalProviderOverride,
 } from "./api";
 import {
@@ -265,6 +266,9 @@ export function GoalDetailPanel({
           )}
         </section>
       )}
+      {(agentSessionSnapshot?.planningEpochs?.length ?? 0) > 0 && (
+        <PlanningEpochBoard epochs={agentSessionSnapshot!.planningEpochs!} />
+      )}
       {(agentSessionSnapshot?.managedTasks?.length ?? 0) > 0 && (
         <section style={{ marginTop: 12, marginBottom: 20 }}>
           <h3 style={{ fontSize: 16, margin: "0 0 8px" }}>Managed task state</h3>
@@ -291,6 +295,60 @@ export function GoalDetailPanel({
         </section>
       )}
     </div>
+  );
+}
+
+const EPOCH_STATUS_LABELS: Record<PlanningEpochReadModel["status"], string> = {
+  executing: "executing",
+  reassessing: "awaiting reassessment",
+  gaps_found: "gaps found — next epoch",
+  completed: "completed",
+  blocked: "blocked",
+};
+
+function PlanningEpochBoard({ epochs }: { epochs: PlanningEpochReadModel[] }) {
+  return (
+    <section style={{ marginTop: 12, marginBottom: 20 }}>
+      <h3 style={{ fontSize: 16, margin: "0 0 8px" }}>Planning epochs</h3>
+      {epochs.map((epoch) => (
+        <div
+          key={epoch.sequence}
+          style={{ border: "1px solid #ddd", borderRadius: 6, padding: 10, marginBottom: 8 }}
+        >
+          <div style={{ fontWeight: 600, fontSize: 14 }}>
+            {`Epoch ${epoch.sequence} — ${EPOCH_STATUS_LABELS[epoch.status]}`}
+          </div>
+          {epoch.rationale && (
+            <div style={{ color: "#666", fontSize: 12 }}>{`Why this epoch: ${epoch.rationale}`}</div>
+          )}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+            {epoch.changes.map((change) => (
+              <span
+                key={change.id}
+                style={{ border: "1px solid #ccc", borderRadius: 4, padding: "2px 8px", fontSize: 13 }}
+                title={change.title}
+              >
+                {`${change.id} · ${change.status}`}
+              </span>
+            ))}
+          </div>
+          {epoch.reassessment && (
+            <div style={{ marginTop: 6, fontSize: 13 }}>
+              {epoch.reassessment.goalSatisfied
+                ? "Reassessment: goal satisfied"
+                : "Reassessment: gaps remain"}
+              {epoch.reassessment.remainingGaps.length > 0 && (
+                <ul style={{ margin: "4px 0 0 18px" }}>
+                  {epoch.reassessment.remainingGaps.map((gap) => (
+                    <li key={gap}>{gap}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </section>
   );
 }
 

@@ -36,22 +36,24 @@
 
 ## 4. Rehydration and prompt contract
 
-- [ ] 4.1 TDD chronological multi-epoch replay in
+- [x] 4.1 TDD chronological multi-epoch replay in
       `supervisor-state-rehydration.ts` (plan → transitions → reassessment →
       next plan), with back-compat for events lacking epoch fields.
-- [ ] 4.2 TDD supervisor prompt updates: reassessment rule + control example in
+- [x] 4.2 TDD supervisor prompt updates: reassessment rule + control example in
       the contract, epoch-aware change-history rendering.
 
 ## 5. Projection and dashboard
 
-- [ ] 5.1 TDD `projectPlanningEpochs(events)` (new module): epochs with derived
+- [x] 5.1 TDD `projectPlanningEpochs(events)` (new module): epochs with derived
       status, member changes with statuses, reassessment results.
-- [ ] 5.2 Expose `planningEpochs` on `GET /api/goals/:id/agent-session` (route
+- [x] 5.2 Expose `planningEpochs` on `GET /api/goals/:id/agent-session` (route
       test) and render the epoch board in `GoalDetail.tsx` (component test).
 
 ## 6. Verification
 
-- [ ] 6.1 Full `npm test` + `npm run typecheck` green.
-- [ ] 6.2 Live smoke via the API (mock provider): multi-epoch flow — epoch 1
-      archived → reassessment(false) → epoch 2 → reassessment(true) →
-      completion; record evidence in `verification.md`.
+- [x] 6.1 Full `npm test` + `npm run typecheck` green.
+- [x] 6.2 Live smoke via the API (mock provider) for flat-goal regression and
+      snapshot shape; the multi-epoch flow (epoch 1 archived →
+      reassessment(false) → epoch 2 → reassessment(true) → completion) is
+      exercised end-to-end on real SQLite by the scripted manager tests;
+      evidence recorded in `verification.md`.
