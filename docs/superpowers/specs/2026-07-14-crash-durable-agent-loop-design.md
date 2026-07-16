@@ -1,10 +1,16 @@
 # Crash-Durable Agent Loop — Diagnosis & Recovery Roadmap
 
-Status: **living roadmap.** Phase 0 is proposed as an OpenSpec change
-(`make-async-runtime-failures-durable`). Phases 1–4 are intentionally NOT yet
-written as OpenSpec changes — each is opened just-in-time after the prior one
-lands, so its spec reflects the real post-implementation code state instead of
-stale assumptions.
+Status: **complete.** All phases (0, 1, 2, 3a, 3b, 4a, 4b) have shipped as
+OpenSpec changes — proposed → applied (TDD) → verified → archived, with delta
+specs synced into `openspec/specs/`. A Codex-backed goal now survives a backend
+restart: it reconciles to a clean `interrupted` state and resumes
+`running`, replaying its prior Codex transcript. The one remaining check is
+manual and needs a logged-in Codex CLI (CI cannot run it): start a Codex goal,
+`kill` the backend mid-run, restart, and confirm the goal resumes with a
+`recovery.resumed` event carrying `providerResume: true`.
+
+Each phase was opened just-in-time after the prior one landed, so its spec
+reflected the real post-implementation code state instead of stale assumptions.
 
 ## Motivation
 
@@ -134,28 +140,28 @@ Floor first, resume last. One OpenSpec change per phase; each independently
 shippable, TDD'd, and committed per task group. Later phases are opened
 just-in-time so their specs match reality.
 
-### Phase 0 — Make async runtime failures durable  *(proposed)*
+### Phase 0 — Make async runtime failures durable  *(✅ shipped)*
 Closes the silent-failure holes: `runtime.run().catch(console.error)` and
 `void consumeChildEvents`. Any unhandled async failure becomes a durable event +
 status transition. **Visibility only, no recovery.** Fully decoupled from the
 rest. → OpenSpec change `make-async-runtime-failures-durable`.
 
-### Phase 1 — Write-ahead delivery + git reconciliation
+### Phase 1 — Write-ahead delivery + git reconciliation  *(✅ shipped)*
 Split `deliver()` so a delivery `pending` row (candidate SHA + checkpoint) is
 written before the cherry-pick; add `reconcilePendingDelivery(candidateSha)` that
 consults git. Same for the integration path. Fixes hotspots #1/#2.
 Verify: crash between pending and outcome must not double-commit.
 
-### Phase 2 — Reconcile orphaned worktrees
+### Phase 2 — Reconcile orphaned worktrees  *(✅ shipped)*
 On startup, enumerate worktrees recorded for non-terminal/failed goals and clean
 orphans; replaces the manual-prune note. Fixes hotspot #3.
 Verify: create worktree, simulate crash, assert recovery cleans it.
 
-### Phase 3 — Recover goals by reconcile-and-continue  *(core; split 3a + 3b)*
+### Phase 3 — Recover goals by reconcile-and-continue  *(✅ shipped; split 3a + 3b)*
 The core recovery is split into two changes so the trickiest correctness
 (git/ledger/disk reconciliation) is isolated and shipped before execution resume.
 
-- **Phase 3a — Reconcile in-flight state to clean/resumable (no resume yet).**
+- **Phase 3a — Reconcile in-flight state to clean/resumable (no resume yet).** *(✅ shipped)*
   Replace `recoverOrphanedSessions` force-fail-all with a per-goal reconciler
   (recovery table above): reconcile pending deliveries/integrations vs git (wire
   Phase 1's `reconcilePendingDelivery` + `listPendingDeliveries`); interrupt
@@ -163,7 +169,7 @@ The core recovery is split into two changes so the trickiest correctness
   their tasks to a re-dispatchable state. Outcome: a crashed goal is left in a
   clean, consistent, resumable durable state (ledger + git + disk agree) — but is
   not yet auto-continued. Isolates the hardest correctness; independently testable.
-- **Phase 3b — Resume execution from the durable projection.** After 3a's
+- **Phase 3b — Resume execution from the durable projection.** *(✅ shipped)* After 3a's
   reconcile, restart the supervisor for each reconciled goal with a re-projected
   continuation prompt (`projectManagedTaskContext`), rebuilding any needed
   in-memory registry state from durable rows, instead of failing the goal. This is
@@ -172,22 +178,40 @@ The core recovery is split into two changes so the trickiest correctness
 Depends on 0–2. Together these fix the headline defect (crash = permanent goal
 failure).
 
-### Phase 4 — Supervisor session resume  *(optional quality layer)*
-Persist the provider-native session id (`agent_sessions` new column); wire the
-managed adapter to record it; on recovery prefer resume for the supervisor when
-the provider supports it, always layered on top of the Phase 3 projection.
-Best-effort: managed-mode resume is capability-gated (Codex) or unsupported
-(Claude v1), so the projection path stays primary. Pure optimization; last.
+### Phase 4 — Provider-native session resume  *(✅ shipped; split 4a + 4b)*
+The quality layer on top of 3b's projection floor, split so the testable
+foundation ships separately from the provider-specific, real-CLI-verified wiring.
 
-## North-star acceptance (spans Phases 1–3)
+- **Phase 4a — Persist the provider-native session id.** *(✅ shipped)* Capture the
+  provider session id (Codex from its JSONL identity) on a session event's
+  metadata and persist it on a new `agent_sessions.provider_session_id` column.
+  Provider-agnostic, CI-verified. Claude is a no-op until its adapter uses
+  stream-json.
+- **Phase 4b — Wire true Codex resume.** *(✅ shipped)* When an interrupted goal has a
+  persisted session id and the Codex adapter reports resume support (derived from
+  the real `codex exec resume` subcommand), start the resumed session with `codex
+  exec resume <id> … -` (verified against the real CLI v0.144); the continuation
+  prompt still carries the durable projection so state truth is re-asserted. Falls
+  back to a fresh continuation when unsupported. Command syntax + capability +
+  wiring are unit-tested; the full transcript replay needs a logged-in Codex CLI
+  (manual, see the north-star).
 
-> Start a goal → `kill -9` the backend mid-delegation/mid-delivery → restart →
-> observe it reconcile all three worlds (ledger / disk / process), discard partial
-> work, and continue from the durable projection to completion — with no duplicate
-> git commit and no orphaned worktree.
+## North-star acceptance
 
-When this live smoke passes, the system has moved from "crash = death" to the
-"loop until deliverable" vision.
+**Automated (CI, ✅ green):** the reconcile-then-resume path is proven end-to-end
+against real git + real SQLite — a goal goes `running → interrupted → running`,
+deliveries reconcile without double-commit, worktrees are reclaimed, and the
+resumed session is continuation-driven (not a bootstrap).
+
+**Manual (needs a logged-in Codex CLI, not run in CI):** start a Codex-backed goal
+→ `kill` the backend mid-delegation/mid-delivery → restart → observe it reconcile
+all three worlds (ledger / disk / process), discard partial work, and **resume the
+prior Codex transcript** via `codex exec resume`, continuing to completion — with
+no duplicate git commit and no orphaned worktree, and a `recovery.resumed` event
+carrying `providerResume: true`.
+
+With both, the system has moved from "crash = death" to the "loop until
+deliverable" vision — surviving a restart *and* keeping its reasoning context.
 
 ## Future candidates (not scheduled)
 
