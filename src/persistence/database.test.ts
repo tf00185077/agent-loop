@@ -34,6 +34,8 @@ test("initializes lifecycle and provider settings tables", () => {
     "agent_sessions",
     "events",
     "goals",
+    "managed_change_archive_operations",
+    "managed_goal_recovery_authorizations",
     "managed_task_criteria",
     "managed_task_criterion_results",
     "managed_task_deliveries",
@@ -82,6 +84,15 @@ test("initializes lifecycle and provider settings tables", () => {
     "id", "task_id", "worker_delegation_request_id", "integrator_delegation_request_id", "status",
     "checkpoint_head", "original_candidate_commit_sha", "resolved_candidate_commit_sha", "conflict_files",
     "allowed_files", "safe_summary", "created_at", "updated_at",
+  ]);
+  assert.deepEqual(columnNames(db, "managed_change_archive_operations"), [
+    "id", "goal_id", "change_id", "source_path", "target_path", "manifest_digest", "pre_archive_head",
+    "status", "archive_commit_sha", "diagnostics", "operator_authorization_id", "created_at", "updated_at",
+    "finalized_at",
+  ]);
+  assert.deepEqual(columnNames(db, "managed_goal_recovery_authorizations"), [
+    "id", "goal_id", "plan_digest", "plan_json", "database_before_sha", "backup_sha",
+    "workspace_path", "archive_commit_sha", "created_at",
   ]);
   assert.deepEqual(columnNames(db, "runs"), [
     "id",
@@ -361,6 +372,7 @@ test("records fresh managed-task migration baselines and reopen is a no-op", () 
 
   assert.equal(migrationDetails(db, "managed-task-legacy-backfill-v1").mode, "fresh_baseline");
   assert.equal(migrationDetails(db, "managed-task-frozen-contract-repair-v1").mode, "fresh_baseline");
+  assert.equal(migrationDetails(db, "managed-task-split-lineage-repair-v1").mode, "fresh_baseline");
   const firstSnapshot = managedLedgerSnapshot(db);
   db.close();
 
@@ -399,6 +411,7 @@ test("records an initialized clean ledger without changing its authoritative row
     removedCriterionResultCount: 0,
     ambiguousTaskCount: 0,
     ambiguousTasks: [],
+    ambiguousTaskEnforcementIds: [],
   });
   const firstSnapshot = managedLedgerSnapshot(db);
   db.close();
@@ -469,6 +482,7 @@ test("repairs only proven ignored synthetic criteria and preserves blocked lifec
     removedCriterionResultCount: 1,
     ambiguousTaskCount: 0,
     ambiguousTasks: [],
+    ambiguousTaskEnforcementIds: [],
   });
   const firstSnapshot = managedLedgerSnapshot(db);
   db.close();
@@ -500,11 +514,73 @@ test("leaves ambiguous historical criteria fail-closed with a bounded durable di
   assert.equal(diagnostic.repairedTaskCount, 0);
   assert.equal(diagnostic.ambiguousTaskCount, 1);
   assert.deepEqual(diagnostic.ambiguousTasks, [`${fixture.goalId}:ordinary-task`]);
+  assert.deepEqual(diagnostic.ambiguousTaskEnforcementIds, [`${fixture.goalId}:ordinary-task`]);
   const firstSnapshot = managedLedgerSnapshot(db);
   db.close();
 
   db = openDatabase({ path: fixture.path });
   assert.deepEqual(managedLedgerSnapshot(db), firstSnapshot);
+  assert.deepEqual(db.pragma("foreign_key_check"), []);
+  db.close();
+});
+
+test("keeps complete frozen-contract enforcement identity beyond bounded migration diagnostics", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "auto-agent-db-bounded-contract-")), "repair.sqlite");
+  const goalId = "bounded-contract-goal";
+  const logicalTaskIds = Array.from({ length: 51 }, (_, index) =>
+    `ambiguous-${String(index + 1).padStart(3, "0")}`
+  );
+  let db = openDatabase({ path });
+  db.prepare(`
+    INSERT INTO goals (
+      id, title, description, status, priority, agent_type, created_at, updated_at, started_at, completed_at
+    ) VALUES (?, 'Bounded diagnostic', 'Complete enforcement identity', 'running', 'normal', 'managed',
+      't0', 't0', 't0', NULL)
+  `).run(goalId);
+  const insertTask = db.prepare(`
+    INSERT INTO managed_tasks (
+      id, goal_id, logical_task_id, change_id, parent_task_id, title, status, attempt_count,
+      substantive_rejection_count, last_cited_criteria, last_safe_summary, created_at, updated_at
+    ) VALUES (?, ?, ?, 'change-one', NULL, ?, 'accepted', 1, 0, '[]', 'Historical pass', 't1', 't2')
+  `);
+  const insertCriterion = db.prepare(`
+    INSERT INTO managed_task_criteria (
+      task_id, criterion_id, text, outcome, created_at, updated_at
+    ) VALUES (?, 'A1', 'Guessed criterion.', 'PASS', 't1', 't2')
+  `);
+  for (const logicalTaskId of logicalTaskIds) {
+    const databaseTaskId = `db-${logicalTaskId}`;
+    insertTask.run(databaseTaskId, goalId, logicalTaskId, logicalTaskId);
+    insertCriterion.run(databaseTaskId);
+  }
+  db.prepare(`
+    INSERT INTO events (id, goal_id, run_id, step_id, type, message, data, created_at)
+    VALUES ('bounded-contract-event', ?, NULL, NULL, 'agent.progress', 'Ignored restatement', ?, 't2')
+  `).run(goalId, JSON.stringify({
+    runtimeEventType: "supervisor.task_list",
+    taskList: logicalTaskIds.map((id) => ({
+      id,
+      title: id,
+      acceptance: [{ id: "A1", text: "Guessed criterion." }],
+    })),
+    ignoredCriteriaMutations: logicalTaskIds,
+  }));
+  db.prepare("DELETE FROM schema_migrations WHERE name = 'managed-task-frozen-contract-repair-v1'").run();
+  db.close();
+
+  db = openDatabase({ path });
+  const diagnostic = migrationDetails(db, "managed-task-frozen-contract-repair-v1");
+  const targetIdentity = `${goalId}:ambiguous-051`;
+  assert.equal(diagnostic.ambiguousTaskCount, 51);
+  assert.equal((diagnostic.ambiguousTasks as unknown[]).length, 50);
+  assert.equal((diagnostic.ambiguousTasks as string[]).includes(targetIdentity), false);
+  assert.equal((diagnostic.ambiguousTaskEnforcementIds as unknown[]).length, 51);
+  assert.equal((diagnostic.ambiguousTaskEnforcementIds as string[]).includes(targetIdentity), true);
+  assert.deepEqual(db.prepare(`
+    SELECT t.status, c.outcome FROM managed_tasks t
+    JOIN managed_task_criteria c ON c.task_id = t.id
+    WHERE t.goal_id = ? AND t.logical_task_id = 'ambiguous-051'
+  `).get(goalId), { status: "accepted", outcome: "PASS" });
   assert.deepEqual(db.pragma("foreign_key_check"), []);
   db.close();
 });
@@ -540,6 +616,119 @@ test("rolls migration effects and marker back together when marker insertion fai
   assert.equal(recovered.prepare("SELECT COUNT(*) FROM schema_migrations WHERE name = 'managed-task-frozen-contract-repair-v1'").pluck().get(), 1);
   assert.deepEqual(recovered.pragma("foreign_key_check"), []);
   recovered.close();
+});
+
+test("repairs only provable historical split lineages and records bounded ambiguity", () => {
+  const fixture = createSplitLineageMigrationFixture();
+  const rawBefore = new Database(fixture.path, { readonly: true });
+  const lifecycleBefore = goalLifecycleSnapshot(rawBefore as ReturnType<typeof openDatabase>, "goal-terminal");
+  const auditBefore = rawAuditSnapshot(rawBefore as ReturnType<typeof openDatabase>, "goal-terminal");
+  rawBefore.close();
+
+  let db = openDatabase({ path: fixture.path });
+
+  const statuses = db.prepare(`
+    SELECT goal_id, logical_task_id, status FROM managed_tasks
+    WHERE logical_task_id LIKE 'parent-%' ORDER BY goal_id
+  `).all() as Array<{ goal_id: string; logical_task_id: string; status: string }>;
+  assert.deepEqual(statuses.map((row) => [row.goal_id, row.status]), [
+    ["goal-active", "delegated"],
+    ["goal-ambiguous", "rejected"],
+    ["goal-cross-change", "rejected"],
+    ["goal-cycle", "rejected"],
+    ["goal-non-narrower", "rejected"],
+    ["goal-post-evidence-child", "rejected"],
+    ["goal-repairable", "split"],
+    ["goal-terminal", "split"],
+    ["goal-valid", "split"],
+  ]);
+  const details = migrationDetails(db, "managed-task-split-lineage-repair-v1");
+  assert.equal(details.mode, "initialized_repair");
+  assert.equal(details.repairedParentCount, 2);
+  assert.deepEqual(details.repairedParents, ["goal-repairable:parent-repairable", "goal-terminal:parent-terminal"]);
+  assert.deepEqual(details.frozenLineages, [
+    { goalId: "goal-repairable", parentTaskId: "parent-repairable", taskIds: ["child-repairable"] },
+    { goalId: "goal-terminal", parentTaskId: "parent-terminal", taskIds: ["child-terminal"] },
+    { goalId: "goal-valid", parentTaskId: "parent-valid", taskIds: ["child-valid"] },
+  ]);
+  assert.equal(details.ambiguousParentCount, 7);
+  const ambiguous = new Map(
+    (details.ambiguousParents as Array<{ taskId: string; reasonCodes: string[] }>)
+      .map((entry) => [entry.taskId, entry.reasonCodes]),
+  );
+  assert.ok(ambiguous.get("goal-active:parent-active")?.includes("active_parent_pipeline"));
+  assert.ok(ambiguous.get("goal-ambiguous:parent-ambiguous")?.includes("ambiguous_chronology"));
+  assert.ok(ambiguous.get("goal-cross-change:parent-cross-change")?.includes("cross_change"));
+  assert.ok(ambiguous.get("goal-cycle:parent-cycle")?.includes("cycle"));
+  assert.ok(ambiguous.get("goal-cycle:child-cycle")?.includes("cycle"));
+  assert.ok(ambiguous.get("goal-non-narrower:parent-non-narrower")?.includes("child_contract_not_narrower"));
+  assert.ok(ambiguous.get("goal-post-evidence-child:parent-post-evidence-child")?.includes("ambiguous_chronology"));
+  assert.deepEqual(goalLifecycleSnapshot(db, "goal-terminal"), lifecycleBefore);
+  assert.deepEqual(rawAuditSnapshot(db, "goal-terminal"), auditBefore);
+  assert.deepEqual(db.pragma("foreign_key_check"), []);
+  const firstSnapshot = managedLedgerSnapshot(db);
+  db.close();
+
+  db = openDatabase({ path: fixture.path });
+  assert.deepEqual(managedLedgerSnapshot(db), firstSnapshot);
+  assert.deepEqual(db.pragma("foreign_key_check"), []);
+  db.close();
+});
+
+test("split-lineage migration marker and repair roll back at every injected fault window", () => {
+  for (const point of ["before_row_update", "before_marker_insert"] as const) {
+    const fixture = createSplitLineageMigrationFixture();
+
+    assert.throws(() => openDatabase({
+      path: fixture.path,
+      migrationFault(name, actualPoint) {
+        if (name === "managed-task-split-lineage-repair-v1" && actualPoint === point) {
+          throw new Error(`injected ${point}`);
+        }
+      },
+    }), new RegExp(`injected ${point}`));
+
+    const failed = new Database(fixture.path, { readonly: true });
+    assert.equal(failed.prepare(`
+      SELECT status FROM managed_tasks WHERE goal_id = 'goal-repairable' AND logical_task_id = 'parent-repairable'
+    `).pluck().get(), "rejected");
+    assert.equal(failed.prepare(`
+      SELECT COUNT(*) FROM schema_migrations WHERE name = 'managed-task-split-lineage-repair-v1'
+    `).pluck().get(), 0);
+    failed.close();
+
+    const recovered = openDatabase({ path: fixture.path });
+    assert.equal(recovered.prepare(`
+      SELECT status FROM managed_tasks WHERE goal_id = 'goal-repairable' AND logical_task_id = 'parent-repairable'
+    `).pluck().get(), "split");
+    assert.equal(recovered.prepare(`
+      SELECT COUNT(*) FROM schema_migrations WHERE name = 'managed-task-split-lineage-repair-v1'
+    `).pluck().get(), 1);
+    recovered.close();
+  }
+
+  const committedFixture = createSplitLineageMigrationFixture();
+  assert.throws(() => openDatabase({
+    path: committedFixture.path,
+    migrationFault(name, point) {
+      if (name === "managed-task-split-lineage-repair-v1" && point === "after_commit") {
+        throw new Error("injected after_commit");
+      }
+    },
+  }), /injected after_commit/);
+  const committed = new Database(committedFixture.path, { readonly: true });
+  assert.equal(committed.prepare(`
+    SELECT status FROM managed_tasks WHERE goal_id = 'goal-repairable' AND logical_task_id = 'parent-repairable'
+  `).pluck().get(), "split");
+  assert.equal(committed.prepare(`
+    SELECT COUNT(*) FROM schema_migrations WHERE name = 'managed-task-split-lineage-repair-v1'
+  `).pluck().get(), 1);
+  committed.close();
+  const reopened = openDatabase({ path: committedFixture.path });
+  assert.equal(reopened.prepare(`
+    SELECT COUNT(*) FROM schema_migrations WHERE name = 'managed-task-split-lineage-repair-v1'
+  `).pluck().get(), 1);
+  reopened.close();
 });
 
 function columnNames(db: ReturnType<typeof openDatabase>, table: string): string[] {
@@ -645,6 +834,104 @@ function createFrozenContractFixture(options: { blocked?: boolean; ambiguous?: b
   const auditSnapshot = rawAuditSnapshot(db, "repair-goal");
   db.close();
   return { path, goalId: "repair-goal", goalSnapshot, auditSnapshot };
+}
+
+function createSplitLineageMigrationFixture(): { path: string } {
+  const path = join(mkdtempSync(join(tmpdir(), "auto-agent-db-lineage-repair-")), "repair.sqlite");
+  const db = openDatabase({ path });
+  const insertGoal = db.prepare(`
+    INSERT INTO goals VALUES (?, ?, 'Historical lineage', ?, 'normal', 'managed', 't0', 't9', 't1', ?)
+  `);
+  const insertTask = db.prepare(`
+    INSERT INTO managed_tasks (
+      id, goal_id, logical_task_id, change_id, parent_task_id, title, status, attempt_count,
+      substantive_rejection_count, last_cited_criteria, last_safe_summary, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?)
+  `);
+  const insertCriterion = db.prepare(`
+    INSERT INTO managed_task_criteria VALUES (?, ?, ?, 'UNKNOWN', ?, ?)
+  `);
+  const scenarios = [
+    { goal: "goal-repairable", parent: "parent-repairable", status: "rejected", updated: "t2", child: "child-repairable", childChange: "change-a", childCriteria: 1 },
+    { goal: "goal-terminal", parent: "parent-terminal", status: "rejected", updated: "t2", child: "child-terminal", childChange: "change-a", childCriteria: 1, terminal: true },
+    { goal: "goal-valid", parent: "parent-valid", status: "split", updated: "t2", child: "child-valid", childChange: "change-a", childCriteria: 1, runtimeEvidence: true },
+    { goal: "goal-ambiguous", parent: "parent-ambiguous", status: "rejected", updated: "t8", child: "child-ambiguous", childChange: "change-a", childCriteria: 1 },
+    { goal: "goal-non-narrower", parent: "parent-non-narrower", status: "rejected", updated: "t2", child: "child-non-narrower", childChange: "change-a", childCriteria: 2 },
+    { goal: "goal-post-evidence-child", parent: "parent-post-evidence-child", status: "rejected", updated: "t2", child: "child-before-evidence", lateChild: "child-after-evidence", childChange: "change-a", childCriteria: 1 },
+    { goal: "goal-cross-change", parent: "parent-cross-change", status: "rejected", updated: "t2", child: "child-cross-change", childChange: "change-b", childCriteria: 1 },
+    { goal: "goal-active", parent: "parent-active", status: "delegated", updated: "t2", child: "child-active", childChange: "change-a", childCriteria: 1 },
+    { goal: "goal-cycle", parent: "parent-cycle", status: "rejected", updated: "t2", child: "child-cycle", childChange: "change-a", childCriteria: 1, cycle: true },
+  ] as const;
+  for (const scenario of scenarios) {
+    insertGoal.run(
+      scenario.goal,
+      scenario.goal,
+      "terminal" in scenario && scenario.terminal ? "blocked" : "running",
+      "terminal" in scenario && scenario.terminal ? "t9" : null,
+    );
+    db.prepare("INSERT INTO runs VALUES (?, ?, ?, 'mock', 'mock', 't1', ?, ?)").run(
+      `${scenario.goal}-run`, scenario.goal,
+      "terminal" in scenario && scenario.terminal ? "failed" : "completed",
+      "terminal" in scenario && scenario.terminal ? "t9" : "t2",
+      "terminal" in scenario && scenario.terminal ? "continuations exhausted" : null,
+    );
+    db.prepare(`
+      INSERT INTO agent_sessions VALUES (
+        ?, ?, ?, 'mock', 'mock', 'completed',
+        '{"eventStreaming":true,"approval":false,"cancellation":true,"resume":false,"childSessions":true}',
+        NULL, 't1', 't2', NULL, NULL
+      )
+    `).run(`${scenario.goal}-session`, scenario.goal, `${scenario.goal}-run`);
+    const parentDbId = `${scenario.parent}-db`;
+    const childDbId = `${scenario.child}-db`;
+    insertTask.run(
+      parentDbId, scenario.goal, scenario.parent, "change-a", null, "Parent", scenario.status,
+      2, 2, "Historical parent", "t1", scenario.updated,
+    );
+    insertCriterion.run(parentDbId, "P1", "First", "t1", "t2");
+    insertCriterion.run(parentDbId, "P2", "Second", "t1", "t2");
+    insertTask.run(
+      childDbId, scenario.goal, scenario.child, scenario.childChange, parentDbId, "Child", "accepted",
+      1, 0, "Historical child", "t3", "t4",
+    );
+    for (let index = 0; index < scenario.childCriteria; index += 1) {
+      insertCriterion.run(childDbId, `C${index + 1}`, `Child ${index + 1}`, "t3", "t4");
+    }
+    if ("lateChild" in scenario) {
+      const lateChildDbId = `${scenario.lateChild}-db`;
+      insertTask.run(
+        lateChildDbId, scenario.goal, scenario.lateChild, scenario.childChange, parentDbId, "Late child", "accepted",
+        1, 0, "Historical child created after split evidence", "t6", "t6",
+      );
+      insertCriterion.run(lateChildDbId, "C1", "Late child", "t6", "t6");
+    }
+    if ("cycle" in scenario && scenario.cycle) {
+      db.prepare("UPDATE managed_tasks SET parent_task_id = ? WHERE id = ?").run(childDbId, parentDbId);
+    }
+    const runtimeEvidence = "runtimeEvidence" in scenario && scenario.runtimeEvidence;
+    db.prepare(`
+      INSERT INTO events VALUES (?, ?, NULL, NULL, 'agent.progress', 'Historical task list', ?, ?)
+    `).run(
+      `${scenario.goal}-task-list`, scenario.goal,
+      JSON.stringify(runtimeEvidence ? {
+        runtimeEventType: "managed_task.lineage_split",
+        parentTaskId: scenario.parent,
+        taskIds: [scenario.child],
+        reasonCode: "retry_threshold_reached",
+      } : {
+        runtimeEventType: "supervisor.task_list",
+        changeId: scenario.childChange,
+        taskList: [
+          { id: scenario.child, parentTaskId: scenario.parent },
+          ...("lateChild" in scenario ? [{ id: scenario.lateChild, parentTaskId: scenario.parent }] : []),
+        ],
+      }),
+      runtimeEvidence ? "t3" : "t5",
+    );
+  }
+  db.prepare("DELETE FROM schema_migrations WHERE name = 'managed-task-split-lineage-repair-v1'").run();
+  db.close();
+  return { path };
 }
 
 function migrationDetails(db: ReturnType<typeof openDatabase>, name: string): Record<string, unknown> {
