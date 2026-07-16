@@ -69,3 +69,18 @@ test("updates goal lifecycle status and timestamps", () => {
 function testDatabasePath(): string {
   return join(mkdtempSync(join(tmpdir(), "auto-agent-goals-")), "goals.sqlite");
 }
+
+test("listByStatus returns only goals in the given status", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goals = createGoalRepository(db);
+  const a = goals.create({ title: "A", description: "d" });
+  const b = goals.create({ title: "B", description: "d" });
+  goals.create({ title: "C", description: "d" });
+  goals.updateStatus(a.id, "interrupted");
+  goals.updateStatus(b.id, "interrupted");
+
+  const interrupted = goals.listByStatus("interrupted");
+  assert.deepEqual(interrupted.map((g) => g.id).sort(), [a.id, b.id].sort());
+  assert.equal(goals.listByStatus("draft").length, 1);
+  db.close();
+});

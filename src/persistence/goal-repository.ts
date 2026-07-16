@@ -6,6 +6,7 @@ import type { AppDatabase } from "./database.js";
 export interface GoalRepository {
   create(input: CreateGoalInput): Goal;
   list(): Goal[];
+  listByStatus(status: GoalStatus): Goal[];
   getById(id: string): Goal | null;
   updateStatus(id: string, status: GoalStatus, timestamps?: GoalStatusTimestamps): Goal;
 }
@@ -76,6 +77,13 @@ export function createGoalRepository(
       return db
         .prepare("SELECT * FROM goals ORDER BY created_at DESC, id DESC")
         .all()
+        .map(mapGoalRow);
+    },
+
+    listByStatus(status) {
+      return db
+        .prepare("SELECT * FROM goals WHERE status = ? ORDER BY created_at ASC, id ASC")
+        .all(status)
         .map(mapGoalRow);
     },
 

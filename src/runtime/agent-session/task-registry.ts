@@ -89,6 +89,18 @@ export class GoalTaskRegistry {
     return result;
   }
 
+  /**
+   * Replace the in-memory task state with records reconstructed from durable
+   * rows (restart recovery / resume). The durable ledger is authoritative; this
+   * repopulates the working cache so gating and history reflect it.
+   */
+  hydrate(records: TaskRecord[]): void {
+    this.tasks.clear();
+    for (const record of records) {
+      this.tasks.set(record.id, { ...record, criterionOutcomes: { ...record.criterionOutcomes } });
+    }
+  }
+
   getTask(taskId: string): TaskRecord | undefined {
     return this.tasks.get(taskId);
   }

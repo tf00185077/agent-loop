@@ -137,6 +137,23 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     agentRuntimeAdapters: options.agentRuntimeAdapters,
   });
 
+  // Resume goals that Phase 3a reconciled to `interrupted`, best-effort and
+  // non-blocking. A provider that cannot resolve a managed adapter leaves the
+  // goal interrupted for a later boot.
+  for (const interrupted of goalRepo.listByStatus("interrupted")) {
+    void runtime.resume(interrupted.id).catch((err: unknown) => {
+      eventRepo.create({
+        goalId: interrupted.id,
+        type: "agent.progress",
+        message: "Resume dispatch failed; goal left interrupted for a later boot.",
+        data: {
+          runtimeEventType: "recovery.resume_failed",
+          safeReason: err instanceof Error ? err.message : String(err),
+        },
+      });
+    });
+  }
+
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
   });
@@ -214,6 +231,14 @@ function createRuntimeFromSavedProviderSettings(
 
       return runtime.run(goalId);
     },
+    async resume(goalId: string) {
+      const runtime = selectRuntimeForSettings(deps.providerSettingsRepo.get(), deps);
+      // Only managed-provider runtimes expose resume; others leave the goal
+      // interrupted for a later boot.
+      if ("resume" in runtime && typeof runtime.resume === "function") {
+        return runtime.resume(goalId);
+      }
+    },
   };
 }
 
@@ -259,6 +284,14 @@ function createRuntimeFromAgentRuntimeAdapter(
   return {
     async run(goalId: string) {
       return deps.agentSessionManager.startManagedSession({
+        goalId,
+        providerId: settings.provider,
+        modelLabel: settings.modelLabel,
+        adapter,
+      });
+    },
+    async resume(goalId: string) {
+      return deps.agentSessionManager.resumeInterruptedGoal({
         goalId,
         providerId: settings.provider,
         modelLabel: settings.modelLabel,
@@ -339,6 +372,20 @@ function createRuntimeFromCodexLocalSettings(
       });
       return oneShotRuntime.run(goalId);
     },
+    async resume(goalId: string) {
+      const adapter = createCodexRuntimeAdapter({
+        commandPath: resolved.commandPath ?? "",
+        modelLabel: settings.modelLabel,
+        probe: deps.codexRuntimeCapabilityProbe,
+        sessionRunner: deps.codexRuntimeSessionRunner,
+      });
+      // Resume only applies to the managed supervisor path; a CLI that cannot
+      // support managed sessions leaves the goal interrupted for a later boot.
+      if (!(await adapter.detectCapabilities()).eventStreaming) return;
+      return deps.agentSessionManager.resumeInterruptedGoal({
+        goalId, providerId: "codex-local", modelLabel: settings.modelLabel, adapter,
+      });
+    },
   };
 }
 
@@ -411,6 +458,18 @@ function createRuntimeFromClaudeLocalSettings(
         },
       });
       return oneShotRuntime.run(goalId);
+    },
+    async resume(goalId: string) {
+      const adapter = createClaudeRuntimeAdapter({
+        commandPath: resolved.commandPath ?? "",
+        modelLabel: settings.modelLabel,
+        probe: deps.claudeRuntimeCapabilityProbe,
+        sessionRunner: deps.claudeRuntimeSessionRunner,
+      });
+      if (!(await adapter.detectCapabilities()).eventStreaming) return;
+      return deps.agentSessionManager.resumeInterruptedGoal({
+        goalId, providerId: "claude-local", modelLabel: settings.modelLabel, adapter,
+      });
     },
   };
 }

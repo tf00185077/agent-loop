@@ -24,6 +24,7 @@ import {
 } from "./managed-delivery-service.js";
 import { createManagedIntegrationService, type ManagedIntegrationService } from "./managed-integration-service.js";
 import { projectManagedTaskContext } from "./managed-context-projection.js";
+import { rehydrateChangeRegistry, rehydrateTaskRegistry } from "./supervisor-state-rehydration.js";
 import {
   createOpenSpecWorkspaceService,
   type OpenSpecWorkspaceService,
@@ -76,6 +77,13 @@ export interface StartManagedSessionInput {
   adapter: AgentRuntimeAdapter;
 }
 
+export interface ResumeInterruptedGoalInput {
+  goalId: string;
+  providerId: string;
+  modelLabel: string | null;
+  adapter: AgentRuntimeAdapter;
+}
+
 export interface StartManagedSessionResult {
   session: AgentRuntimeSession;
 }
@@ -84,6 +92,7 @@ export interface AgentSessionManager {
   startManagedSession(input: StartManagedSessionInput): Promise<StartManagedSessionResult>;
   recoverOrphanedSessions(): AgentRuntimeSession[];
   reconcileOrphanedWorktrees(): Promise<void>;
+  resumeInterruptedGoal(input: ResumeInterruptedGoalInput): Promise<void>;
   approve(sessionId: string, requestId: string): Promise<boolean>;
   reject(sessionId: string, requestId: string, reason?: string): Promise<boolean>;
   cancel(sessionId: string, reason?: string): Promise<boolean>;
@@ -106,7 +115,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     supervisorCwd: deps.supervisorCwd ?? process.cwd(),
   };
 
-  return {
+  const manager: AgentSessionManager = {
     async startManagedSession(input) {
       const goal = deps.goalRepo.getById(input.goalId);
       if (!goal) throw new Error(`Goal not found: ${input.goalId}`);
@@ -225,6 +234,64 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
       }
     },
 
+    async resumeInterruptedGoal(input) {
+      const goal = deps.goalRepo.getById(input.goalId);
+      if (!goal || goal.status !== "interrupted") return;
+
+      // Rehydrate the working caches from the durable ledger so the resumed
+      // session gates and continues against the same state it had before the crash.
+      if (deps.managedTaskRepo) {
+        rehydrateTaskRegistry(getTaskRegistry(state, input.goalId), deps.managedTaskRepo, input.goalId);
+        rehydrateChangeRegistry(
+          getChangeRegistry(state, input.goalId),
+          deps.managedTaskRepo,
+          input.goalId,
+          deps.eventRepo.listForGoal(input.goalId),
+        );
+      }
+
+      const continuationPrompt = buildSupervisorPrompt({
+        goal,
+        phase: { kind: "continuation", observation: "Resumed after backend restart." },
+        taskHistory: getTaskRegistry(state, input.goalId).listTasks(),
+        managedTaskContext: deps.managedTaskRepo
+          ? projectManagedTaskContext(deps.managedTaskRepo, input.goalId)
+          : undefined,
+        changeHistory: getChangeRegistry(state, input.goalId).listChanges(),
+      });
+
+      deps.goalRepo.updateStatus(input.goalId, "running");
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        type: "agent.progress",
+        message: "Interrupted goal resumed from durable projection.",
+        data: { runtimeEventType: "recovery.resumed", provider: input.providerId, model: input.modelLabel },
+      });
+
+      try {
+        await manager.startManagedSession({
+          goalId: input.goalId,
+          providerId: input.providerId,
+          modelLabel: input.modelLabel,
+          adapter: input.adapter,
+          prompt: continuationPrompt,
+        });
+      } catch (error) {
+        // Best-effort: a resume that cannot start must not spin. Revert to the
+        // visible interrupted state so a later boot can reconcile and resume.
+        deps.goalRepo.updateStatus(input.goalId, "interrupted");
+        deps.eventRepo.create({
+          goalId: input.goalId,
+          type: "agent.progress",
+          message: "Resume failed to start; goal left interrupted for a later boot.",
+          data: {
+            runtimeEventType: "recovery.resume_failed",
+            safeReason: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    },
+
     approve(sessionId, requestId) {
       return deliverControl(activeHandles, deliveredControls, sessionId, `approve:${requestId}`, (handle) =>
         handle.approve(requestId),
@@ -241,6 +308,8 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
       return deliverControl(activeHandles, deliveredControls, sessionId, "cancel", (handle) => handle.cancel(reason));
     },
   };
+
+  return manager;
 }
 
 async function deliverControl(
