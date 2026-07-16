@@ -7,7 +7,7 @@ import type { AgentRuntimeWorktreeMetadata } from "../../domain/index.js";
 export interface WorktreeService {
   createChildWorktree(input: CreateChildWorktreeInput): Promise<AgentRuntimeWorktreeMetadata>;
   createIntegrationWorktree?(input: CreateIntegrationWorktreeInput): Promise<AgentRuntimeWorktreeMetadata>;
-  removeWorktree?(input: RemoveWorktreeInput): Promise<void>;
+  removeWorktree(input: RemoveWorktreeInput): Promise<void>;
 }
 
 export interface CreateChildWorktreeInput {

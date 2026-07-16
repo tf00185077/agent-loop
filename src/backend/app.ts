@@ -108,6 +108,9 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     }),
   });
   agentSessionManager.recoverOrphanedSessions();
+  // Best-effort disk reconciliation: reclaim worktrees of goals that are now
+  // terminal (including those just force-failed above). Never blocks boot.
+  void agentSessionManager.reconcileOrphanedWorktrees();
   const runtime = createRuntimeFromSavedProviderSettings({
     env: options.env ?? process.env,
     providerSettingsRepo,

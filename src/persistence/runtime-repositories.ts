@@ -92,6 +92,12 @@ export interface AgentSessionRepositoryOptions {
   now?: () => string;
 }
 
+export interface TerminalGoalWorktree {
+  sessionId: string;
+  goalId: string;
+  worktree: AgentRuntimeWorktreeMetadata;
+}
+
 export interface AgentSessionRepository {
   createSession(input: CreateAgentRuntimeSessionInput): AgentRuntimeSession;
   updateSessionWorktree(id: string, worktree: AgentRuntimeWorktreeMetadata | null): AgentRuntimeSession;
@@ -99,6 +105,7 @@ export interface AgentSessionRepository {
   getSession(id: string): AgentRuntimeSession | null;
   listSessionsForGoal(goalId: string): AgentRuntimeSession[];
   listNonTerminalSessions(): AgentRuntimeSession[];
+  listWorktreesForTerminalGoals(): TerminalGoalWorktree[];
   recordCommand(input: CreateAgentRuntimeCommandInput): AgentRuntimeCommandRecord;
   createApprovalRequest(input: CreateAgentRuntimeApprovalInput): AgentRuntimeApprovalRequest;
   resolveApprovalRequest(
@@ -390,6 +397,27 @@ export function createAgentSessionRepository(
         `)
         .all()
         .map(mapAgentSessionRow);
+    },
+
+    listWorktreesForTerminalGoals() {
+      return db
+        .prepare(`
+          SELECT s.id AS session_id, s.goal_id AS goal_id, s.worktree AS worktree
+          FROM agent_sessions s
+          JOIN goals g ON g.id = s.goal_id
+          WHERE s.worktree IS NOT NULL
+            AND g.status IN ('failed', 'completed', 'blocked', 'cancelled')
+          ORDER BY s.created_at ASC, s.rowid ASC
+        `)
+        .all()
+        .map((row) => {
+          const value = row as { session_id: string; goal_id: string; worktree: string };
+          return {
+            sessionId: value.session_id,
+            goalId: value.goal_id,
+            worktree: JSON.parse(value.worktree) as AgentRuntimeWorktreeMetadata,
+          };
+        });
     },
 
     recordCommand(input) {

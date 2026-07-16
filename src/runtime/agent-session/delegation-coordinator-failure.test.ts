@@ -73,7 +73,10 @@ function coordinatorDeps(db: AppDatabase) {
     runRepo: createRunRepository(db),
     eventRepo: createEventRepository(db),
     agentSessionRepo: createAgentSessionRepository(db),
-    worktreeService: { async createChildWorktree() { return { path: "/tmp/fake-worktree", label: "fake" }; } },
+    worktreeService: {
+      async createChildWorktree() { return { path: "/tmp/fake-worktree", label: "fake" }; },
+      async removeWorktree() {},
+    },
     worktreeAttestor: () => [] as string[],
   };
 }

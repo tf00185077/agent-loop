@@ -530,3 +530,39 @@ function fixedClock(values: string[]): () => string {
   let index = 0;
   return () => values[Math.min(index++, values.length - 1)]!;
 }
+
+test("listWorktreesForTerminalGoals returns only worktrees of terminal goals", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goals = createGoalRepository(db);
+  const runs = createRunRepository(db);
+  const sessions = createAgentSessionRepository(db);
+  const caps = { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+
+  const terminal = goals.create({ title: "Terminal", description: "d" });
+  const running = goals.create({ title: "Running", description: "d" });
+  const tRun = runs.create({ goalId: terminal.id, provider: "mock", model: "m" });
+  const rRun = runs.create({ goalId: running.id, provider: "mock", model: "m" });
+
+  const cleaned = sessions.createSession({
+    goalId: terminal.id, runId: tRun.id, providerId: "mock", modelLabel: "m", lifecycleState: "failed",
+    capabilities: caps, worktree: { path: "/wt/terminal", label: "child-terminal" },
+  });
+  // A terminal-goal session with no worktree must be excluded.
+  sessions.createSession({
+    goalId: terminal.id, runId: tRun.id, providerId: "mock", modelLabel: "m", lifecycleState: "failed", capabilities: caps,
+  });
+  // A worktree on a non-terminal goal must be left out.
+  sessions.createSession({
+    goalId: running.id, runId: rRun.id, providerId: "mock", modelLabel: "m", lifecycleState: "running",
+    capabilities: caps, worktree: { path: "/wt/running", label: "child-running" },
+  });
+
+  goals.updateStatus(terminal.id, "failed", { completedAt: "2026-07-16T00:00:00.000Z" });
+
+  const found = sessions.listWorktreesForTerminalGoals();
+  assert.equal(found.length, 1);
+  assert.equal(found[0]?.sessionId, cleaned.id);
+  assert.equal(found[0]?.goalId, terminal.id);
+  assert.equal(found[0]?.worktree.path, "/wt/terminal");
+  db.close();
+});

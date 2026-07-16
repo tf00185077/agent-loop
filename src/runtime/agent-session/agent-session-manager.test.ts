@@ -519,6 +519,7 @@ test("spawns worker children in isolated worktrees and records child failure wit
       async createChildWorktree(input) {
         return { path: `C:\\worktrees\\${input.childSessionId}`, label: `child-${input.childSessionId}` };
       },
+      async removeWorktree() {},
     },
     supervisorCwd: "C:\\supervisor",
   });
@@ -3949,6 +3950,7 @@ function memoryWorktreeService() {
     async createChildWorktree(input: { childSessionId: string }) {
       return { path: `C:\\worktrees\\${input.childSessionId}`, label: `child-${input.childSessionId}` };
     },
+    async removeWorktree() {},
   };
 }
 

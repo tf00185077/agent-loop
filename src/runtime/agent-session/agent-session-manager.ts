@@ -83,6 +83,7 @@ export interface StartManagedSessionResult {
 export interface AgentSessionManager {
   startManagedSession(input: StartManagedSessionInput): Promise<StartManagedSessionResult>;
   recoverOrphanedSessions(): AgentRuntimeSession[];
+  reconcileOrphanedWorktrees(): Promise<void>;
   approve(sessionId: string, requestId: string): Promise<boolean>;
   reject(sessionId: string, requestId: string, reason?: string): Promise<boolean>;
   cancel(sessionId: string, reason?: string): Promise<boolean>;
@@ -200,6 +201,39 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
       }
 
       return recovered;
+    },
+
+    async reconcileOrphanedWorktrees() {
+      const worktreeService = deps.worktreeService ?? createGitWorktreeService();
+      for (const record of deps.agentSessionRepo.listWorktreesForTerminalGoals()) {
+        const path = record.worktree?.path;
+        if (!path) continue;
+        try {
+          await worktreeService.removeWorktree({ parentCwd: state.supervisorCwd, path });
+          deps.eventRepo.create({
+            goalId: record.goalId,
+            type: "agent.progress",
+            message: "Reclaimed orphaned worker worktree.",
+            data: {
+              runtimeEventType: "worktree.reclaimed",
+              sessionId: record.sessionId,
+              worktreeLabel: record.worktree.label,
+            },
+          });
+        } catch (error) {
+          deps.eventRepo.create({
+            goalId: record.goalId,
+            type: "agent.progress",
+            message: "Failed to reclaim orphaned worker worktree.",
+            data: {
+              runtimeEventType: "worktree.reclaim_failed",
+              sessionId: record.sessionId,
+              worktreeLabel: record.worktree.label,
+              safeReason: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      }
     },
 
     approve(sessionId, requestId) {

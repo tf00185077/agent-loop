@@ -23,8 +23,8 @@ contracts, and iterates until an explicit completion signal. Read
    (`$env:PORT=34xx; npm run dev:api`), create + start a goal via
    `POST /api/goals` / `POST /api/goals/:id/start`, and read the durable event
    timeline (`GET /api/goals/:id/events`) as evidence. Record findings in the
-   change's `verification.md`. Prune leftover `..\auto-agent-worktrees\*` git
-   worktrees afterwards.
+   change's `verification.md`. Leftover `..\auto-agent-worktrees\*` git worktrees
+   for terminal goals are reclaimed automatically on backend startup.
 
 ## Architecture rules that must not regress
 
