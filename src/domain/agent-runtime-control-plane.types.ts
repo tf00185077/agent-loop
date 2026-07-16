@@ -73,6 +73,8 @@ export interface AgentRuntimeSession {
   lastActivityAt: string;
   parent?: AgentRuntimeSessionParent | null;
   worktree?: AgentRuntimeWorktreeMetadata | null;
+  /** Provider-native session id (e.g. Codex rollout / Claude session) for resume. */
+  providerSessionId?: string | null;
 }
 
 export const commandRecordStatuses = [
@@ -516,6 +518,8 @@ export interface AgentRuntimeEventMetadata {
   agentId?: string;
   parentAgentId?: string;
   taskId?: string;
+  /** Provider-native session id surfaced by the adapter for durable capture. */
+  providerSessionId?: string;
 }
 
 export interface AgentRuntimeEvent {

@@ -139,6 +139,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "created_at",
     "last_activity_at",
     "worktree",
+    "provider_session_id",
   ]);
   assert.deepEqual(columnNames(db, "agent_runtime_commands"), [
     "id",
@@ -298,7 +299,7 @@ test("backfills non-terminal historical task contracts fail-closed", () => {
     INSERT INTO agent_sessions VALUES (
       'session-live', 'live', 'run-live', 'mock', 'mock', 'completed',
       '{"eventStreaming":true,"approval":false,"cancellation":true,"resume":false,"childSessions":true}',
-      NULL, 't0', 't1', NULL
+      NULL, 't0', 't1', NULL, NULL
     );
     INSERT INTO events VALUES (
       'event-list', 'live', 'run-live', NULL, 'agent.progress', 'Tasks',

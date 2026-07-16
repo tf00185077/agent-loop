@@ -108,6 +108,7 @@ export interface InFlightWorkerAttempt {
 export interface AgentSessionRepository {
   createSession(input: CreateAgentRuntimeSessionInput): AgentRuntimeSession;
   updateSessionWorktree(id: string, worktree: AgentRuntimeWorktreeMetadata | null): AgentRuntimeSession;
+  updateProviderSessionId(id: string, providerSessionId: string): AgentRuntimeSession;
   updateLifecycleState(id: string, state: AgentSessionLifecycleState): AgentRuntimeSession;
   getSession(id: string): AgentRuntimeSession | null;
   listSessionsForGoal(goalId: string): AgentRuntimeSession[];
@@ -380,6 +381,15 @@ export function createAgentSessionRepository(
         id,
       );
 
+      return this.getSession(id)!;
+    },
+
+    updateProviderSessionId(id, providerSessionId) {
+      if (!this.getSession(id)) {
+        throw new Error(`Agent session not found: ${id}`);
+      }
+      db.prepare("UPDATE agent_sessions SET provider_session_id = ?, last_activity_at = ? WHERE id = ?")
+        .run(providerSessionId, clock(), id);
       return this.getSession(id)!;
     },
 
@@ -819,6 +829,7 @@ function mapAgentSessionRow(row: unknown): AgentRuntimeSession {
     capabilities: JSON.parse(value.capabilities!) as AgentRuntimeCapabilities,
     parent: value.parent ? (JSON.parse(value.parent) as AgentRuntimeSessionParent) : null,
     worktree: value.worktree ? (JSON.parse(value.worktree) as AgentRuntimeWorktreeMetadata) : null,
+    providerSessionId: value.provider_session_id ?? null,
     createdAt: value.created_at!,
     lastActivityAt: value.last_activity_at!,
   };

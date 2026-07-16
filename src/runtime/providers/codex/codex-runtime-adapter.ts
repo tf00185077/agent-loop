@@ -73,12 +73,22 @@ async function createCodexSessionHandle(
     async *events() {
       yield createRuntimeEvent(input, "session.started", "Codex managed session started.");
       let completed = false;
+      let providerSessionEmitted = false;
 
       try {
         for await (const result of sessionRunner({ ...input, commandPath: options.commandPath, signal: controller.signal })) {
           if (cancelled) {
             yield createRuntimeEvent(input, "session.cancelled", "Codex managed session cancelled.");
             return;
+          }
+
+          // Surface the Codex-native session id once so the backend can persist it
+          // durably for later resume (Phase 4).
+          if (result.session?.sessionId && !providerSessionEmitted) {
+            providerSessionEmitted = true;
+            yield createRuntimeEvent(input, "session.state_changed", "Codex session identity captured.", {
+              providerSessionId: result.session.sessionId,
+            });
           }
 
           for (const observation of result.observations) {

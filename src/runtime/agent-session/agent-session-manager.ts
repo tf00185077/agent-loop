@@ -457,8 +457,16 @@ async function runSessionEvents(
   deps: AgentSessionManagerDeps,
   input: SessionEventContext & { handle: AgentSessionHandle },
 ): Promise<void> {
+  let providerSessionCaptured = false;
   try {
     for await (const event of input.handle.events()) {
+      // Capture the provider-native session id the first time it is reported so a
+      // later boot can resume this session (Phase 4). Persistence only.
+      const providerSessionId = event.metadata?.providerSessionId;
+      if (providerSessionId && !providerSessionCaptured) {
+        providerSessionCaptured = true;
+        deps.agentSessionRepo.updateProviderSessionId(input.sessionId, providerSessionId);
+      }
       await persistRuntimeEvent(deps, { ...input, event });
     }
   } finally {

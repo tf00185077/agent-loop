@@ -265,6 +265,7 @@ function initializeSchema(db: AppDatabase): void {
   // CREATE TABLE IF NOT EXISTS above does not alter an existing table.
   ensureColumn(db, "provider_settings", "claude_command_path", "TEXT");
   ensureColumn(db, "agent_sessions", "worktree", "TEXT");
+  ensureColumn(db, "agent_sessions", "provider_session_id", "TEXT");
   ensureColumn(db, "agent_delegation_requests", "task_id", "TEXT");
   ensureColumn(db, "agent_delegation_requests", "acceptance", "TEXT");
   ensureColumn(db, "agent_delegation_requests", "change_id", "TEXT");
