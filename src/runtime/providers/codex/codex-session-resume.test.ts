@@ -21,8 +21,33 @@ test("buildCodexManagedSessionArgs builds `exec resume <id>` when a resume sessi
   );
   assert.deepEqual(
     buildCodexManagedSessionArgs({ ...baseRunnerInput, resumeSessionId: "sess-123" }),
-    ["exec", "resume", "sess-123", "--skip-git-repo-check", "--json", "--sandbox", "workspace-write", "-"],
+    ["exec", "resume", "sess-123", "--skip-git-repo-check", "--json", "-c", "sandbox_mode=workspace-write", "-"],
   );
+  // `exec resume` has no --sandbox flag.
+  assert.ok(!buildCodexManagedSessionArgs({ ...baseRunnerInput, resumeSessionId: "sess-123" }).includes("--sandbox"));
+});
+
+test("a failed resume attempt falls back to a fresh session instead of failing", async () => {
+  const attempts: Array<string | null> = [];
+  const sessionRunner = async function* (input: CodexRuntimeSessionRunnerInput) {
+    attempts.push(input.resumeSessionId ?? null);
+    if (input.resumeSessionId) throw new Error("resume: unknown session");
+    // fresh attempt: no events, completes cleanly
+  };
+  const adapter = createCodexRuntimeAdapter({
+    commandPath: "codex", modelLabel: null,
+    probe: async () => ({ execJson: true, approvalResume: false, sessionResume: true }),
+    sessionRunner,
+  });
+  const handle = await adapter.startSession({
+    sessionId: "s", goalId: "g", runId: "r", prompt: "p", providerId: "codex-local", modelLabel: null, resumeSessionId: "sess-9",
+  });
+  const types: string[] = [];
+  for await (const event of handle.events()) types.push(event.type);
+
+  assert.deepEqual(attempts, ["sess-9", null], "resume attempt then fresh fallback");
+  assert.ok(!types.includes("session.failed"), "a failed resume must not surface a terminal failure");
+  assert.ok(types.includes("session.completed"), "the fresh fallback session completed");
 });
 
 test("the resume capability is derived from session-resume support", async () => {

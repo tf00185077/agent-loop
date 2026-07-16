@@ -74,24 +74,20 @@ async function createCodexSessionHandle(
     capabilities,
     async *events() {
       yield createRuntimeEvent(input, "session.started", "Codex managed session started.");
-      let completed = false;
       let providerSessionEmitted = false;
 
-      try {
-        // Only resume when the CLI actually supports it; otherwise ignore the id
-        // and start a fresh session (the continuation prompt still carries state).
-        const runnerInput = {
-          ...input,
-          resumeSessionId: capabilities.resume ? input.resumeSessionId ?? null : null,
-          commandPath: options.commandPath,
-          signal: controller.signal,
-        };
+      // Consume one session run, yielding its runtime events and returning the
+      // outcome. It throws only when the subprocess itself fails to start or exits
+      // nonzero — which is how a resume attempt can degrade to a fresh session.
+      async function* runAttempt(
+        runnerInput: CodexRuntimeSessionRunnerInput,
+      ): AsyncGenerator<
+        AgentRuntimeEvent,
+        { done: "completed" | "cancelled"; finalMessage: boolean } | { done: "error"; message: string }
+      > {
+        let finalMessage = false;
         for await (const result of sessionRunner(runnerInput)) {
-          if (cancelled) {
-            yield createRuntimeEvent(input, "session.cancelled", "Codex managed session cancelled.");
-            return;
-          }
-
+          if (cancelled) return { done: "cancelled", finalMessage };
           // Surface the Codex-native session id once so the backend can persist it
           // durably for later resume (Phase 4).
           if (result.session?.sessionId && !providerSessionEmitted) {
@@ -100,41 +96,61 @@ async function createCodexSessionHandle(
               providerSessionId: result.session.sessionId,
             });
           }
-
           for (const observation of result.observations) {
             for (const event of observationToRuntimeEvents(input, observation)) {
               yield event;
-              if (cancelled) {
-                yield createRuntimeEvent(input, "session.cancelled", "Codex managed session cancelled.");
-                return;
-              }
+              if (cancelled) return { done: "cancelled", finalMessage };
             }
           }
-
-          if (result.errorMessage) {
-            yield createRuntimeEvent(input, "session.failed", result.errorMessage);
-            return;
-          }
-
-          if (result.finalMessage) {
-            completed = true;
-          }
+          if (result.errorMessage) return { done: "error", message: result.errorMessage };
+          if (result.finalMessage) finalMessage = true;
         }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Codex managed session failed.";
-        yield createRuntimeEvent(input, "session.failed", sanitizeDiagnostic(message));
-        return;
+        return { done: "completed", finalMessage };
       }
 
-      if (cancelled) {
+      // Only resume when the CLI actually supports it; otherwise ignore the id and
+      // start fresh (the continuation prompt still carries state).
+      const resumeRunnerInput = {
+        ...input,
+        resumeSessionId: capabilities.resume ? input.resumeSessionId ?? null : null,
+        commandPath: options.commandPath,
+        signal: controller.signal,
+      };
+
+      let outcome: { done: "completed" | "cancelled"; finalMessage: boolean } | { done: "error"; message: string };
+      try {
+        outcome = yield* runAttempt(resumeRunnerInput);
+      } catch (err) {
+        // A failed resume subprocess degrades to a fresh continuation rather than
+        // killing the goal; only a fresh-run failure is terminal.
+        if (resumeRunnerInput.resumeSessionId) {
+          yield createRuntimeEvent(input, "session.state_changed", "Codex resume failed; retrying a fresh session.");
+          try {
+            outcome = yield* runAttempt({ ...resumeRunnerInput, resumeSessionId: null });
+          } catch (freshErr) {
+            const message = freshErr instanceof Error ? freshErr.message : "Codex managed session failed.";
+            yield createRuntimeEvent(input, "session.failed", sanitizeDiagnostic(message));
+            return;
+          }
+        } else {
+          const message = err instanceof Error ? err.message : "Codex managed session failed.";
+          yield createRuntimeEvent(input, "session.failed", sanitizeDiagnostic(message));
+          return;
+        }
+      }
+
+      if (outcome.done === "cancelled" || cancelled) {
         yield createRuntimeEvent(input, "session.cancelled", "Codex managed session cancelled.");
         return;
       }
-
+      if (outcome.done === "error") {
+        yield createRuntimeEvent(input, "session.failed", outcome.message);
+        return;
+      }
       yield createRuntimeEvent(
         input,
         "session.completed",
-        completed ? "Codex managed session completed." : "Codex managed session completed without a final message.",
+        outcome.finalMessage ? "Codex managed session completed." : "Codex managed session completed without a final message.",
       );
     },
     async send(_message: AgentSessionInput) {},
@@ -200,8 +216,10 @@ export function buildCodexManagedSessionArgs(input: CodexRuntimeSessionRunnerInp
   // silently strands every file-producing delegation.
   // `codex exec resume <id>` replays the prior session (verified against the real
   // CLI); the continuation prompt is still delivered on stdin as the next message.
+  // `exec resume` has no `--sandbox` flag, so the sandbox is set via a config
+  // override; plain `exec` keeps `--sandbox`.
   const args = input.resumeSessionId
-    ? ["exec", "resume", input.resumeSessionId, "--skip-git-repo-check", "--json", "--sandbox", "workspace-write"]
+    ? ["exec", "resume", input.resumeSessionId, "--skip-git-repo-check", "--json", "-c", "sandbox_mode=workspace-write"]
     : ["exec", "--skip-git-repo-check", "--json", "--sandbox", "workspace-write"];
   const modelArgument = resolveCodexModelArgument(input.modelLabel);
   if (modelArgument) {
