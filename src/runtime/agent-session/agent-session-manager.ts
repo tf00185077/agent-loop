@@ -4,6 +4,7 @@ import type {
   AgentRuntimeEvent,
   AgentRuntimeSession,
   AgentSessionHandle,
+  ManagedCompletionGap,
 } from "../../domain/index.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type { AppDatabase } from "../../persistence/database.js";
@@ -52,7 +53,7 @@ export interface AgentSessionManagerDeps {
   supervisorCwd?: string;
   /**
    * Maximum supervisor continuations started because a delegation-capable
-   * session ended without a completion signal, per goal.
+   * session ended without successfully completing, per goal.
    */
   maxSupervisorContinuations?: number;
   /**
@@ -113,6 +114,8 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     completedGoals: new Set(),
     completionlessContinuations: new Map(),
     lastRejectionReasons: new Map(),
+    completionRequestsEvaluated: new Set(),
+    lastCompletionGaps: new Map(),
     taskRegistries: new Map(),
     changeRegistries: new Map(),
     openspecDowngradeReported: new Set(),
@@ -426,10 +429,14 @@ function reconcileInterruptedGoal(
 interface SupervisorState {
   /** Goals whose supervisor already emitted a completion signal. */
   completedGoals: Set<string>;
-  /** Per-goal count of continuations started because a session ended without completing. */
+  /** Per-goal count of continuations started because a session ended without successfully completing. */
   completionlessContinuations: Map<string, number>;
   /** Per-goal safe reason of the most recent rejected control block. */
   lastRejectionReasons: Map<string, string>;
+  /** Goals for which at least one valid completion request was rejected. */
+  completionRequestsEvaluated: Set<string>;
+  /** Per-goal structured gaps from the most recent rejected completion request. */
+  lastCompletionGaps: Map<string, ManagedCompletionGap[]>;
   /** Per-goal frozen acceptance-contract registry. */
   taskRegistries: Map<string, GoalTaskRegistry>;
   /** Per-goal change-plan registry. */
@@ -740,12 +747,18 @@ async function persistDelegationControlEvent(
       // change (e.g. one whose only task was its spec) before judging it.
       tryArchiveActiveChange(deps, input);
       if (!completionChangeRegistry.allArchived()) {
-        recordControlRejection(
+        const completionGaps: ManagedCompletionGap[] = completionChangeRegistry.unarchivedIds().map((changeId) => ({
+          type: "unarchived_change",
+          changeId,
+          safeSummary: `Planned change ${changeId} is not archived.`,
+        }));
+        recordCompletionRejection(
           deps,
           input,
-          data,
+          { ...data, completionGaps },
           `Planned changes remain unarchived: ${completionChangeRegistry.unarchivedIds().join(", ")}. ` +
             "Deliver, merge, and archive them before completing the goal.",
+          completionGaps,
         );
         return;
       }
@@ -778,11 +791,12 @@ async function persistDelegationControlEvent(
         unarchivedChangeIds: completionChangeRegistry.hasPlan() ? completionChangeRegistry.unarchivedIds() : [],
       });
       if (!evaluated.ok) {
-        recordControlRejection(
+        recordCompletionRejection(
           deps,
           input,
           { ...data, completionGaps: evaluated.gaps },
           `Completion blocked by durable gaps: ${evaluated.gaps.map((gap) => gap.safeSummary).join(" ")}`.slice(0, 1000),
+          evaluated.gaps,
         );
         return;
       }
@@ -821,6 +835,8 @@ async function persistDelegationControlEvent(
     if (deps.database) deps.database.transaction(complete)();
     else complete();
     input.state.completedGoals.add(input.goalId);
+    input.state.completionRequestsEvaluated.delete(input.goalId);
+    input.state.lastCompletionGaps.delete(input.goalId);
     return;
   }
 
@@ -2079,6 +2095,18 @@ function recordControlRejection(
   });
 }
 
+function recordCompletionRejection(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  data: Record<string, unknown>,
+  safeReason: string,
+  gaps: ManagedCompletionGap[],
+): void {
+  input.state.completionRequestsEvaluated.add(input.goalId);
+  input.state.lastCompletionGaps.set(input.goalId, gaps.map((gap) => ({ ...gap })));
+  recordControlRejection(deps, input, data, safeReason);
+}
+
 async function startCompletionlessContinuation(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
@@ -2092,7 +2120,11 @@ async function startCompletionlessContinuation(
   const count = input.state.completionlessContinuations.get(input.goalId) ?? 0;
   if (count >= input.state.maxSupervisorContinuations) {
     const finishedAt = new Date().toISOString();
-    const reason = `Supervisor reached ${input.state.maxSupervisorContinuations} continuations without a completion signal`;
+    const completionRequestEvaluated = input.state.completionRequestsEvaluated.has(input.goalId);
+    const completionGaps = input.state.lastCompletionGaps.get(input.goalId) ?? [];
+    const reason = completionRequestEvaluated
+      ? `Supervisor reached ${input.state.maxSupervisorContinuations} continuations without reaching successful completion`
+      : `Supervisor reached ${input.state.maxSupervisorContinuations} continuations without a completion signal`;
     deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
     deps.eventRepo.create({
       goalId: input.goalId,
@@ -2104,6 +2136,8 @@ async function startCompletionlessContinuation(
         delegationControlEvent: undefined,
         runtimeEventType: "supervisor.continuations_exhausted",
         maxSupervisorContinuations: input.state.maxSupervisorContinuations,
+        completionRequestEvaluated,
+        ...(completionGaps.length > 0 ? { completionGaps } : {}),
         reason,
       },
     });

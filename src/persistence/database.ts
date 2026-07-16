@@ -20,11 +20,31 @@ export function openDatabase(options: DatabaseOptions = {}): AppDatabase {
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.pragma("foreign_keys = ON");
-  initializeSchema(db);
+  const preInitialization = inspectPreInitializationSchema(db);
+  initializeSchema(db, preInitialization);
   return db;
 }
 
-function initializeSchema(db: AppDatabase): void {
+interface PreInitializationSchema {
+  applicationSchemaExisted: boolean;
+  managedTaskLedgerExisted: boolean;
+}
+
+const LEGACY_MANAGED_TASK_BACKFILL = "managed-task-legacy-backfill-v1";
+const FROZEN_CONTRACT_REPAIR = "managed-task-frozen-contract-repair-v1";
+
+function inspectPreInitializationSchema(db: AppDatabase): PreInitializationSchema {
+  const tables = db.prepare(`
+    SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+  `).all() as Array<{ name: string }>;
+  const names = new Set(tables.map((table) => table.name));
+  return {
+    applicationSchemaExisted: names.size > 0,
+    managedTaskLedgerExisted: names.has("managed_tasks"),
+  };
+}
+
+function initializeSchema(db: AppDatabase, preInitialization: PreInitializationSchema): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS goals (
       id TEXT PRIMARY KEY,
@@ -261,6 +281,12 @@ function initializeSchema(db: AppDatabase): void {
       updated_at TEXT NOT NULL,
       UNIQUE (worker_delegation_request_id)
     );
+
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      name TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL,
+      details TEXT NOT NULL
+    );
   `);
 
   migrateManagedTaskIdentities(db);
@@ -280,7 +306,42 @@ function initializeSchema(db: AppDatabase): void {
   ensureColumn(db, "managed_task_reviews", "reviewed_candidate_commit_sha", "TEXT");
   ensureColumn(db, "managed_task_deliveries", "integration_attempt_id", "TEXT");
   migrateManagedTaskDeliveriesOutcome(db);
-  backfillManagedTaskState(db);
+  runManagedTaskMigrations(db, preInitialization);
+}
+
+function runManagedTaskMigrations(db: AppDatabase, preInitialization: PreInitializationSchema): void {
+  applyNamedMigration(db, LEGACY_MANAGED_TASK_BACKFILL, () => {
+    if (!preInitialization.applicationSchemaExisted) {
+      return { mode: "fresh_baseline" };
+    }
+    if (preInitialization.managedTaskLedgerExisted) {
+      return { mode: "initialized_ledger_baseline" };
+    }
+    backfillManagedTaskState(db);
+    return { mode: "legacy_backfill" };
+  });
+
+  applyNamedMigration(db, FROZEN_CONTRACT_REPAIR, () => {
+    if (!preInitialization.applicationSchemaExisted) {
+      return { mode: "fresh_baseline" };
+    }
+    return repairFrozenManagedTaskContracts(db);
+  });
+}
+
+function applyNamedMigration(
+  db: AppDatabase,
+  name: string,
+  migrate: () => Record<string, unknown>,
+): void {
+  const alreadyApplied = db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(name);
+  if (alreadyApplied) return;
+  db.transaction(() => {
+    if (db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(name)) return;
+    const details = JSON.stringify(migrate());
+    db.prepare("INSERT INTO schema_migrations (name, applied_at, details) VALUES (?, ?, ?)")
+      .run(name, new Date().toISOString(), details);
+  })();
 }
 
 function migrateManagedTaskIdentities(db: AppDatabase): void {
@@ -410,6 +471,11 @@ function backfillManagedTaskState(db: AppDatabase): void {
     for (const row of rows) {
       const data = parseRecord(row.data);
       if (data?.runtimeEventType !== "supervisor.task_list" || !Array.isArray(data.taskList)) continue;
+      const ignoredTaskIds = new Set(
+        Array.isArray(data.ignoredCriteriaMutations)
+          ? data.ignoredCriteriaMutations.filter((value): value is string => typeof value === "string")
+          : [],
+      );
       for (const rawTask of data.taskList) {
         const task = asRecord(rawTask);
         if (!task || typeof task.id !== "string" || typeof task.title !== "string") continue;
@@ -422,7 +488,7 @@ function backfillManagedTaskState(db: AppDatabase): void {
           randomUUID(), row.goal_id, task.id, typeof data.changeId === "string" ? data.changeId : null,
           task.title, row.created_at, row.created_at,
         );
-        if (Array.isArray(task.acceptance)) {
+        if (!ignoredTaskIds.has(task.id) && Array.isArray(task.acceptance)) {
           for (const rawCriterion of task.acceptance) {
             const criterion = asRecord(rawCriterion);
             if (!criterion || typeof criterion.id !== "string" || typeof criterion.text !== "string") continue;
@@ -489,6 +555,171 @@ function backfillManagedTaskState(db: AppDatabase): void {
       `).run(status, attempts.length, safeSummary, latest.updated_at, task.id);
     }
   })();
+}
+
+interface FrozenCriterionDefinition {
+  id: string;
+  text: string;
+}
+
+interface FrozenContractRepairDetails extends Record<string, unknown> {
+  mode: "initialized_repair";
+  repairedTaskCount: number;
+  removedCriterionCount: number;
+  removedCriterionResultCount: number;
+  ambiguousTaskCount: number;
+  ambiguousTasks: string[];
+}
+
+function repairFrozenManagedTaskContracts(db: AppDatabase): FrozenContractRepairDetails {
+  const syntheticContracts = new Map<string, FrozenCriterionDefinition[]>();
+  const taskListContracts = new Map<string, FrozenCriterionDefinition[]>();
+  const ignoredMutationCriteria = new Map<string, Set<string>>();
+  const eventRows = db.prepare(`
+    SELECT goal_id, data FROM events ORDER BY created_at, rowid
+  `).all() as Array<{ goal_id: string; data: string }>;
+
+  for (const event of eventRows) {
+    const data = parseRecord(event.data);
+    if (!data) continue;
+    if (data.runtimeEventType === "supervisor.change_plan" && Array.isArray(data.specTasks)) {
+      for (const rawSpecTask of data.specTasks) {
+        const specTask = asRecord(rawSpecTask);
+        if (!specTask || typeof specTask.taskId !== "string") continue;
+        const acceptance = parseFrozenCriteria(specTask.acceptance);
+        if (!acceptance) continue;
+        const key = managedTaskContractKey(event.goal_id, specTask.taskId);
+        if (!syntheticContracts.has(key)) syntheticContracts.set(key, acceptance);
+      }
+      continue;
+    }
+    if (data.runtimeEventType !== "supervisor.task_list" || !Array.isArray(data.taskList)) continue;
+    const ignoredTaskIds = new Set(
+      Array.isArray(data.ignoredCriteriaMutations)
+        ? data.ignoredCriteriaMutations.filter((value): value is string => typeof value === "string")
+        : [],
+    );
+    for (const rawTask of data.taskList) {
+      const task = asRecord(rawTask);
+      if (!task || typeof task.id !== "string") continue;
+      const acceptance = parseFrozenCriteria(task.acceptance);
+      if (!acceptance) continue;
+      const key = managedTaskContractKey(event.goal_id, task.id);
+      if (ignoredTaskIds.has(task.id)) {
+        const ignored = ignoredMutationCriteria.get(key) ?? new Set<string>();
+        for (const criterion of acceptance) ignored.add(frozenCriterionKey(criterion));
+        ignoredMutationCriteria.set(key, ignored);
+      } else if (!taskListContracts.has(key)) {
+        taskListContracts.set(key, acceptance);
+      }
+    }
+  }
+
+  // Delegation acceptance is intentionally read only as corroborating audit
+  // evidence. It never creates or replaces the earlier backend/task-list
+  // authority used below.
+  const corroboratingContracts = new Map<string, FrozenCriterionDefinition[]>();
+  const delegationRows = db.prepare(`
+    SELECT s.goal_id, d.task_id, d.acceptance
+    FROM agent_delegation_requests d
+    JOIN agent_sessions s ON s.id = d.parent_session_id
+    WHERE d.role = 'worker' AND d.task_id IS NOT NULL AND d.acceptance IS NOT NULL
+    ORDER BY d.created_at, d.rowid
+  `).all() as Array<{ goal_id: string; task_id: string; acceptance: string }>;
+  for (const row of delegationRows) {
+    const key = managedTaskContractKey(row.goal_id, row.task_id);
+    if (corroboratingContracts.has(key)) continue;
+    try {
+      const acceptance = parseFrozenCriteria(JSON.parse(row.acceptance));
+      if (acceptance) corroboratingContracts.set(key, acceptance);
+    } catch {
+      // Malformed historical acceptance is retained as raw audit and cannot
+      // become migration authority.
+    }
+  }
+
+  let repairedTaskCount = 0;
+  let removedCriterionCount = 0;
+  let removedCriterionResultCount = 0;
+  const ambiguousTasks = new Set<string>();
+  const tasks = db.prepare(`
+    SELECT id, goal_id, logical_task_id FROM managed_tasks ORDER BY goal_id, created_at, rowid
+  `).all() as Array<{ id: string; goal_id: string; logical_task_id: string }>;
+
+  for (const task of tasks) {
+    const key = managedTaskContractKey(task.goal_id, task.logical_task_id);
+    const ignored = ignoredMutationCriteria.get(key);
+    if (!ignored || ignored.size === 0) continue;
+    const current = db.prepare(`
+      SELECT criterion_id AS id, text FROM managed_task_criteria WHERE task_id = ? ORDER BY rowid
+    `).all(task.id) as FrozenCriterionDefinition[];
+    const replayAdded = current.filter((criterion) => ignored.has(frozenCriterionKey(criterion)));
+    if (replayAdded.length === 0) continue;
+
+    const authoritative = syntheticContracts.get(key) ?? taskListContracts.get(key);
+    const diagnosticId = `${task.goal_id}:${task.logical_task_id}`.slice(0, 300);
+    if (!authoritative) {
+      // A worker acceptance alone is never enough to select a frozen contract.
+      void corroboratingContracts.get(key);
+      ambiguousTasks.add(diagnosticId);
+      continue;
+    }
+    const authoritativePairs = new Set(authoritative.map(frozenCriterionKey));
+    const currentPairs = new Set(current.map(frozenCriterionKey));
+    if (authoritative.some((criterion) => !currentPairs.has(frozenCriterionKey(criterion)))) {
+      ambiguousTasks.add(diagnosticId);
+      continue;
+    }
+
+    const removable = replayAdded.filter((criterion) => !authoritativePairs.has(frozenCriterionKey(criterion)));
+    if (removable.length === 0) continue;
+    const unattributedExtra = current.some((criterion) =>
+      !authoritativePairs.has(frozenCriterionKey(criterion)) && !ignored.has(frozenCriterionKey(criterion)));
+    if (unattributedExtra) ambiguousTasks.add(diagnosticId);
+    for (const criterion of removable) {
+      const result = db.prepare(`
+        DELETE FROM managed_task_criterion_results WHERE task_id = ? AND criterion_id = ?
+      `).run(task.id, criterion.id);
+      removedCriterionResultCount += result.changes;
+      const definition = db.prepare(`
+        DELETE FROM managed_task_criteria WHERE task_id = ? AND criterion_id = ? AND text = ?
+      `).run(task.id, criterion.id, criterion.text);
+      removedCriterionCount += definition.changes;
+    }
+    if (removable.length > 0) repairedTaskCount += 1;
+  }
+
+  const sortedAmbiguousTasks = [...ambiguousTasks].sort();
+  return {
+    mode: "initialized_repair",
+    repairedTaskCount,
+    removedCriterionCount,
+    removedCriterionResultCount,
+    ambiguousTaskCount: sortedAmbiguousTasks.length,
+    ambiguousTasks: sortedAmbiguousTasks.slice(0, 50),
+  };
+}
+
+function parseFrozenCriteria(value: unknown): FrozenCriterionDefinition[] | null {
+  if (!Array.isArray(value)) return null;
+  const criteria: FrozenCriterionDefinition[] = [];
+  const ids = new Set<string>();
+  for (const rawCriterion of value) {
+    const criterion = asRecord(rawCriterion);
+    if (!criterion || typeof criterion.id !== "string" || typeof criterion.text !== "string") return null;
+    if (ids.has(criterion.id)) return null;
+    ids.add(criterion.id);
+    criteria.push({ id: criterion.id, text: criterion.text });
+  }
+  return criteria;
+}
+
+function managedTaskContractKey(goalId: string, logicalTaskId: string): string {
+  return `${goalId}\u0000${logicalTaskId}`;
+}
+
+function frozenCriterionKey(criterion: FrozenCriterionDefinition): string {
+  return `${criterion.id}\u0000${criterion.text}`;
 }
 
 function parseRecord(value: string): Record<string, unknown> | null {

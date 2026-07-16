@@ -65,11 +65,15 @@ export function evaluateManagedCompletion(
       }
     }
 
-    const activeAttempts = db.prepare(`
-      SELECT id FROM agent_delegation_requests
-      WHERE task_id = ? AND role = 'worker' AND status IN ('requested', 'accepted', 'running')
-      ORDER BY created_at, rowid
-    `).all(task.id) as Array<{ id: string }>;
+    const attempts = db.prepare(`
+      SELECT d.id, d.status, d.result_summary
+      FROM agent_delegation_requests d
+      JOIN agent_sessions s ON s.id = d.parent_session_id
+      JOIN managed_tasks owner ON owner.goal_id = s.goal_id AND owner.logical_task_id = d.task_id
+      WHERE owner.id = ? AND d.role = 'worker'
+      ORDER BY d.created_at, d.rowid
+    `).all(task.database_id) as Array<{ id: string; status: string; result_summary: string | null }>;
+    const activeAttempts = attempts.filter((attempt) => ["requested", "accepted", "running"].includes(attempt.status));
     for (const attempt of activeAttempts) {
       gaps.push({
         type: "active_attempt",
@@ -79,10 +83,18 @@ export function evaluateManagedCompletion(
       });
     }
 
-    if (task.status === "awaiting_review") {
+    const pendingReviews = db.prepare(`
+      SELECT worker_delegation_request_id FROM managed_task_reviews
+      WHERE task_id = ? AND status = 'pending' ORDER BY created_at, rowid
+    `).all(task.database_id) as Array<{ worker_delegation_request_id: string }>;
+    if (task.status === "awaiting_review" || pendingReviews.length > 0) {
       gaps.push({ type: "pending_review", taskId: task.id, safeSummary: `Task ${task.id} is awaiting judge review.` });
     }
-    if (task.status === "awaiting_delivery") {
+    const pendingDeliveries = db.prepare(`
+      SELECT worker_delegation_request_id FROM managed_task_deliveries
+      WHERE task_id = ? AND status = 'pending' ORDER BY created_at, rowid
+    `).all(task.database_id) as Array<{ worker_delegation_request_id: string }>;
+    if (task.status === "awaiting_delivery" || pendingDeliveries.length > 0) {
       gaps.push({ type: "pending_delivery", taskId: task.id, safeSummary: `Task ${task.id} is awaiting backend delivery.` });
     }
 
@@ -98,25 +110,48 @@ export function evaluateManagedCompletion(
       });
     }
 
-    const attempts = db.prepare(`
-      SELECT id, result_summary FROM agent_delegation_requests
-      WHERE task_id = ? AND role = 'worker' AND result_summary IS NOT NULL
-    `).all(task.id) as Array<{ id: string; result_summary: string }>;
+    const reviews = db.prepare(`
+      SELECT worker_delegation_request_id, integration_attempt_id, reviewed_candidate_commit_sha,
+        status, verdict
+      FROM managed_task_reviews WHERE task_id = ? ORDER BY created_at, rowid
+    `).all(task.database_id) as CandidateReviewRow[];
+    const deliveryByWorker = new Map(
+      (db.prepare(`
+        SELECT worker_delegation_request_id, integration_attempt_id, candidate_commit_sha, status
+        FROM managed_task_deliveries WHERE task_id = ? ORDER BY created_at, rowid
+      `).all(task.database_id) as CandidateDeliveryRow[])
+        .map((delivery) => [delivery.worker_delegation_request_id, delivery]),
+    );
+    const integrationById = new Map(
+      (db.prepare(`
+        SELECT id, worker_delegation_request_id, status, resolved_candidate_commit_sha
+        FROM managed_task_integrations WHERE task_id = ? ORDER BY created_at, rowid
+      `).all(task.database_id) as CandidateIntegrationRow[]).map((integration) => [integration.id, integration]),
+    );
+    const acceptedReviewByWorker = new Map<string, CandidateReviewRow>();
+    for (const review of reviews) {
+      if (review.status === "accepted" && review.verdict === "accepted") {
+        acceptedReviewByWorker.set(review.worker_delegation_request_id, review);
+      }
+    }
     for (const attempt of attempts) {
+      if (!attempt.result_summary) continue;
       const summary = parseSummary(attempt.result_summary);
       if ((summary?.attestedFiles?.length ?? 0) === 0) continue;
-      const committed = db.prepare(`
-        SELECT 1 FROM managed_task_deliveries
-        WHERE worker_delegation_request_id = ? AND status = 'committed'
-      `).get(attempt.id);
-      if (!committed) {
-        gaps.push({
-          type: "undelivered_changes",
-          taskId: task.id,
-          delegationRequestId: attempt.id,
-          safeSummary: `Attested changes from worker attempt ${attempt.id} have not been delivered.`,
-        });
-      }
+      const acceptedReview = acceptedReviewByWorker.get(attempt.id);
+      if (!acceptedReview || !isDeliveryEligibleReview(acceptedReview, integrationById)) continue;
+      const delivery = deliveryByWorker.get(attempt.id);
+      const exactDelivery = delivery
+        && delivery.integration_attempt_id === acceptedReview.integration_attempt_id
+        && delivery.candidate_commit_sha === acceptedReview.reviewed_candidate_commit_sha;
+      if (exactDelivery && delivery.status === "committed") continue;
+      if (exactDelivery && delivery.status !== "pending") continue;
+      gaps.push({
+        type: "undelivered_changes",
+        taskId: task.id,
+        delegationRequestId: attempt.id,
+        safeSummary: `Accepted candidate from worker attempt ${attempt.id} has not been delivered.`,
+      });
     }
   }
 
@@ -128,6 +163,43 @@ export function evaluateManagedCompletion(
     });
   }
   return { ok: gaps.length === 0, gaps };
+}
+
+interface CandidateReviewRow {
+  worker_delegation_request_id: string;
+  integration_attempt_id: string | null;
+  reviewed_candidate_commit_sha: string | null;
+  status: string;
+  verdict: string | null;
+}
+
+interface CandidateDeliveryRow {
+  worker_delegation_request_id: string;
+  integration_attempt_id: string | null;
+  candidate_commit_sha: string | null;
+  status: string;
+}
+
+interface CandidateIntegrationRow {
+  id: string;
+  worker_delegation_request_id: string;
+  status: string;
+  resolved_candidate_commit_sha: string | null;
+}
+
+function isDeliveryEligibleReview(
+  review: CandidateReviewRow,
+  integrationById: Map<string, CandidateIntegrationRow>,
+): boolean {
+  if (!review.reviewed_candidate_commit_sha) return false;
+  if (!review.integration_attempt_id) return true;
+  const integration = integrationById.get(review.integration_attempt_id);
+  return Boolean(
+    integration
+      && integration.worker_delegation_request_id === review.worker_delegation_request_id
+      && integration.resolved_candidate_commit_sha === review.reviewed_candidate_commit_sha
+      && ["accepted", "committed"].includes(integration.status),
+  );
 }
 
 function parseSummary(value: string): AgentRuntimeDelegationSummary | null {

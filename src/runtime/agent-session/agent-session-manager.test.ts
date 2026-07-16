@@ -1102,6 +1102,55 @@ test("starts bounded nudge continuations and blocks the goal when exhausted", as
   const blocked = events.find((event) => event.type === "goal.blocked");
   assert.equal(blocked?.data.runtimeEventType, "supervisor.continuations_exhausted");
   assert.equal(blocked?.data.maxSupervisorContinuations, 2);
+  assert.match(String(blocked?.data.reason), /without a completion signal/i);
+  assert.equal(blocked?.data.completionRequestEvaluated, false);
+  fixture.db.close();
+});
+
+test("continuation exhaustion preserves rejected completion gaps and reports unsuccessful completion", async () => {
+  const fixture = createManagerFixture("rejected completion bound");
+  const managedTaskRepo = createManagedTaskRepository(fixture.db);
+  managedTaskRepo.registerTasks({
+    goalId: fixture.goal.id,
+    tasks: [{ id: "task-1", title: "Incomplete", acceptance: [{ id: "A1", text: "Must pass" }] }],
+  });
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      return createHandle(input.sessionId, [
+        {
+          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Request completion.", occurredAt: "2026-07-16T00:00:01.000Z",
+          metadata: { delegationControlEvent: { type: "managed_delegation.complete", summary: "Claim complete." } },
+        },
+        {
+          type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Turn ended.", occurredAt: "2026-07-16T00:00:02.000Z",
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture, database: fixture.db, managedTaskRepo, maxSupervisorContinuations: 1,
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const rejected = events.filter((event) => event.data.runtimeEventType === "delegation.rejected");
+  assert.equal(rejected.length, 2);
+  assert.ok(rejected.every((event) => Array.isArray(event.data.completionGaps)));
+  const blocked = events.find((event) => event.data.runtimeEventType === "supervisor.continuations_exhausted");
+  assert.match(String(blocked?.data.reason), /without reaching successful completion/i);
+  assert.equal(blocked?.data.completionRequestEvaluated, true);
+  assert.deepEqual(blocked?.data.completionGaps, rejected.at(-1)?.data.completionGaps);
+  assert.ok((blocked?.data.completionGaps as Array<{ type: string }>).some((gap) => gap.type === "criterion_not_passed"));
   fixture.db.close();
 });
 

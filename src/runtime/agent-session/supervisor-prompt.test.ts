@@ -205,6 +205,10 @@ test("bootstrap prompt documents goal scale assessment and the change plan forma
   assert.ok(/"rationale"/.test(prompt), "plan example must show a rationale");
   assert.ok(/small goals?/i.test(prompt), "bootstrap must keep small goals on the flat flow");
   assert.ok(/spec:/.test(prompt), "bootstrap must explain the backend-registered spec tasks");
+  assert.match(prompt, /already registered/i);
+  assert.match(prompt, /backend-authored frozen/i);
+  assert.match(prompt, /implementation tasks only/i);
+  assert.match(prompt, /do not re-announce.*spec:/i);
 });
 
 test("contract documents the goal reassessment loop and its control block", () => {
@@ -295,6 +299,9 @@ test("continuation and nudge prompts carry the change history when a plan exists
   assert.ok(continuation.includes("## Change plan"));
   assert.ok(nudge.includes("## Change plan"));
   assert.ok(continuation.includes("change-two"));
+  assert.match(continuation, /synthetic.*already registered/i);
+  assert.match(continuation, /implementation tasks only/i);
+  assert.match(nudge, /do not re-announce.*spec:/i);
 });
 
 test("plan-less goals render without a change plan section", () => {
