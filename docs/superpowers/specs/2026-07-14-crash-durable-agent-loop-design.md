@@ -151,14 +151,26 @@ On startup, enumerate worktrees recorded for non-terminal/failed goals and clean
 orphans; replaces the manual-prune note. Fixes hotspot #3.
 Verify: create worktree, simulate crash, assert recovery cleans it.
 
-### Phase 3 — Recover goals by reconcile-and-continue  *(core)*
-Rewrite `recoverOrphanedSessions` from force-fail-all into the per-phase
-reconciler (recovery table above): reconcile pending deliveries/integrations vs
-git; interrupt + clean + reset `running` workers; hand `completed` workers to the
-supervisor; **rebuild in-memory `SupervisorState` from durable rows**; restart the
-supervisor with a re-projected continuation prompt instead of failing the goal.
-This phase is what actually delivers "survive a restart and continue." Depends on
-0–2. Fixes the headline defect (crash = permanent goal failure).
+### Phase 3 — Recover goals by reconcile-and-continue  *(core; split 3a + 3b)*
+The core recovery is split into two changes so the trickiest correctness
+(git/ledger/disk reconciliation) is isolated and shipped before execution resume.
+
+- **Phase 3a — Reconcile in-flight state to clean/resumable (no resume yet).**
+  Replace `recoverOrphanedSessions` force-fail-all with a per-goal reconciler
+  (recovery table above): reconcile pending deliveries/integrations vs git (wire
+  Phase 1's `reconcilePendingDelivery` + `listPendingDeliveries`); interrupt
+  `running` worker attempts, discard their (Phase-2-cleaned) worktrees, and reset
+  their tasks to a re-dispatchable state. Outcome: a crashed goal is left in a
+  clean, consistent, resumable durable state (ledger + git + disk agree) — but is
+  not yet auto-continued. Isolates the hardest correctness; independently testable.
+- **Phase 3b — Resume execution from the durable projection.** After 3a's
+  reconcile, restart the supervisor for each reconciled goal with a re-projected
+  continuation prompt (`projectManagedTaskContext`), rebuilding any needed
+  in-memory registry state from durable rows, instead of failing the goal. This is
+  what actually delivers "survive a restart and continue." Depends on 3a.
+
+Depends on 0–2. Together these fix the headline defect (crash = permanent goal
+failure).
 
 ### Phase 4 — Supervisor session resume  *(optional quality layer)*
 Persist the provider-native session id (`agent_sessions` new column); wire the
