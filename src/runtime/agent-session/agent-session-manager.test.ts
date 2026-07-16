@@ -2177,6 +2177,131 @@ test("accepts a change plan, scaffolds in dependency order, activates the first 
   fixture.db.close();
 });
 
+test("does not scaffold a change plan when durable synthetic task registration fails", async () => {
+  const fixture = createManagerFixture("durable registration failure");
+  const openSpec = recordingOpenSpecService("cli");
+  const persistedTasks = createManagedTaskRepository(fixture.db);
+  const manager = createAgentSessionManager({
+    ...fixture,
+    managedTaskRepo: {
+      ...persistedTasks,
+      registerTasks() {
+        throw new Error("injected durable registration failure");
+      },
+    },
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await assert.rejects(
+    manager.startManagedSession({
+      goalId: fixture.goal.id,
+      providerId: "codex-local",
+      modelLabel: "gpt-5-codex",
+      adapter: adapterWithEvents([changePlanEvent([
+        { id: "feature-a", title: "Feature A", rationale: "First slice." },
+        { id: "feature-b", title: "Feature B", rationale: "Second slice." },
+      ])]),
+    }),
+    /injected durable registration failure/,
+  );
+
+  assert.deepEqual(openSpec.scaffolded, []);
+  assert.ok(!fixture.eventRepo.listForGoal(fixture.goal.id)
+    .some((event) => event.data.runtimeEventType === "supervisor.change_plan"));
+  fixture.db.close();
+});
+
+test("records OpenSpec materialization failures after preserving durable plan tasks", async () => {
+  const fixture = createManagerFixture("materialization failure");
+  const openSpec = recordingOpenSpecService("cli", {
+    scaffoldResults: [
+      { ok: false, committed: false, safeReason: "injected scaffold failure" },
+      { ok: true, committed: true },
+    ],
+  });
+  const managedTaskRepo = createManagedTaskRepository(fixture.db);
+  const manager = createAgentSessionManager({
+    ...fixture,
+    database: fixture.db,
+    managedTaskRepo,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([changePlanEvent([
+      { id: "feature-a", title: "Feature A", rationale: "First slice." },
+      { id: "feature-b", title: "Feature B", rationale: "Second slice." },
+    ])]),
+  });
+
+  assert.deepEqual(managedTaskRepo.listForGoal(fixture.goal.id).map((task) => task.id), [
+    "spec:feature-a",
+    "spec:feature-b",
+  ]);
+  const failure = fixture.eventRepo.listForGoal(fixture.goal.id)
+    .find((event) => event.data.runtimeEventType === "runtime.openspec_materialization_failed");
+  assert.ok(failure);
+  assert.match(JSON.stringify(failure.data.openspecScaffolds), /injected scaffold failure/);
+  fixture.db.close();
+});
+
+test("registers the same synthetic task ids independently for two managed goals", async () => {
+  const fixture = createManagerFixture("first same-name plan");
+  const secondGoal = fixture.goalRepo.create({ title: "second same-name plan", description: "Reuse change ids." });
+  fixture.goalRepo.updateStatus(secondGoal.id, "running", { startedAt: "2026-07-13T00:00:00.000Z" });
+  const managedTaskRepo = createManagedTaskRepository(fixture.db);
+  const openSpec = recordingOpenSpecService("cli");
+  const manager = createAgentSessionManager({
+    ...fixture,
+    database: fixture.db,
+    managedTaskRepo,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+  const plan = [
+    { id: "feature-a", title: "Feature A", rationale: "First slice." },
+    { id: "feature-b", title: "Feature B", rationale: "Second slice." },
+  ];
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([changePlanEvent(plan)]),
+  });
+  await manager.startManagedSession({
+    goalId: secondGoal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([changePlanEvent(plan)]),
+  });
+
+  assert.deepEqual(managedTaskRepo.listForGoal(fixture.goal.id).map((task) => task.id), [
+    "spec:feature-a", "spec:feature-b",
+  ]);
+  assert.deepEqual(managedTaskRepo.listForGoal(secondGoal.id).map((task) => task.id), [
+    "spec:feature-a", "spec:feature-b",
+  ]);
+  const internalIds = fixture.db.prepare(`
+    SELECT id FROM managed_tasks WHERE logical_task_id = 'spec:feature-a' ORDER BY goal_id
+  `).all() as Array<{ id: string }>;
+  assert.equal(internalIds.length, 2);
+  assert.notEqual(internalIds[0]?.id, internalIds[1]?.id);
+  for (const goalId of [fixture.goal.id, secondGoal.id]) {
+    const planEvent = fixture.eventRepo.listForGoal(goalId)
+      .find((event) => event.data.runtimeEventType === "supervisor.change_plan");
+    assert.match(JSON.stringify(planEvent?.data.specTasks), /spec:feature-a/);
+    assert.ok(!JSON.stringify(planEvent?.data.specTasks).includes(internalIds[0]!.id));
+    assert.ok(!JSON.stringify(planEvent?.data.specTasks).includes(internalIds[1]!.id));
+  }
+  fixture.db.close();
+});
+
 test("rejects a change plan that violates the plan budget without registering changes", async () => {
   const fixture = createManagerFixture("undersized change plan goal");
   const openSpec = recordingOpenSpecService("cli");
@@ -4092,17 +4217,21 @@ function changePlanEvent(
 
 function recordingOpenSpecService(
   mode: "cli" | "degraded",
-  options: { validateFailures?: string[][] } = {},
+  options: {
+    validateFailures?: string[][];
+    scaffoldResults?: Array<{ ok: boolean; committed: boolean; safeReason?: string }>;
+  } = {},
 ) {
   const scaffolded: Array<{ changeId: string; cwd: string }> = [];
   const validated: Array<{ changeId: string; cwd: string }> = [];
   const archived: Array<{ changeId: string; cwd: string; date: string }> = [];
   const pendingFailures = [...(options.validateFailures ?? [])];
+  const pendingScaffoldResults = [...(options.scaffoldResults ?? [])];
   const service: OpenSpecWorkspaceService = {
     mode: () => mode,
     scaffoldChange(input) {
       scaffolded.push({ changeId: input.change.id, cwd: input.cwd });
-      return { ok: true, committed: true };
+      return pendingScaffoldResults.shift() ?? { ok: true, committed: true };
     },
     validateChange(input) {
       validated.push({ changeId: input.changeId, cwd: input.cwd });

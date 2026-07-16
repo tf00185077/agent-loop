@@ -30,9 +30,11 @@ export interface ManagedTaskTransitionOptions {
   safeSummary: string;
   runId?: string | null;
   citedCriteria?: string[];
+  goalId?: string;
 }
 
 export interface RecordExecutorEvidenceInput {
+  goalId?: string;
   taskId: string;
   workerDelegationRequestId: string;
   safeSummary: string;
@@ -41,6 +43,7 @@ export interface RecordExecutorEvidenceInput {
 }
 
 export interface RecordManagedReviewInput {
+  goalId?: string;
   taskId: string;
   workerDelegationRequestId: string;
   judgeDelegationRequestId: string | null;
@@ -84,6 +87,7 @@ export interface ManagedCriterionResultRecord {
 }
 
 export interface RecordManagedDeliveryInput {
+  goalId?: string;
   taskId: string;
   workerDelegationRequestId: string;
   integrationAttemptId?: string | null;
@@ -101,6 +105,7 @@ export interface RecordManagedDeliveryInput {
 }
 
 export interface BeginManagedIntegrationInput {
+  goalId?: string;
   taskId: string;
   workerDelegationRequestId: string;
   checkpointHead: string;
@@ -120,15 +125,16 @@ export interface TransitionManagedIntegrationOptions {
 
 export interface ManagedTaskRepository {
   registerTasks(input: RegisterManagedTasksInput): ManagedTaskRecord[];
-  getTask(taskId: string): ManagedTaskRecord | null;
+  getTask(goalIdOrTaskId: string, taskId?: string): ManagedTaskRecord | null;
   listForGoal(goalId: string): ManagedTaskRecord[];
-  listCriteria(taskId: string): ManagedTaskCriterionRecord[];
-  beginAttempt(taskId: string, workerDelegationRequestId: string, runId?: string | null): number;
+  listCriteria(goalIdOrTaskId: string, taskId?: string): ManagedTaskCriterionRecord[];
+  beginAttempt(taskId: string, workerDelegationRequestId: string, runId?: string | null, goalId?: string): number;
   transition(taskId: string, status: ManagedTaskStatus, options: ManagedTaskTransitionOptions): ManagedTaskRecord;
-  resetTaskForReDispatch(taskId: string, runId?: string | null): ManagedTaskRecord;
+  resetTaskForReDispatch(taskId: string, runId?: string | null, goalId?: string): ManagedTaskRecord;
   recordExecutorEvidence(input: RecordExecutorEvidenceInput): ManagedTaskRecord;
   listCriterionResults(workerDelegationRequestId: string): ManagedCriterionResultRecord[];
   beginReview(input: {
+    goalId?: string;
     taskId: string;
     workerDelegationRequestId: string;
     judgeDelegationRequestId: string;
@@ -138,6 +144,7 @@ export interface ManagedTaskRepository {
     runId?: string | null;
   }): ManagedReviewRecord;
   recordInvalidReview(input: {
+    goalId?: string;
     taskId: string;
     workerDelegationRequestId: string;
     judgeDelegationRequestId: string;
@@ -146,9 +153,9 @@ export interface ManagedTaskRepository {
     runId?: string | null;
   }): ManagedReviewRecord;
   recordReview(input: RecordManagedReviewInput): ManagedReviewRecord;
-  listReviews(taskId: string): ManagedReviewRecord[];
+  listReviews(goalIdOrTaskId: string, taskId?: string): ManagedReviewRecord[];
   recordDelivery(input: RecordManagedDeliveryInput): ManagedTaskDeliveryRecord;
-  listDeliveries(taskId: string): ManagedTaskDeliveryRecord[];
+  listDeliveries(goalIdOrTaskId: string, taskId?: string): ManagedTaskDeliveryRecord[];
   listPendingDeliveries(goalId: string): ManagedTaskDeliveryRecord[];
   beginIntegration(input: BeginManagedIntegrationInput): ManagedTaskIntegrationRecord;
   transitionIntegration(
@@ -157,7 +164,7 @@ export interface ManagedTaskRepository {
     options: TransitionManagedIntegrationOptions,
   ): ManagedTaskIntegrationRecord;
   getIntegration(integrationAttemptId: string): ManagedTaskIntegrationRecord | null;
-  listIntegrations(taskId: string): ManagedTaskIntegrationRecord[];
+  listIntegrations(goalIdOrTaskId: string, taskId?: string): ManagedTaskIntegrationRecord[];
   interruptNonterminalIntegrations(goalId: string, safeSummary: string, runId?: string | null): number;
 }
 
@@ -196,34 +203,34 @@ export function createManagedTaskRepository(
     const output: ManagedTaskRecord[] = [];
     let inserted = 0;
     for (const entry of input.tasks) {
-      const existing = getTask(db, entry.id);
+      const existing = getStoredTask(db, input.goalId, entry.id);
       if (existing) {
-        if (existing.goalId !== input.goalId) {
-          throw new Error(`Managed task id already belongs to another goal: ${entry.id}`);
-        }
-        output.push(existing);
+        output.push(toManagedTask(existing));
         continue;
       }
+      let parentDatabaseId: string | null = null;
       if (entry.parentTaskId) {
-        const parent = getTask(db, entry.parentTaskId);
-        if (!parent || parent.goalId !== input.goalId) {
+        const parent = getStoredTask(db, input.goalId, entry.parentTaskId);
+        if (!parent) {
           throw new Error(`Managed parent task not found in goal: ${entry.parentTaskId}`);
         }
+        parentDatabaseId = parent.databaseId;
       }
+      const databaseId = randomUUID();
       db.prepare(`
         INSERT INTO managed_tasks (
-          id, goal_id, change_id, parent_task_id, title, status, attempt_count,
+          id, goal_id, logical_task_id, change_id, parent_task_id, title, status, attempt_count,
           substantive_rejection_count, last_cited_criteria, last_safe_summary, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'registered', 0, 0, '[]', NULL, ?, ?)
-      `).run(entry.id, input.goalId, input.changeId ?? null, entry.parentTaskId ?? null, entry.title, now, now);
+        ) VALUES (?, ?, ?, ?, ?, ?, 'registered', 0, 0, '[]', NULL, ?, ?)
+      `).run(databaseId, input.goalId, entry.id, input.changeId ?? null, parentDatabaseId, entry.title, now, now);
       for (const criterion of entry.acceptance ?? []) {
         db.prepare(`
           INSERT INTO managed_task_criteria (task_id, criterion_id, text, outcome, created_at, updated_at)
           VALUES (?, ?, ?, 'UNKNOWN', ?, ?)
-        `).run(entry.id, criterion.id, criterion.text, now, now);
+        `).run(databaseId, criterion.id, criterion.text, now, now);
       }
       inserted += 1;
-      output.push(getTask(db, entry.id)!);
+      output.push(toManagedTask(getStoredTask(db, input.goalId, entry.id)!));
     }
     if (inserted > 0) {
       insertAuditEvent(db, {
@@ -240,7 +247,7 @@ export function createManagedTaskRepository(
 
   const transitionTransaction = db.transaction(
     (taskId: string, status: ManagedTaskStatus, transitionOptions: ManagedTaskTransitionOptions): ManagedTaskRecord => {
-      const task = requireTask(db, taskId);
+      const task = requireTask(db, transitionOptions.goalId, taskId);
       if (!legalTransitions[task.status].includes(status)) {
         throw new Error(`Cannot transition managed task from ${task.status} to ${status}.`);
       }
@@ -254,7 +261,7 @@ export function createManagedTaskRepository(
         transitionOptions.safeSummary,
         JSON.stringify(transitionOptions.citedCriteria ?? task.lastCitedCriteria),
         now,
-        taskId,
+        task.databaseId,
       );
       insertAuditEvent(db, {
         goalId: task.goalId,
@@ -264,27 +271,33 @@ export function createManagedTaskRepository(
         data: { taskId, from: task.status, to: status },
         now,
       });
-      return requireTask(db, taskId);
+      return toManagedTask(requireTask(db, task.goalId, taskId));
     },
   );
 
   return {
     registerTasks: register,
-    getTask(taskId) {
-      return getTask(db, taskId);
+    getTask(goalIdOrTaskId, taskId) {
+      const task = taskId === undefined
+        ? getStoredTask(db, undefined, goalIdOrTaskId)
+        : getStoredTask(db, goalIdOrTaskId, taskId);
+      return task ? toManagedTask(task) : null;
     },
     listForGoal(goalId) {
-      return db.prepare("SELECT * FROM managed_tasks WHERE goal_id = ? ORDER BY created_at, rowid").all(goalId).map(mapTask);
+      return listStoredTasksForGoal(db, goalId).map(toManagedTask);
     },
-    listCriteria(taskId) {
+    listCriteria(goalIdOrTaskId, taskId) {
+      const task = taskId === undefined
+        ? requireTask(db, undefined, goalIdOrTaskId)
+        : requireTask(db, goalIdOrTaskId, taskId);
       return db
         .prepare("SELECT * FROM managed_task_criteria WHERE task_id = ? ORDER BY rowid")
-        .all(taskId)
-        .map(mapCriterion);
+        .all(task.databaseId)
+        .map((row) => mapCriterion(row, task.id));
     },
-    beginAttempt(taskId, workerDelegationRequestId, runId = null) {
+    beginAttempt(taskId, workerDelegationRequestId, runId = null, goalId) {
       return db.transaction(() => {
-        const task = requireTask(db, taskId);
+        const task = requireTaskForDelegation(db, taskId, workerDelegationRequestId, goalId);
         if (!legalTransitions[task.status].includes("delegated")) {
           throw new Error(`Cannot transition managed task from ${task.status} to delegated.`);
         }
@@ -303,7 +316,7 @@ export function createManagedTaskRepository(
           .run(attemptNumber, now, workerDelegationRequestId);
         db.prepare(`
           UPDATE managed_tasks SET status = 'delegated', attempt_count = ?, last_safe_summary = ?, updated_at = ? WHERE id = ?
-        `).run(attemptNumber, `Worker attempt ${attemptNumber} delegated.`, now, taskId);
+        `).run(attemptNumber, `Worker attempt ${attemptNumber} delegated.`, now, task.databaseId);
         insertAuditEvent(db, {
           goalId: task.goalId, runId, message: `Worker attempt ${attemptNumber} delegated.`,
           runtimeEventType: "managed_task.attempt_started", data: { taskId, workerDelegationRequestId, attemptNumber }, now,
@@ -314,9 +327,9 @@ export function createManagedTaskRepository(
     transition(taskId, status, transitionOptions) {
       return transitionTransaction(taskId, status, transitionOptions);
     },
-    resetTaskForReDispatch(taskId, runId) {
+    resetTaskForReDispatch(taskId, runId, goalId) {
       return db.transaction(() => {
-        const task = requireTask(db, taskId);
+        const task = requireTask(db, goalId, taskId);
         const now = clock();
         // Reset to a re-dispatchable state without charging the interrupted,
         // never-reviewed attempt against the retry/narrowing budget: decrement
@@ -328,24 +341,24 @@ export function createManagedTaskRepository(
               attempt_count = CASE WHEN attempt_count > 0 THEN attempt_count - 1 ELSE 0 END,
               last_safe_summary = ?, updated_at = ?
           WHERE id = ?
-        `).run("Task reset for re-dispatch after restart recovery.", now, taskId);
+        `).run("Task reset for re-dispatch after restart recovery.", now, task.databaseId);
         insertAuditEvent(db, {
           goalId: task.goalId, runId: runId ?? null,
           message: "Task reset for re-dispatch after restart recovery.",
           runtimeEventType: "managed_task.reset_for_redispatch",
           data: { taskId }, now,
         });
-        return requireTask(db, taskId);
+        return toManagedTask(requireTask(db, task.goalId, taskId));
       })();
     },
     recordExecutorEvidence(input) {
       return db.transaction(() => {
-        const task = requireTask(db, input.taskId);
+        const task = requireTaskForDelegation(db, input.taskId, input.workerDelegationRequestId, input.goalId);
         if (task.status !== "delegated") {
           throw new Error(`Cannot record executor evidence while task is ${task.status}.`);
         }
         requireAttempt(db, input.taskId, input.workerDelegationRequestId);
-        const criteria = new Map(listCriteria(db, input.taskId).map((item) => [item.criterionId, item]));
+        const criteria = new Map(listCriteriaForTask(db, task).map((item) => [item.criterionId, item]));
         const now = clock();
         for (const evidence of input.criterionEvidence ?? []) {
           if (!criteria.has(evidence.criterionId)) {
@@ -358,27 +371,28 @@ export function createManagedTaskRepository(
             ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)
             ON CONFLICT(worker_delegation_request_id, criterion_id)
             DO UPDATE SET executor_evidence = excluded.executor_evidence, updated_at = excluded.updated_at
-          `).run(randomUUID(), input.taskId, input.workerDelegationRequestId, evidence.criterionId, evidence.evidence, now, now);
+          `).run(randomUUID(), task.databaseId, input.workerDelegationRequestId, evidence.criterionId, evidence.evidence, now, now);
         }
         db.prepare(`UPDATE managed_tasks SET status = 'awaiting_review', last_safe_summary = ?, updated_at = ? WHERE id = ?`)
-          .run(input.safeSummary, now, input.taskId);
+          .run(input.safeSummary, now, task.databaseId);
         insertAuditEvent(db, {
           goalId: task.goalId, runId: input.runId ?? null, message: input.safeSummary,
           runtimeEventType: "managed_task.executor_claim_recorded",
           data: { taskId: input.taskId, workerDelegationRequestId: input.workerDelegationRequestId }, now,
         });
-        return requireTask(db, input.taskId);
+        return toManagedTask(requireTask(db, task.goalId, input.taskId));
       })();
     },
     listCriterionResults(workerDelegationRequestId) {
       return db.prepare(`
-        SELECT * FROM managed_task_criterion_results
-        WHERE worker_delegation_request_id = ? ORDER BY rowid
+        SELECT r.*, t.logical_task_id FROM managed_task_criterion_results r
+        JOIN managed_tasks t ON t.id = r.task_id
+        WHERE r.worker_delegation_request_id = ? ORDER BY r.rowid
       `).all(workerDelegationRequestId).map(mapCriterionResult);
     },
     beginReview(input) {
       return db.transaction(() => {
-        const task = requireTask(db, input.taskId);
+        const task = requireTaskForDelegation(db, input.taskId, input.workerDelegationRequestId, input.goalId);
         requireAttempt(db, input.taskId, input.workerDelegationRequestId);
         const integration = input.integrationAttemptId ? requireIntegration(db, input.integrationAttemptId) : null;
         if (integration) {
@@ -398,7 +412,7 @@ export function createManagedTaskRepository(
             integration_attempt_id, reviewed_candidate_commit_sha, status, verdict,
             decisions, cited_criteria, safe_summary, deferred_findings, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, '[]', '[]', ?, '[]', ?, ?)
-        `).run(id, input.taskId, input.workerDelegationRequestId, input.judgeDelegationRequestId,
+        `).run(id, task.databaseId, input.workerDelegationRequestId, input.judgeDelegationRequestId,
           input.integrationAttemptId ?? null, input.reviewedCandidateCommitSha ?? null, input.safeSummary, now, now);
         insertAuditEvent(db, {
           goalId: task.goalId, runId: input.runId ?? null, message: input.safeSummary,
@@ -412,7 +426,7 @@ export function createManagedTaskRepository(
     },
     recordInvalidReview(input) {
       return db.transaction(() => {
-        const task = requireTask(db, input.taskId);
+        const task = requireTask(db, input.goalId, input.taskId);
         const existing = db.prepare(`
           SELECT id FROM managed_task_reviews WHERE judge_delegation_request_id = ? AND status = 'pending'
         `).get(input.judgeDelegationRequestId) as { id: string } | undefined;
@@ -429,7 +443,7 @@ export function createManagedTaskRepository(
               id, task_id, worker_delegation_request_id, judge_delegation_request_id, status, verdict,
               decisions, cited_criteria, safe_summary, deferred_findings, created_at, updated_at
             ) VALUES (?, ?, ?, ?, 'malformed', NULL, '[]', '[]', ?, ?, ?, ?)
-          `).run(id, input.taskId, input.workerDelegationRequestId, input.judgeDelegationRequestId,
+          `).run(id, task.databaseId, input.workerDelegationRequestId, input.judgeDelegationRequestId,
             input.safeSummary, JSON.stringify(input.deferredFindings ?? []), now, now);
         }
         insertAuditEvent(db, {
@@ -442,7 +456,7 @@ export function createManagedTaskRepository(
     },
     recordReview(input) {
       return db.transaction(() => {
-        const task = requireTask(db, input.taskId);
+        const task = requireTaskForDelegation(db, input.taskId, input.workerDelegationRequestId, input.goalId);
         requireAttempt(db, input.taskId, input.workerDelegationRequestId);
         const integration = input.integrationAttemptId ? requireIntegration(db, input.integrationAttemptId) : null;
         if (integration) {
@@ -458,7 +472,7 @@ export function createManagedTaskRepository(
           throw new Error(integration ? `Integration attempt already reviewed: ${integration.id}`
             : `Worker attempt already reviewed: ${input.workerDelegationRequestId}`);
         }
-        const criteria = listCriteria(db, input.taskId);
+        const criteria = listCriteriaForTask(db, task);
         validateReview(criteria, input);
         const now = clock();
         const cited = input.decisions.map((decision) => decision.criterionId);
@@ -473,11 +487,11 @@ export function createManagedTaskRepository(
                           judge_safe_summary = excluded.judge_safe_summary,
                           updated_at = excluded.updated_at
           `).run(
-            randomUUID(), input.taskId, input.workerDelegationRequestId, decision.criterionId,
+            randomUUID(), task.databaseId, input.workerDelegationRequestId, decision.criterionId,
             decision.outcome, decision.safeSummary, now, now,
           );
           db.prepare(`UPDATE managed_task_criteria SET outcome = ?, updated_at = ? WHERE task_id = ? AND criterion_id = ?`)
-            .run(decision.outcome, now, input.taskId, decision.criterionId);
+            .run(decision.outcome, now, task.databaseId, decision.criterionId);
         }
         const reviewStatus = input.verdict;
         const pending = input.judgeDelegationRequestId ? db.prepare(`
@@ -500,7 +514,7 @@ export function createManagedTaskRepository(
               decisions, cited_criteria, safe_summary, deferred_findings, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
-            reviewId, input.taskId, input.workerDelegationRequestId, input.judgeDelegationRequestId,
+            reviewId, task.databaseId, input.workerDelegationRequestId, input.judgeDelegationRequestId,
             input.integrationAttemptId ?? null, input.reviewedCandidateCommitSha ?? null,
             reviewStatus, input.verdict, JSON.stringify(input.decisions), JSON.stringify(cited), input.safeSummary,
             JSON.stringify(input.deferredFindings ?? []), now, now,
@@ -521,7 +535,7 @@ export function createManagedTaskRepository(
           SET status = ?, substantive_rejection_count = substantive_rejection_count + ?,
               last_cited_criteria = ?, last_safe_summary = ?, updated_at = ?
           WHERE id = ?
-        `).run(nextStatus, rejectionIncrement, JSON.stringify(cited), input.safeSummary, now, input.taskId);
+        `).run(nextStatus, rejectionIncrement, JSON.stringify(cited), input.safeSummary, now, task.databaseId);
         insertAuditEvent(db, {
           goalId: task.goalId, runId: input.runId ?? null, message: input.safeSummary,
           runtimeEventType: "managed_task.review_recorded",
@@ -530,12 +544,19 @@ export function createManagedTaskRepository(
         return getReview(db, reviewId)!;
       })();
     },
-    listReviews(taskId) {
-      return db.prepare("SELECT * FROM managed_task_reviews WHERE task_id = ? ORDER BY created_at, rowid").all(taskId).map(mapReview);
+    listReviews(goalIdOrTaskId, taskId) {
+      const task = taskId === undefined
+        ? requireTask(db, undefined, goalIdOrTaskId)
+        : requireTask(db, goalIdOrTaskId, taskId);
+      return db.prepare(`
+        SELECT r.*, t.logical_task_id FROM managed_task_reviews r
+        JOIN managed_tasks t ON t.id = r.task_id
+        WHERE r.task_id = ? ORDER BY r.created_at, r.rowid
+      `).all(task.databaseId).map(mapReview);
     },
     recordDelivery(input) {
       return db.transaction(() => {
-        const task = requireTask(db, input.taskId);
+        const task = requireTaskForDelegation(db, input.taskId, input.workerDelegationRequestId, input.goalId);
         requireAttempt(db, input.taskId, input.workerDelegationRequestId);
         const now = clock();
         const id = randomUUID();
@@ -553,7 +574,7 @@ export function createManagedTaskRepository(
             validation_exit_code = excluded.validation_exit_code, validation_summary = excluded.validation_summary,
             rollback_summary = excluded.rollback_summary, safe_summary = excluded.safe_summary, updated_at = excluded.updated_at
         `).run(
-          id, input.taskId, input.workerDelegationRequestId, input.integrationAttemptId ?? null, input.status,
+          id, task.databaseId, input.workerDelegationRequestId, input.integrationAttemptId ?? null, input.status,
           input.checkpointHead ?? null, input.checkpointStatus ?? null, input.candidateCommitSha ?? null,
           input.commitSha ?? null, input.validationCommand ?? null, input.validationExitCode ?? null,
           input.validationSummary ?? null, input.rollbackSummary ?? null, input.safeSummary, now, now,
@@ -574,7 +595,7 @@ export function createManagedTaskRepository(
           : input.status === "rejected" ? "rejected"
           : input.status === "revert_failed" ? "blocked" : "failed";
         db.prepare("UPDATE managed_tasks SET status = ?, last_safe_summary = ?, updated_at = ? WHERE id = ?")
-          .run(nextStatus, input.safeSummary, now, input.taskId);
+          .run(nextStatus, input.safeSummary, now, task.databaseId);
         insertAuditEvent(db, {
           goalId: task.goalId, runId: input.runId ?? null, message: input.safeSummary,
           runtimeEventType: "managed_task.delivery_recorded",
@@ -583,12 +604,19 @@ export function createManagedTaskRepository(
         return getDelivery(db, input.workerDelegationRequestId)!;
       })();
     },
-    listDeliveries(taskId) {
-      return db.prepare("SELECT * FROM managed_task_deliveries WHERE task_id = ? ORDER BY created_at, rowid").all(taskId).map(mapDelivery);
+    listDeliveries(goalIdOrTaskId, taskId) {
+      const task = taskId === undefined
+        ? requireTask(db, undefined, goalIdOrTaskId)
+        : requireTask(db, goalIdOrTaskId, taskId);
+      return db.prepare(`
+        SELECT d.*, t.logical_task_id FROM managed_task_deliveries d
+        JOIN managed_tasks t ON t.id = d.task_id
+        WHERE d.task_id = ? ORDER BY d.created_at, d.rowid
+      `).all(task.databaseId).map(mapDelivery);
     },
     listPendingDeliveries(goalId) {
       return db.prepare(`
-        SELECT d.* FROM managed_task_deliveries d
+        SELECT d.*, t.logical_task_id FROM managed_task_deliveries d
         JOIN managed_tasks t ON t.id = d.task_id
         WHERE t.goal_id = ? AND d.status = 'pending'
         ORDER BY d.created_at, d.rowid
@@ -596,7 +624,7 @@ export function createManagedTaskRepository(
     },
     beginIntegration(input) {
       return db.transaction(() => {
-        const task = requireTask(db, input.taskId);
+        const task = requireTaskForDelegation(db, input.taskId, input.workerDelegationRequestId, input.goalId);
         requireAttempt(db, input.taskId, input.workerDelegationRequestId);
         const existing = db.prepare(`
           SELECT id FROM managed_task_integrations
@@ -611,11 +639,11 @@ export function createManagedTaskRepository(
             checkpoint_head, original_candidate_commit_sha, resolved_candidate_commit_sha,
             conflict_files, allowed_files, safe_summary, created_at, updated_at
           ) VALUES (?, ?, ?, NULL, 'pending', ?, ?, NULL, ?, ?, ?, ?, ?)
-        `).run(id, input.taskId, input.workerDelegationRequestId, input.checkpointHead,
+        `).run(id, task.databaseId, input.workerDelegationRequestId, input.checkpointHead,
           input.originalCandidateCommitSha, JSON.stringify(uniqueSorted(input.conflictFiles)),
           JSON.stringify(uniqueSorted(input.allowedFiles)), input.safeSummary, now, now);
         db.prepare("UPDATE managed_tasks SET status = 'awaiting_delivery', last_safe_summary = ?, updated_at = ? WHERE id = ?")
-          .run(input.safeSummary, now, input.taskId);
+          .run(input.safeSummary, now, task.databaseId);
         insertAuditEvent(db, {
           goalId: task.goalId, runId: input.runId ?? null, message: input.safeSummary,
           runtimeEventType: "managed_task.integration_started",
@@ -637,7 +665,7 @@ export function createManagedTaskRepository(
         if (status === "awaiting_review" && !transitionOptions.resolvedCandidateCommitSha) {
           throw new Error("Awaiting review requires a resolved candidate commit SHA.");
         }
-        const task = requireTask(db, current.taskId);
+        const task = requireTaskForIntegration(db, integrationAttemptId);
         const now = clock();
         db.prepare(`
           UPDATE managed_task_integrations SET status = ?, integrator_delegation_request_id = COALESCE(?, integrator_delegation_request_id),
@@ -657,14 +685,20 @@ export function createManagedTaskRepository(
     getIntegration(integrationAttemptId) {
       return getIntegration(db, integrationAttemptId);
     },
-    listIntegrations(taskId) {
-      return db.prepare("SELECT * FROM managed_task_integrations WHERE task_id = ? ORDER BY created_at, rowid")
-        .all(taskId).map(mapIntegration);
+    listIntegrations(goalIdOrTaskId, taskId) {
+      const task = taskId === undefined
+        ? requireTask(db, undefined, goalIdOrTaskId)
+        : requireTask(db, goalIdOrTaskId, taskId);
+      return db.prepare(`
+        SELECT i.*, t.logical_task_id FROM managed_task_integrations i
+        JOIN managed_tasks t ON t.id = i.task_id
+        WHERE i.task_id = ? ORDER BY i.created_at, i.rowid
+      `).all(task.databaseId).map(mapIntegration);
     },
     interruptNonterminalIntegrations(goalId, safeSummary, runId = null) {
       return db.transaction(() => {
         const rows = db.prepare(`
-          SELECT i.* FROM managed_task_integrations i
+          SELECT i.*, t.logical_task_id FROM managed_task_integrations i
           JOIN managed_tasks t ON t.id = i.task_id
           WHERE t.goal_id = ? AND i.status IN ('pending', 'resolving', 'awaiting_review', 'accepted')
         `).all(goalId).map(mapIntegration);
@@ -710,28 +744,82 @@ function requireAttempt(db: AppDatabase, taskId: string, requestId: string): voi
   if (!row) throw new Error(`Managed worker attempt not found: ${requestId}`);
 }
 
-function getTask(db: AppDatabase, taskId: string): ManagedTaskRecord | null {
-  const row = db.prepare("SELECT * FROM managed_tasks WHERE id = ?").get(taskId);
-  return row ? mapTask(row) : null;
+type StoredManagedTask = ManagedTaskRecord & { databaseId: string };
+
+const managedTaskSelect = `
+  SELECT t.*, p.logical_task_id AS parent_logical_task_id
+  FROM managed_tasks t
+  LEFT JOIN managed_tasks p ON p.id = t.parent_task_id
+`;
+
+function getStoredTask(db: AppDatabase, goalId: string | undefined, taskId: string): StoredManagedTask | null {
+  if (goalId) {
+    const row = db.prepare(`${managedTaskSelect} WHERE t.goal_id = ? AND t.logical_task_id = ?`)
+      .get(goalId, taskId);
+    return row ? mapStoredTask(row) : null;
+  }
+  const rows = db.prepare(`${managedTaskSelect} WHERE t.logical_task_id = ? ORDER BY t.rowid LIMIT 2`)
+    .all(taskId);
+  if (rows.length > 1) {
+    throw new Error(`Managed task lookup requires goal context: ${taskId}`);
+  }
+  return rows[0] ? mapStoredTask(rows[0]) : null;
 }
 
-function requireTask(db: AppDatabase, taskId: string): ManagedTaskRecord {
-  const task = getTask(db, taskId);
-  if (!task) throw new Error(`Managed task not found: ${taskId}`);
+function listStoredTasksForGoal(db: AppDatabase, goalId: string): StoredManagedTask[] {
+  return db.prepare(`${managedTaskSelect} WHERE t.goal_id = ? ORDER BY t.created_at, t.rowid`)
+    .all(goalId)
+    .map(mapStoredTask);
+}
+
+function requireTask(db: AppDatabase, goalId: string | undefined, taskId: string): StoredManagedTask {
+  const task = getStoredTask(db, goalId, taskId);
+  if (!task) throw new Error(`Managed task not found in goal${goalId ? ` ${goalId}` : ""}: ${taskId}`);
   return task;
 }
 
-function listCriteria(db: AppDatabase, taskId: string): ManagedTaskCriterionRecord[] {
-  return db.prepare("SELECT * FROM managed_task_criteria WHERE task_id = ? ORDER BY rowid").all(taskId).map(mapCriterion);
+function requireTaskForDelegation(
+  db: AppDatabase,
+  taskId: string,
+  requestId: string,
+  explicitGoalId?: string,
+): StoredManagedTask {
+  const delegation = db.prepare(`
+    SELECT s.goal_id FROM agent_delegation_requests d
+    JOIN agent_sessions s ON s.id = d.parent_session_id
+    WHERE d.id = ? AND d.task_id = ?
+  `).get(requestId, taskId) as { goal_id: string } | undefined;
+  if (!delegation) throw new Error(`Managed worker attempt not found: ${requestId}`);
+  if (explicitGoalId && delegation.goal_id !== explicitGoalId) {
+    throw new Error(`Managed worker attempt belongs to another goal: ${requestId}`);
+  }
+  return requireTask(db, explicitGoalId ?? delegation.goal_id, taskId);
 }
 
-function mapTask(row: unknown): ManagedTaskRecord {
+function requireTaskForIntegration(db: AppDatabase, integrationAttemptId: string): StoredManagedTask {
+  const row = db.prepare(`
+    SELECT t.logical_task_id, t.goal_id FROM managed_task_integrations i
+    JOIN managed_tasks t ON t.id = i.task_id
+    WHERE i.id = ?
+  `).get(integrationAttemptId) as { logical_task_id: string; goal_id: string } | undefined;
+  if (!row) throw new Error(`Managed integration attempt not found: ${integrationAttemptId}`);
+  return requireTask(db, row.goal_id, row.logical_task_id);
+}
+
+function listCriteriaForTask(db: AppDatabase, task: StoredManagedTask): ManagedTaskCriterionRecord[] {
+  return db.prepare("SELECT * FROM managed_task_criteria WHERE task_id = ? ORDER BY rowid")
+    .all(task.databaseId)
+    .map((row) => mapCriterion(row, task.id));
+}
+
+function mapStoredTask(row: unknown): StoredManagedTask {
   const value = row as Record<string, string | number | null>;
   return {
-    id: value.id as string,
+    databaseId: value.id as string,
+    id: value.logical_task_id as string,
     goalId: value.goal_id as string,
     changeId: value.change_id as string | null,
-    parentTaskId: value.parent_task_id as string | null,
+    parentTaskId: value.parent_logical_task_id as string | null,
     title: value.title as string,
     status: value.status as ManagedTaskStatus,
     attemptCount: value.attempt_count as number,
@@ -743,10 +831,15 @@ function mapTask(row: unknown): ManagedTaskRecord {
   };
 }
 
-function mapCriterion(row: unknown): ManagedTaskCriterionRecord {
+function toManagedTask(task: StoredManagedTask): ManagedTaskRecord {
+  const { databaseId: _databaseId, ...record } = task;
+  return record;
+}
+
+function mapCriterion(row: unknown, logicalTaskId: string): ManagedTaskCriterionRecord {
   const value = row as Record<string, string>;
   return {
-    taskId: value.task_id,
+    taskId: logicalTaskId,
     criterionId: value.criterion_id,
     text: value.text,
     outcome: value.outcome as ManagedTaskCriterionRecord["outcome"],
@@ -758,7 +851,7 @@ function mapCriterion(row: unknown): ManagedTaskCriterionRecord {
 function mapCriterionResult(row: unknown): ManagedCriterionResultRecord {
   const value = row as Record<string, string | null>;
   return {
-    id: value.id!, taskId: value.task_id!, workerDelegationRequestId: value.worker_delegation_request_id!,
+    id: value.id!, taskId: value.logical_task_id!, workerDelegationRequestId: value.worker_delegation_request_id!,
     criterionId: value.criterion_id!, executorEvidence: value.executor_evidence,
     judgeOutcome: value.judge_outcome as ManagedCriterionResultRecord["judgeOutcome"],
     judgeSafeSummary: value.judge_safe_summary, createdAt: value.created_at!, updatedAt: value.updated_at!,
@@ -766,14 +859,17 @@ function mapCriterionResult(row: unknown): ManagedCriterionResultRecord {
 }
 
 function getReview(db: AppDatabase, id: string): ManagedReviewRecord | null {
-  const row = db.prepare("SELECT * FROM managed_task_reviews WHERE id = ?").get(id);
+  const row = db.prepare(`
+    SELECT r.*, t.logical_task_id FROM managed_task_reviews r
+    JOIN managed_tasks t ON t.id = r.task_id WHERE r.id = ?
+  `).get(id);
   return row ? mapReview(row) : null;
 }
 
 function mapReview(row: unknown): ManagedReviewRecord {
   const value = row as Record<string, string | null>;
   return {
-    id: value.id!, taskId: value.task_id!, workerDelegationRequestId: value.worker_delegation_request_id!,
+    id: value.id!, taskId: value.logical_task_id!, workerDelegationRequestId: value.worker_delegation_request_id!,
     judgeDelegationRequestId: value.judge_delegation_request_id,
     integrationAttemptId: value.integration_attempt_id,
     reviewedCandidateCommitSha: value.reviewed_candidate_commit_sha,
@@ -785,14 +881,17 @@ function mapReview(row: unknown): ManagedReviewRecord {
 }
 
 function getDelivery(db: AppDatabase, workerDelegationRequestId: string): ManagedTaskDeliveryRecord | null {
-  const row = db.prepare("SELECT * FROM managed_task_deliveries WHERE worker_delegation_request_id = ?").get(workerDelegationRequestId);
+  const row = db.prepare(`
+    SELECT d.*, t.logical_task_id FROM managed_task_deliveries d
+    JOIN managed_tasks t ON t.id = d.task_id WHERE d.worker_delegation_request_id = ?
+  `).get(workerDelegationRequestId);
   return row ? mapDelivery(row) : null;
 }
 
 function mapDelivery(row: unknown): ManagedTaskDeliveryRecord {
   const value = row as Record<string, string | number | null>;
   return {
-    id: value.id as string, taskId: value.task_id as string,
+    id: value.id as string, taskId: value.logical_task_id as string,
     workerDelegationRequestId: value.worker_delegation_request_id as string,
     integrationAttemptId: value.integration_attempt_id as string | null,
     status: value.status as ManagedDeliveryOutcome, checkpointHead: value.checkpoint_head as string | null,
@@ -805,7 +904,10 @@ function mapDelivery(row: unknown): ManagedTaskDeliveryRecord {
 }
 
 function getIntegration(db: AppDatabase, integrationAttemptId: string): ManagedTaskIntegrationRecord | null {
-  const row = db.prepare("SELECT * FROM managed_task_integrations WHERE id = ?").get(integrationAttemptId);
+  const row = db.prepare(`
+    SELECT i.*, t.logical_task_id FROM managed_task_integrations i
+    JOIN managed_tasks t ON t.id = i.task_id WHERE i.id = ?
+  `).get(integrationAttemptId);
   return row ? mapIntegration(row) : null;
 }
 
@@ -819,7 +921,7 @@ function mapIntegration(row: unknown): ManagedTaskIntegrationRecord {
   const value = row as Record<string, string | null>;
   return {
     id: value.id!,
-    taskId: value.task_id!,
+    taskId: value.logical_task_id!,
     workerDelegationRequestId: value.worker_delegation_request_id!,
     integratorDelegationRequestId: value.integrator_delegation_request_id,
     status: value.status as ManagedIntegrationStatus,

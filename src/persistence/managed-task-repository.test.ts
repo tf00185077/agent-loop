@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import Database from "better-sqlite3";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +33,78 @@ test("registers tasks and freezes immutable criteria across reopen", () => {
   assert.equal(reopened.getTask("task-1")?.status, "registered");
   assert.equal(reopened.listCriteria("task-1")[0]?.outcome, "UNKNOWN");
   assert.equal(reopened.listForGoal(goal.id).length, 1);
+  db.close();
+});
+
+test("scopes duplicate logical task ids to their owning goals", () => {
+  const path = testDatabasePath();
+  const db = openDatabase({ path });
+  const goals = createGoalRepository(db);
+  const firstGoal = goals.create({ title: "First", description: "Own task" });
+  const secondGoal = goals.create({ title: "Second", description: "Reuse task name" });
+  const emptyGoal = goals.create({ title: "Empty", description: "Must not borrow another goal's task" });
+  const tasks = createManagedTaskRepository(db, { now: fixedNow });
+
+  tasks.registerTasks({
+    goalId: firstGoal.id,
+    tasks: [{ id: "spec:plan-foundation", title: "First plan", acceptance: [] }],
+  });
+  tasks.registerTasks({
+    goalId: secondGoal.id,
+    tasks: [{ id: "spec:plan-foundation", title: "Second plan", acceptance: [] }],
+  });
+
+  assert.equal(tasks.getTask(firstGoal.id, "spec:plan-foundation")?.title, "First plan");
+  assert.equal(tasks.getTask(secondGoal.id, "spec:plan-foundation")?.title, "Second plan");
+  assert.equal(tasks.getTask(secondGoal.id, "missing"), null);
+  assert.equal(tasks.getTask(emptyGoal.id, "spec:plan-foundation"), null);
+  assert.throws(() => tasks.transition("spec:plan-foundation", "blocked", {
+    goalId: emptyGoal.id,
+    safeSummary: "Must not cross goals",
+  }), /not found in goal/i);
+  assert.equal(tasks.getTask(firstGoal.id, "spec:plan-foundation")?.status, "registered");
+  assert.equal(tasks.getTask(secondGoal.id, "spec:plan-foundation")?.status, "registered");
+  const rows = db.prepare(`
+    SELECT id, goal_id, logical_task_id FROM managed_tasks
+    WHERE logical_task_id = ? ORDER BY goal_id
+  `).all("spec:plan-foundation") as Array<{ id: string; goal_id: string; logical_task_id: string }>;
+  assert.equal(rows.length, 2);
+  assert.notEqual(rows[0]?.id, rows[1]?.id);
+  assert.ok(rows.every((row) => row.id !== row.logical_task_id));
+  db.close();
+});
+
+test("migrates legacy logical primary keys to stable UUID identities without losing task history", () => {
+  const path = testDatabasePath();
+  createLegacyManagedTaskFixture(path);
+
+  let db = openDatabase({ path });
+  let tasks = createManagedTaskRepository(db);
+  const migrated = db.prepare("SELECT id, logical_task_id FROM managed_tasks ORDER BY logical_task_id").all() as
+    Array<{ id: string; logical_task_id: string }>;
+  assert.deepEqual(migrated.map((row) => row.logical_task_id), ["child", "parent"]);
+  assert.ok(migrated.every((row) => row.id !== row.logical_task_id));
+  assert.equal(tasks.getTask("legacy-goal", "child")?.parentTaskId, "parent");
+  assert.equal(tasks.listCriteria("legacy-goal", "child")[0]?.outcome, "PASS");
+  assert.equal(tasks.listCriterionResults("worker-1")[0]?.taskId, "child");
+  assert.equal(tasks.listReviews("legacy-goal", "child")[0]?.taskId, "child");
+  assert.equal(tasks.listDeliveries("legacy-goal", "child")[0]?.taskId, "child");
+  assert.equal(tasks.listIntegrations("legacy-goal", "child")[0]?.taskId, "child");
+  assert.deepEqual(db.pragma("foreign_key_check"), []);
+  assert.throws(
+    () => db.prepare("UPDATE managed_tasks SET logical_task_id = NULL WHERE logical_task_id = 'child'").run(),
+    /managed_tasks\.logical_task_id is required/,
+  );
+  const firstIds = migrated.map((row) => row.id);
+  db.close();
+
+  db = openDatabase({ path });
+  tasks = createManagedTaskRepository(db);
+  const reopenedIds = (db.prepare("SELECT id FROM managed_tasks ORDER BY logical_task_id").all() as Array<{ id: string }>)
+    .map((row) => row.id);
+  assert.deepEqual(reopenedIds, firstIds);
+  assert.equal(tasks.getTask("legacy-goal", "child")?.status, "accepted");
+  assert.deepEqual(db.pragma("foreign_key_check"), []);
   db.close();
 });
 
@@ -286,6 +359,130 @@ function createDelegation(
 
 function testDatabasePath(): string {
   return join(mkdtempSync(join(tmpdir(), "managed-task-repo-")), "test.sqlite");
+}
+
+function createLegacyManagedTaskFixture(path: string): void {
+  const db = new Database(path);
+  db.exec(`
+    CREATE TABLE goals (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL,
+      priority TEXT NOT NULL, agent_type TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      started_at TEXT, completed_at TEXT
+    );
+    CREATE TABLE runs (
+      id TEXT PRIMARY KEY, goal_id TEXT NOT NULL REFERENCES goals(id), status TEXT NOT NULL,
+      provider TEXT NOT NULL, model TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, error TEXT
+    );
+    CREATE TABLE agent_sessions (
+      id TEXT PRIMARY KEY, goal_id TEXT NOT NULL REFERENCES goals(id), run_id TEXT NOT NULL REFERENCES runs(id),
+      provider_id TEXT NOT NULL, model_label TEXT, lifecycle_state TEXT NOT NULL, capabilities TEXT NOT NULL,
+      parent TEXT, created_at TEXT NOT NULL, last_activity_at TEXT NOT NULL
+    );
+    CREATE TABLE agent_delegation_requests (
+      id TEXT PRIMARY KEY, parent_session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+      child_session_id TEXT REFERENCES agent_sessions(id), role TEXT NOT NULL, status TEXT NOT NULL,
+      prompt_summary TEXT NOT NULL, task_id TEXT, change_id TEXT, acceptance TEXT, result_summary TEXT,
+      detached_reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, accepted_at TEXT,
+      started_at TEXT, completed_at TEXT, attempt_number INTEGER
+    );
+    CREATE TABLE managed_tasks (
+      id TEXT PRIMARY KEY, goal_id TEXT NOT NULL REFERENCES goals(id), change_id TEXT,
+      parent_task_id TEXT REFERENCES managed_tasks(id), title TEXT NOT NULL, status TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0, substantive_rejection_count INTEGER NOT NULL DEFAULT 0,
+      last_cited_criteria TEXT NOT NULL DEFAULT '[]', last_safe_summary TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (goal_id, id)
+    );
+    CREATE TABLE managed_task_criteria (
+      task_id TEXT NOT NULL REFERENCES managed_tasks(id) ON DELETE CASCADE, criterion_id TEXT NOT NULL,
+      text TEXT NOT NULL, outcome TEXT NOT NULL DEFAULT 'UNKNOWN', created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL, PRIMARY KEY (task_id, criterion_id)
+    );
+    CREATE TABLE managed_task_criterion_results (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, worker_delegation_request_id TEXT NOT NULL
+        REFERENCES agent_delegation_requests(id), criterion_id TEXT NOT NULL, executor_evidence TEXT,
+      judge_outcome TEXT, judge_safe_summary TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      FOREIGN KEY (task_id, criterion_id) REFERENCES managed_task_criteria(task_id, criterion_id),
+      UNIQUE (worker_delegation_request_id, criterion_id)
+    );
+    CREATE TABLE managed_task_integrations (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES managed_tasks(id),
+      worker_delegation_request_id TEXT NOT NULL REFERENCES agent_delegation_requests(id),
+      integrator_delegation_request_id TEXT REFERENCES agent_delegation_requests(id), status TEXT NOT NULL,
+      checkpoint_head TEXT NOT NULL, original_candidate_commit_sha TEXT NOT NULL,
+      resolved_candidate_commit_sha TEXT, conflict_files TEXT NOT NULL DEFAULT '[]',
+      allowed_files TEXT NOT NULL DEFAULT '[]', safe_summary TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (worker_delegation_request_id, original_candidate_commit_sha)
+    );
+    CREATE TABLE managed_task_reviews (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES managed_tasks(id),
+      worker_delegation_request_id TEXT NOT NULL REFERENCES agent_delegation_requests(id),
+      judge_delegation_request_id TEXT REFERENCES agent_delegation_requests(id),
+      integration_attempt_id TEXT REFERENCES managed_task_integrations(id), reviewed_candidate_commit_sha TEXT,
+      status TEXT NOT NULL, verdict TEXT, decisions TEXT NOT NULL DEFAULT '[]',
+      cited_criteria TEXT NOT NULL DEFAULT '[]', safe_summary TEXT NOT NULL,
+      deferred_findings TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (judge_delegation_request_id)
+    );
+    CREATE TABLE managed_task_deliveries (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES managed_tasks(id),
+      worker_delegation_request_id TEXT NOT NULL REFERENCES agent_delegation_requests(id),
+      integration_attempt_id TEXT REFERENCES managed_task_integrations(id), status TEXT NOT NULL CHECK (status IN (
+        'pending', 'committed', 'rejected', 'conflict', 'integration_failed', 'test_failed_reverted',
+        'revert_failed', 'failed', 'verification_failed'
+      )), checkpoint_head TEXT, checkpoint_status TEXT, candidate_commit_sha TEXT, commit_sha TEXT,
+      validation_command TEXT, validation_exit_code INTEGER, validation_summary TEXT, rollback_summary TEXT,
+      safe_summary TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (worker_delegation_request_id)
+    );
+    INSERT INTO goals VALUES (
+      'legacy-goal', 'Legacy', 'Migration fixture', 'completed', 'normal', 'general',
+      '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z', NULL, '2026-07-14T00:00:00.000Z'
+    );
+    INSERT INTO runs VALUES (
+      'legacy-run', 'legacy-goal', 'completed', 'mock', 'mock', '2026-07-14T00:00:00.000Z',
+      '2026-07-14T00:00:00.000Z', NULL
+    );
+    INSERT INTO agent_sessions VALUES (
+      'legacy-session', 'legacy-goal', 'legacy-run', 'mock', 'mock', 'completed', '{}', NULL,
+      '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z'
+    );
+    INSERT INTO agent_delegation_requests VALUES (
+      'worker-1', 'legacy-session', NULL, 'worker', 'completed', 'child', 'child', NULL, NULL, NULL,
+      NULL, '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z', NULL, NULL,
+      '2026-07-14T00:00:00.000Z', 1
+    );
+    INSERT INTO managed_tasks VALUES (
+      'parent', 'legacy-goal', NULL, NULL, 'Parent', 'split', 0, 0, '[]', NULL,
+      '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z'
+    );
+    INSERT INTO managed_tasks VALUES (
+      'child', 'legacy-goal', NULL, 'parent', 'Child', 'accepted', 1, 0, '["A1"]', 'Done',
+      '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z'
+    );
+    INSERT INTO managed_task_criteria VALUES (
+      'child', 'A1', 'Done', 'PASS', '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z'
+    );
+    INSERT INTO managed_task_criterion_results VALUES (
+      'criterion-result-1', 'child', 'worker-1', 'A1', 'Evidence', 'PASS', 'Accepted',
+      '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z'
+    );
+    INSERT INTO managed_task_integrations VALUES (
+      'integration-1', 'child', 'worker-1', NULL, 'committed', 'base', 'candidate', 'resolved',
+      '[]', '[]', 'Integrated', '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z'
+    );
+    INSERT INTO managed_task_reviews VALUES (
+      'review-1', 'child', 'worker-1', NULL, 'integration-1', 'resolved', 'accepted', 'accepted',
+      '[{"criterionId":"A1","outcome":"PASS","safeSummary":"Accepted"}]', '["A1"]',
+      'Accepted', '[]', '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z'
+    );
+    INSERT INTO managed_task_deliveries VALUES (
+      'delivery-1', 'child', 'worker-1', 'integration-1', 'committed', 'base', 'clean', 'resolved',
+      'final', 'npm test', 0, 'pass', NULL, 'Delivered',
+      '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z'
+    );
+  `);
+  db.close();
 }
 
 const fixedNow = (): string => "2026-07-14T00:00:00.000Z";

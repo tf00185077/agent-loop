@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
@@ -159,6 +160,7 @@ function initializeSchema(db: AppDatabase): void {
     CREATE TABLE IF NOT EXISTS managed_tasks (
       id TEXT PRIMARY KEY,
       goal_id TEXT NOT NULL REFERENCES goals(id),
+      logical_task_id TEXT NOT NULL,
       change_id TEXT,
       parent_task_id TEXT REFERENCES managed_tasks(id),
       title TEXT NOT NULL,
@@ -172,7 +174,7 @@ function initializeSchema(db: AppDatabase): void {
       last_safe_summary TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      UNIQUE (goal_id, id)
+      UNIQUE (goal_id, logical_task_id)
     );
 
     CREATE TABLE IF NOT EXISTS managed_task_criteria (
@@ -261,6 +263,9 @@ function initializeSchema(db: AppDatabase): void {
     );
   `);
 
+  migrateManagedTaskIdentities(db);
+  enforceManagedTaskLogicalIdentity(db);
+
   // Additive migration for databases created before claude-local support: the
   // CREATE TABLE IF NOT EXISTS above does not alter an existing table.
   ensureColumn(db, "provider_settings", "claude_command_path", "TEXT");
@@ -276,6 +281,75 @@ function initializeSchema(db: AppDatabase): void {
   ensureColumn(db, "managed_task_deliveries", "integration_attempt_id", "TEXT");
   migrateManagedTaskDeliveriesOutcome(db);
   backfillManagedTaskState(db);
+}
+
+function migrateManagedTaskIdentities(db: AppDatabase): void {
+  const columns = db.prepare("PRAGMA table_info(managed_tasks)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "logical_task_id")) return;
+
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(`
+        ALTER TABLE managed_tasks ADD COLUMN logical_task_id TEXT;
+        UPDATE managed_tasks SET logical_task_id = id;
+        CREATE TEMP TABLE managed_task_identity_map (
+          legacy_id TEXT PRIMARY KEY,
+          internal_id TEXT NOT NULL UNIQUE
+        );
+      `);
+      const insertIdentity = db.prepare(
+        "INSERT INTO managed_task_identity_map (legacy_id, internal_id) VALUES (?, ?)",
+      );
+      const legacyTasks = db.prepare("SELECT id FROM managed_tasks ORDER BY rowid").all() as Array<{ id: string }>;
+      for (const task of legacyTasks) insertIdentity.run(task.id, randomUUID());
+      db.exec(`
+        UPDATE managed_tasks
+        SET parent_task_id = (
+          SELECT internal_id FROM managed_task_identity_map WHERE legacy_id = managed_tasks.parent_task_id
+        )
+        WHERE parent_task_id IS NOT NULL;
+        UPDATE managed_task_criteria
+        SET task_id = (SELECT internal_id FROM managed_task_identity_map WHERE legacy_id = task_id);
+        UPDATE managed_task_criterion_results
+        SET task_id = (SELECT internal_id FROM managed_task_identity_map WHERE legacy_id = task_id);
+        UPDATE managed_task_integrations
+        SET task_id = (SELECT internal_id FROM managed_task_identity_map WHERE legacy_id = task_id);
+        UPDATE managed_task_reviews
+        SET task_id = (SELECT internal_id FROM managed_task_identity_map WHERE legacy_id = task_id);
+        UPDATE managed_task_deliveries
+        SET task_id = (SELECT internal_id FROM managed_task_identity_map WHERE legacy_id = task_id);
+        UPDATE managed_tasks
+        SET id = (SELECT internal_id FROM managed_task_identity_map WHERE legacy_id = id);
+        CREATE UNIQUE INDEX managed_tasks_goal_logical_id
+          ON managed_tasks(goal_id, logical_task_id);
+        DROP TABLE managed_task_identity_map;
+      `);
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  const violations = db.pragma("foreign_key_check") as unknown[];
+  if (violations.length > 0) {
+    throw new Error(`Managed task identity migration left ${violations.length} foreign-key violation(s).`);
+  }
+}
+
+function enforceManagedTaskLogicalIdentity(db: AppDatabase): void {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS managed_tasks_logical_id_required_insert
+    BEFORE INSERT ON managed_tasks
+    WHEN NEW.logical_task_id IS NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'managed_tasks.logical_task_id is required');
+    END;
+    CREATE TRIGGER IF NOT EXISTS managed_tasks_logical_id_required_update
+    BEFORE UPDATE OF logical_task_id ON managed_tasks
+    WHEN NEW.logical_task_id IS NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'managed_tasks.logical_task_id is required');
+    END;
+  `);
 }
 
 function migrateManagedTaskDeliveriesOutcome(db: AppDatabase): void {
@@ -341,11 +415,11 @@ function backfillManagedTaskState(db: AppDatabase): void {
         if (!task || typeof task.id !== "string" || typeof task.title !== "string") continue;
         db.prepare(`
           INSERT OR IGNORE INTO managed_tasks (
-            id, goal_id, change_id, parent_task_id, title, status, attempt_count,
+            id, goal_id, logical_task_id, change_id, parent_task_id, title, status, attempt_count,
             substantive_rejection_count, last_cited_criteria, last_safe_summary, created_at, updated_at
-          ) VALUES (?, ?, ?, NULL, ?, 'registered', 0, 0, '[]', NULL, ?, ?)
+          ) VALUES (?, ?, ?, ?, NULL, ?, 'registered', 0, 0, '[]', NULL, ?, ?)
         `).run(
-          task.id, row.goal_id, typeof data.changeId === "string" ? data.changeId : null,
+          randomUUID(), row.goal_id, task.id, typeof data.changeId === "string" ? data.changeId : null,
           task.title, row.created_at, row.created_at,
         );
         if (Array.isArray(task.acceptance)) {
@@ -356,7 +430,14 @@ function backfillManagedTaskState(db: AppDatabase): void {
               INSERT OR IGNORE INTO managed_task_criteria
                 (task_id, criterion_id, text, outcome, created_at, updated_at)
               VALUES (?, ?, ?, 'UNKNOWN', ?, ?)
-            `).run(task.id, criterion.id, criterion.text, row.created_at, row.created_at);
+            `).run(
+              db.prepare("SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = ?")
+                .pluck().get(row.goal_id, task.id),
+              criterion.id,
+              criterion.text,
+              row.created_at,
+              row.created_at,
+            );
           }
         }
       }
@@ -364,16 +445,18 @@ function backfillManagedTaskState(db: AppDatabase): void {
         const task = asRecord(rawTask);
         if (!task || typeof task.id !== "string" || typeof task.parentTaskId !== "string") continue;
         db.prepare(`
-          UPDATE managed_tasks SET parent_task_id = ?
-          WHERE id = ? AND goal_id = ? AND EXISTS (SELECT 1 FROM managed_tasks WHERE id = ? AND goal_id = ?)
-        `).run(task.parentTaskId, task.id, row.goal_id, task.parentTaskId, row.goal_id);
+          UPDATE managed_tasks
+          SET parent_task_id = (SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = ?)
+          WHERE goal_id = ? AND logical_task_id = ?
+            AND EXISTS (SELECT 1 FROM managed_tasks WHERE goal_id = ? AND logical_task_id = ?)
+        `).run(row.goal_id, task.parentTaskId, row.goal_id, task.id, row.goal_id, task.parentTaskId);
       }
     }
 
     const taskRows = db.prepare(`
-      SELECT id, goal_id FROM managed_tasks
+      SELECT id, goal_id, logical_task_id FROM managed_tasks
       WHERE goal_id IN (SELECT id FROM goals WHERE status NOT IN ('completed', 'failed'))
-    `).all() as Array<{ id: string; goal_id: string }>;
+    `).all() as Array<{ id: string; goal_id: string; logical_task_id: string }>;
     for (const task of taskRows) {
       const attempts = db.prepare(`
         SELECT d.id, d.status, d.result_summary, d.updated_at, d.attempt_number
@@ -381,7 +464,7 @@ function backfillManagedTaskState(db: AppDatabase): void {
         JOIN agent_sessions s ON s.id = d.parent_session_id
         WHERE s.goal_id = ? AND d.task_id = ? AND d.role = 'worker'
         ORDER BY d.created_at, d.rowid
-      `).all(task.goal_id, task.id) as Array<{
+      `).all(task.goal_id, task.logical_task_id) as Array<{
         id: string;
         status: string;
         result_summary: string | null;

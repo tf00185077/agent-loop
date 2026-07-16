@@ -57,7 +57,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "completed_at",
   ]);
   assert.deepEqual(columnNames(db, "managed_tasks"), [
-    "id", "goal_id", "change_id", "parent_task_id", "title", "status", "attempt_count",
+    "id", "goal_id", "logical_task_id", "change_id", "parent_task_id", "title", "status", "attempt_count",
     "substantive_rejection_count", "last_cited_criteria", "last_safe_summary", "created_at", "updated_at",
   ]);
   assert.deepEqual(columnNames(db, "managed_task_criteria"), [
@@ -322,10 +322,15 @@ test("backfills non-terminal historical task contracts fail-closed", () => {
   db.close();
 
   db = openDatabase({ path: dbPath });
-  const task = db.prepare("SELECT status, attempt_count, last_safe_summary FROM managed_tasks WHERE id = 'legacy-task'")
+  const task = db.prepare(`
+    SELECT status, attempt_count, last_safe_summary FROM managed_tasks WHERE logical_task_id = 'legacy-task'
+  `)
     .get() as { status: string; attempt_count: number; last_safe_summary: string };
   assert.deepEqual(task, { status: "awaiting_review", attempt_count: 1, last_safe_summary: "Worker claimed success." });
-  assert.equal((db.prepare("SELECT outcome FROM managed_task_criteria WHERE task_id = 'legacy-task'").get() as { outcome: string }).outcome, "UNKNOWN");
+  assert.equal((db.prepare(`
+    SELECT c.outcome FROM managed_task_criteria c
+    JOIN managed_tasks t ON t.id = c.task_id WHERE t.logical_task_id = 'legacy-task'
+  `).get() as { outcome: string }).outcome, "UNKNOWN");
   assert.equal((db.prepare("SELECT attempt_number FROM agent_delegation_requests WHERE id = 'legacy-attempt'").get() as { attempt_number: number }).attempt_number, 1);
   db.close();
 });

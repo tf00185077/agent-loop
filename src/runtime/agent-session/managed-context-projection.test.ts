@@ -35,8 +35,9 @@ test("projects bounded durable task, criterion, judge, and delivery context equi
   });
   db.prepare(`
     UPDATE managed_tasks SET attempt_count = 2, substantive_rejection_count = 1,
-      last_cited_criteria = '["A1"]', last_safe_summary = ? WHERE id = 'task-1'
-  `).run("x".repeat(900));
+      last_cited_criteria = '["A1"]', last_safe_summary = ?
+    WHERE goal_id = ? AND logical_task_id = 'task-1'
+  `).run("x".repeat(900), goal.id);
   const before = projectManagedTaskContext(tasks, goal.id);
   const liveBefore = projectFromDatabase(db, goal.id);
   assert.equal(before[0]?.lastSafeSummary.length, 500);

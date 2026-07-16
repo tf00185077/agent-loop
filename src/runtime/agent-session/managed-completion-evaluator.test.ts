@@ -41,7 +41,7 @@ test("reports criterion, review, delivery, and leaf task gaps from durable state
   const result = evaluateManagedCompletion(db, { goalId: goal.id });
   assert.deepEqual(result.gaps.map((gap) => gap.type), ["unaccepted_leaf_task", "criterion_not_passed"]);
 
-  db.prepare("UPDATE managed_tasks SET status = 'awaiting_review' WHERE id = 'task-1'").run();
+  db.prepare("UPDATE managed_tasks SET status = 'awaiting_review' WHERE logical_task_id = 'task-1'").run();
   const reviewGap = evaluateManagedCompletion(db, { goalId: goal.id });
   assert.ok(reviewGap.gaps.some((gap) => gap.type === "pending_review"));
 
@@ -61,8 +61,12 @@ test("accepts completed leaf descendants with PASS criteria", () => {
     goalId: goal.id,
     tasks: [{ id: "child", title: "Leaf", parentTaskId: "parent", acceptance: [{ id: "C1", text: "Done" }] }],
   });
-  db.prepare("UPDATE managed_task_criteria SET outcome = 'PASS' WHERE task_id = 'child'").run();
-  db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE id = 'child'").run();
+  db.prepare(`
+    UPDATE managed_task_criteria SET outcome = 'PASS'
+    WHERE task_id = (SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'child')
+  `).run(goal.id);
+  db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE goal_id = ? AND logical_task_id = 'child'")
+    .run(goal.id);
 
   assert.deepEqual(evaluateManagedCompletion(db, { goalId: goal.id }), { ok: true, gaps: [] });
   db.close();

@@ -15,7 +15,7 @@ export function rehydrateTaskRegistry(
   goalId: string,
 ): void {
   const records: TaskRecord[] = managedTaskRepo.listForGoal(goalId).map((task) => {
-    const criteria = managedTaskRepo.listCriteria(task.id);
+    const criteria = managedTaskRepo.listCriteria(goalId, task.id);
     return {
       id: task.id,
       title: task.title,

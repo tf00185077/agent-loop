@@ -136,11 +136,13 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         acceptance: input.acceptance ?? null,
       });
       const accepted = deps.agentSessionRepo.acceptDelegationRequest(request.id);
-      if (input.role === "worker" && input.taskId && deps.managedTaskRepo?.getTask(input.taskId)) {
-        deps.managedTaskRepo.beginAttempt(input.taskId, accepted.id, parent.runId);
+      if (input.role === "worker" && input.taskId && deps.managedTaskRepo?.getTask(parent.goalId, input.taskId)) {
+        deps.managedTaskRepo.beginAttempt(input.taskId, accepted.id, parent.runId, parent.goalId);
       }
-      if (input.role === "review_merge" && workerResult?.taskId && deps.managedTaskRepo?.getTask(workerResult.taskId)) {
+      if (input.role === "review_merge" && workerResult?.taskId &&
+          deps.managedTaskRepo?.getTask(parent.goalId, workerResult.taskId)) {
         deps.managedTaskRepo.beginReview({
+          goalId: parent.goalId,
           taskId: workerResult.taskId,
           workerDelegationRequestId: workerResult.id,
           judgeDelegationRequestId: accepted.id,

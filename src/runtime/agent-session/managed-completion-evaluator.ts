@@ -16,8 +16,9 @@ export function evaluateManagedCompletion(
   input: ManagedCompletionEvaluationInput,
 ): ManagedCompletionEvaluation {
   const tasks = db.prepare(`
-    SELECT id, title, status FROM managed_tasks WHERE goal_id = ? ORDER BY created_at, rowid
-  `).all(input.goalId) as Array<{ id: string; title: string; status: ManagedTaskStatus }>;
+    SELECT id AS database_id, logical_task_id AS id, title, status
+    FROM managed_tasks WHERE goal_id = ? ORDER BY created_at, rowid
+  `).all(input.goalId) as Array<{ database_id: string; id: string; title: string; status: ManagedTaskStatus }>;
   const gaps: ManagedCompletionGap[] = [];
   const hasUncontractedWork = tasks.length === 0 && Boolean(db.prepare(`
     SELECT 1
@@ -25,7 +26,9 @@ export function evaluateManagedCompletion(
     JOIN agent_sessions s ON s.id = d.parent_session_id
     WHERE s.goal_id = ? AND d.role = 'worker'
       AND d.status IN ('completed', 'failed', 'cancelled', 'timed_out', 'detached', 'ignored')
-      AND (d.task_id IS NULL OR NOT EXISTS (SELECT 1 FROM managed_tasks t WHERE t.id = d.task_id AND t.goal_id = s.goal_id))
+      AND (d.task_id IS NULL OR NOT EXISTS (
+        SELECT 1 FROM managed_tasks t WHERE t.logical_task_id = d.task_id AND t.goal_id = s.goal_id
+      ))
     LIMIT 1
   `).get(input.goalId));
   if (hasUncontractedWork) {
@@ -37,7 +40,7 @@ export function evaluateManagedCompletion(
 
   for (const task of tasks) {
     const childCount = (db.prepare("SELECT COUNT(*) AS count FROM managed_tasks WHERE parent_task_id = ?")
-      .get(task.id) as { count: number }).count;
+      .get(task.database_id) as { count: number }).count;
     const isLeaf = childCount === 0;
     if (isLeaf && task.status !== "accepted") {
       gaps.push({
@@ -50,7 +53,7 @@ export function evaluateManagedCompletion(
 
     const criteria = db.prepare(`
       SELECT criterion_id, outcome FROM managed_task_criteria WHERE task_id = ? ORDER BY rowid
-    `).all(task.id) as Array<{ criterion_id: string; outcome: string }>;
+    `).all(task.database_id) as Array<{ criterion_id: string; outcome: string }>;
     for (const criterion of criteria) {
       if (criterion.outcome !== "PASS") {
         gaps.push({
@@ -85,7 +88,7 @@ export function evaluateManagedCompletion(
 
     const integrations = db.prepare(`
       SELECT id, status FROM managed_task_integrations WHERE task_id = ? ORDER BY created_at, rowid
-    `).all(task.id) as Array<{ id: string; status: string }>;
+    `).all(task.database_id) as Array<{ id: string; status: string }>;
     for (const integration of integrations) {
       if (integration.status === "committed" || integration.status === "rejected" || integration.status === "blocked") continue;
       gaps.push({

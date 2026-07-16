@@ -383,8 +383,8 @@ function reconcileInterruptedGoal(
       "Worker attempt interrupted because backend adapter control was lost during restart.",
     );
     attemptsInterrupted += 1;
-    if (attempt.taskId && deps.managedTaskRepo?.getTask(attempt.taskId)) {
-      deps.managedTaskRepo.resetTaskForReDispatch(attempt.taskId, runId);
+    if (attempt.taskId && deps.managedTaskRepo?.getTask(goalId, attempt.taskId)) {
+      deps.managedTaskRepo.resetTaskForReDispatch(attempt.taskId, runId, goalId);
       tasksReset += 1;
     }
     const path = attempt.worktree?.path;
@@ -818,6 +818,43 @@ async function persistDelegationControlEvent(
     }
 
     const orderedChanges = changeRegistry.listChanges();
+    const specTasks = orderedChanges.map((change) => ({
+      taskId: specTaskId(change.id),
+      changeId: change.id,
+      acceptance: specTaskAcceptance(change.id),
+    }));
+    const taskEntries = specTasks.map((task) => ({
+      id: task.taskId,
+      title: `Author OpenSpec artifacts for change ${task.changeId}`,
+      acceptance: task.acceptance,
+      parentTaskId: null,
+    }));
+    getTaskRegistry(input.state, input.goalId).registerTaskList(
+      taskEntries,
+    );
+    const persistPlanIntent = () => {
+      deps.managedTaskRepo?.registerTasks({
+        goalId: input.goalId,
+        runId: input.runId,
+        tasks: taskEntries,
+      });
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        runId: input.runId,
+        type: "agent.progress",
+        message: "Supervisor change plan recorded.",
+        data: {
+          ...data,
+          delegationControlEvent: undefined,
+          runtimeEventType: "supervisor.change_plan",
+          changePlan: validation.plan.changes,
+          specTasks,
+        },
+      });
+    };
+    if (deps.database) deps.database.transaction(persistPlanIntent)();
+    else persistPlanIntent();
+
     const scaffolds = orderedChanges.map((change) => {
       const scaffold = input.state.openSpec.scaffoldChange({
         cwd: input.state.supervisorCwd,
@@ -835,42 +872,20 @@ async function persistDelegationControlEvent(
         ...(scaffold.safeReason ? { safeReason: scaffold.safeReason } : {}),
       };
     });
-
-    const specTasks = orderedChanges.map((change) => ({
-      taskId: specTaskId(change.id),
-      changeId: change.id,
-      acceptance: specTaskAcceptance(change.id),
-    }));
-    getTaskRegistry(input.state, input.goalId).registerTaskList(
-      specTasks.map((task) => ({
-        id: task.taskId,
-        title: `Author OpenSpec artifacts for change ${task.changeId}`,
-        acceptance: task.acceptance,
-        parentTaskId: null,
-      })),
-    );
-    deps.managedTaskRepo?.registerTasks({
-      goalId: input.goalId,
-      runId: input.runId,
-      tasks: specTasks.map((task) => ({
-        id: task.taskId,
-        title: `Author OpenSpec artifacts for change ${task.changeId}`,
-        acceptance: task.acceptance,
-        parentTaskId: null,
-      })),
-    });
-
+    const materializationFailures = scaffolds.filter((scaffold) => !scaffold.ok || !scaffold.committed);
     deps.eventRepo.create({
       goalId: input.goalId,
       runId: input.runId,
-      type: "agent.progress",
-      message: "Supervisor change plan recorded.",
+      type: materializationFailures.length > 0 ? "error" : "agent.progress",
+      message: materializationFailures.length > 0
+        ? "OpenSpec change scaffolding completed with failures."
+        : "OpenSpec change scaffolding materialized.",
       data: {
         ...data,
         delegationControlEvent: undefined,
-        runtimeEventType: "supervisor.change_plan",
-        changePlan: validation.plan.changes,
-        specTasks,
+        runtimeEventType: materializationFailures.length > 0
+          ? "runtime.openspec_materialization_failed"
+          : "runtime.openspec_materialized",
         openspecScaffolds: scaffolds,
       },
     });
@@ -956,12 +971,12 @@ async function persistDelegationControlEvent(
   if (validation.request.role === "worker") {
     if (deps.managedTaskRepo) {
       const durableTask = validation.request.taskId
-        ? deps.managedTaskRepo.getTask(validation.request.taskId)
+        ? deps.managedTaskRepo.getTask(input.goalId, validation.request.taskId)
         : null;
       if (!durableTask) {
         uncontracted = true;
       } else {
-        const criteria = deps.managedTaskRepo.listCriteria(durableTask.id);
+        const criteria = deps.managedTaskRepo.listCriteria(input.goalId, durableTask.id);
         if (criteria.length === 0) {
           recordControlRejection(
             deps, input, data,
@@ -979,6 +994,7 @@ async function persistDelegationControlEvent(
               safeSummary: `Task ${durableTask.id} exhausted its retry budget and must be narrowed.`,
               runId: input.runId,
               citedCriteria: durableTask.lastCitedCriteria,
+              goalId: input.goalId,
             });
           }
           recordControlRejection(
@@ -1243,9 +1259,10 @@ async function recordDurableChildOutcome(
   outcome: SupervisorContinuationInput,
 ): Promise<string | null | typeof CONDITIONAL_RECOVERY_DEFERRED> {
   const tasks = deps.managedTaskRepo;
-  if (outcome.role === "worker" && outcome.taskId && tasks.getTask(outcome.taskId)) {
+  if (outcome.role === "worker" && outcome.taskId && tasks.getTask(input.goalId, outcome.taskId)) {
     if (outcome.resultSummary.kind === "success") {
       tasks.recordExecutorEvidence({
+        goalId: input.goalId,
         taskId: outcome.taskId,
         workerDelegationRequestId: outcome.delegationRequestId,
         safeSummary: outcome.resultSummary.safeSummary,
@@ -1258,6 +1275,7 @@ async function recordDurableChildOutcome(
       }
     } else {
       tasks.transition(outcome.taskId, "failed", {
+        goalId: input.goalId,
         safeSummary: outcome.resultSummary.safeSummary,
         runId: input.runId,
       });
@@ -1271,6 +1289,7 @@ async function recordDurableChildOutcome(
   if (outcome.reviewDecisionError || !outcome.reviewDecision) {
     const safeReason = outcome.reviewDecisionError ?? "Judge completed without a managed_review.decision block.";
     tasks.recordInvalidReview({
+      goalId: input.goalId,
       taskId: outcome.workerTaskId,
       workerDelegationRequestId: outcome.workerDelegationRequestId,
       judgeDelegationRequestId: outcome.delegationRequestId,
@@ -1287,6 +1306,7 @@ async function recordDurableChildOutcome(
   }
   const attestedFiles = worker.resultSummary.attestedFiles ?? [];
   const review = tasks.recordReview({
+    goalId: input.goalId,
     taskId: outcome.workerTaskId,
     workerDelegationRequestId: outcome.workerDelegationRequestId,
     judgeDelegationRequestId: outcome.delegationRequestId,
@@ -1304,6 +1324,7 @@ async function recordDurableChildOutcome(
   if (attestedFiles.length > 0) {
     if (!outcome.worktreePath) {
       tasks.recordDelivery({
+        goalId: input.goalId,
         taskId: outcome.workerTaskId,
         workerDelegationRequestId: outcome.workerDelegationRequestId,
         status: "verification_failed",
@@ -1321,6 +1342,7 @@ async function recordDurableChildOutcome(
     });
     if (!prepared.ok) {
       tasks.recordDelivery({
+        goalId: input.goalId,
         taskId: outcome.workerTaskId,
         workerDelegationRequestId: outcome.workerDelegationRequestId,
         ...prepared.result,
@@ -1330,6 +1352,7 @@ async function recordDurableChildOutcome(
     }
     // Write-ahead delivery intent (candidate + checkpoint) before the supervisor mutation.
     tasks.recordDelivery({
+      goalId: input.goalId,
       taskId: outcome.workerTaskId,
       workerDelegationRequestId: outcome.workerDelegationRequestId,
       status: "pending",
@@ -1346,6 +1369,7 @@ async function recordDurableChildOutcome(
       safeSummary: review.safeSummary,
     });
     tasks.recordDelivery({
+      goalId: input.goalId,
       taskId: outcome.workerTaskId,
       workerDelegationRequestId: outcome.workerDelegationRequestId,
       ...delivered,
@@ -1380,11 +1404,12 @@ async function startConditionalIntegrationRecovery(
   if (!conflict.checkpointHead || !conflict.candidateCommitSha || !conflict.candidateFiles?.length) return false;
 
   const tasks = deps.managedTaskRepo;
-  const acceptance = tasks.listCriteria(taskId).map((criterion) => ({
+  const acceptance = tasks.listCriteria(input.goalId, taskId).map((criterion) => ({
     id: criterion.criterionId,
     text: criterion.text,
   }));
   const integration = tasks.beginIntegration({
+    goalId: input.goalId,
     taskId,
     workerDelegationRequestId,
     checkpointHead: conflict.checkpointHead,
@@ -1529,6 +1554,7 @@ async function startConditionalIntegrationRecovery(
               const safeSummary = rejudgeOutcome.reviewDecisionError ??
                 "Judge completed without a candidate-bound managed_review.decision block.";
               tasks.recordInvalidReview({
+                goalId: input.goalId,
                 taskId,
                 workerDelegationRequestId,
                 judgeDelegationRequestId: rejudgeOutcome.delegationRequestId,
@@ -1540,6 +1566,7 @@ async function startConditionalIntegrationRecovery(
               return;
             }
             const reviewed = tasks.recordReview({
+              goalId: input.goalId,
               taskId,
               workerDelegationRequestId,
               judgeDelegationRequestId: rejudgeOutcome.delegationRequestId,
@@ -1559,6 +1586,7 @@ async function startConditionalIntegrationRecovery(
             const deliveryService = deps.managedDeliveryService ?? createManagedDeliveryService();
             // Write-ahead delivery intent before the supervisor-mutating apply.
             tasks.recordDelivery({
+              goalId: input.goalId,
               taskId,
               workerDelegationRequestId,
               integrationAttemptId: integration.id,
@@ -1579,6 +1607,7 @@ async function startConditionalIntegrationRecovery(
               const safeSummary = delivered?.safeSummary ?? "Resolved candidate delivery is unavailable.";
               tasks.transitionIntegration(integration.id, "resolution_failed", { safeSummary, runId: input.runId });
               tasks.recordDelivery({
+                goalId: input.goalId,
                 taskId,
                 workerDelegationRequestId,
                 integrationAttemptId: integration.id,
@@ -1591,6 +1620,7 @@ async function startConditionalIntegrationRecovery(
               return;
             }
             tasks.recordDelivery({
+              goalId: input.goalId,
               taskId,
               workerDelegationRequestId,
               integrationAttemptId: integration.id,

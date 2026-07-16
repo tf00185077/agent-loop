@@ -29,9 +29,9 @@ export function projectManagedTaskContext(
   goalId: string,
 ): ManagedTaskContextRecord[] {
   return repository.listForGoal(goalId).map((task) => {
-    const reviews = repository.listReviews(task.id);
-    const deliveries = repository.listDeliveries(task.id);
-    const integration = repository.listIntegrations(task.id).at(-1);
+    const reviews = repository.listReviews(goalId, task.id);
+    const deliveries = repository.listDeliveries(goalId, task.id);
+    const integration = repository.listIntegrations(goalId, task.id).at(-1);
     return {
       id: task.id,
       title: task.title,
@@ -41,7 +41,7 @@ export function projectManagedTaskContext(
       substantiveRejectionCount: task.substantiveRejectionCount,
       lastCitedCriteria: task.lastCitedCriteria,
       lastSafeSummary: bounded(task.lastSafeSummary),
-      criteria: repository.listCriteria(task.id).map((criterion) => ({
+      criteria: repository.listCriteria(goalId, task.id).map((criterion) => ({
         id: criterion.criterionId,
         text: criterion.text,
         outcome: criterion.outcome,
