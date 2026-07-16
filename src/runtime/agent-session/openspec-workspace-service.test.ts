@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import { createOpenSpecWorkspaceService } from "./openspec-workspace-service.js";
@@ -46,7 +47,9 @@ test("reports degraded mode once when the CLI is missing and uses internal valid
   const cwd = tempWorkspace();
   const service = createOpenSpecWorkspaceService({
     detectCli: () => null,
-    runGit: () => ({ status: 0, stdout: "", stderr: "" }),
+    runGit: (args) => args[0] === "rev-parse"
+      ? { status: 0, stdout: "head-one\n", stderr: "" }
+      : { status: 0, stdout: "", stderr: "" },
   });
 
   assert.equal(service.mode(), "degraded");
@@ -183,12 +186,8 @@ test("runs the CLI validator in cli mode and degrades on CLI failure", () => {
 });
 
 test("archives a change by moving it into the dated archive directory", () => {
-  const cwd = tempWorkspace();
-  const service = createOpenSpecWorkspaceService({
-    detectCli: () => null,
-    runGit: () => ({ status: 0, stdout: "", stderr: "" }),
-  });
-  service.scaffoldChange({ cwd, change: planEntry });
+  const cwd = realGitArchiveWorkspace();
+  const service = createOpenSpecWorkspaceService({ detectCli: () => null });
 
   const result = service.archiveChange({ cwd, changeId: "change-core", date: "2026-07-13" });
 
@@ -198,3 +197,242 @@ test("archives a change by moving it into the dated archive directory", () => {
     existsSync(join(cwd, "openspec", "changes", "archive", "2026-07-13-change-core", "proposal.md")),
   );
 });
+
+test("prepares a fixed archive identity and reconciles exact replay idempotently", () => {
+  const cwd = realGitArchiveWorkspace();
+  const service = createOpenSpecWorkspaceService({ detectCli: () => null });
+
+  const prepared = service.prepareArchive!({ cwd, changeId: "change-core", date: "2026-07-17" });
+  assert.equal(prepared.ok, true);
+  assert.match(prepared.ok ? prepared.manifestDigest : "", /^[0-9a-f]{64}$/);
+  assert.match(prepared.ok ? prepared.preArchiveHead : "", /^[0-9a-f]{40}$/);
+  const first = service.archiveChange({
+    cwd, changeId: "change-core", date: "2026-07-17",
+    ...(prepared.ok ? prepared : {}),
+  });
+  assert.equal(first.ok, true);
+  const replay = service.archiveChange({
+    cwd, changeId: "change-core", date: "2026-07-17",
+    ...(prepared.ok ? prepared : {}),
+  });
+  assert.equal(replay.ok, true);
+  assert.equal(replay.idempotent, true);
+});
+
+test("terminal archive replay accepts a later descendant HEAD while preserving the committed archive SHA", () => {
+  const cwd = realGitArchiveWorkspace();
+  const service = createOpenSpecWorkspaceService({ detectCli: () => null });
+  const prepared = service.prepareArchive!({ cwd, changeId: "change-core", date: "2026-07-17" });
+  assert.equal(prepared.ok, true);
+  const first = service.archiveChange({
+    cwd, changeId: "change-core", date: "2026-07-17", ...(prepared.ok ? prepared : {}),
+  });
+  assert.match(first.archiveCommitSha ?? "", /^[0-9a-f]{40}$/);
+  writeFileSync(join(cwd, "unrelated.txt"), "later descendant\n", "utf8");
+  git(cwd, ["add", "unrelated.txt"]);
+  git(cwd, ["commit", "-m", "later descendant"]);
+
+  const replay = service.archiveChange({
+    cwd, changeId: "change-core", date: "2026-07-17", ...(prepared.ok ? prepared : {}),
+    archiveCommitSha: first.archiveCommitSha,
+  });
+
+  assert.equal(replay.ok, true);
+  assert.equal(replay.idempotent, true);
+  assert.equal(replay.archiveCommitSha, first.archiveCommitSha);
+});
+
+test("fails closed when archive source and fixed target both exist", () => {
+  const cwd = tempWorkspace();
+  const service = createOpenSpecWorkspaceService({
+    detectCli: () => null,
+    runGit: (args) => args[0] === "rev-parse"
+      ? { status: 0, stdout: "head-one\n", stderr: "" }
+      : { status: 0, stdout: "", stderr: "" },
+  });
+  service.scaffoldChange({ cwd, change: planEntry });
+  mkdirSync(join(cwd, "openspec", "changes", "archive", "2026-07-17-change-core"), { recursive: true });
+
+  const prepared = service.prepareArchive!({ cwd, changeId: "change-core", date: "2026-07-17" });
+
+  assert.equal(prepared.ok, false);
+  if (!prepared.ok) assert.match(prepared.safeReason, /ambiguous|both/i);
+});
+
+test("refuses to archive when an unrelated change is already staged", () => {
+  const cwd = realGitArchiveWorkspace();
+  writeFileSync(join(cwd, "unrelated.txt"), "staged mutation\n", "utf8");
+  git(cwd, ["add", "unrelated.txt"]);
+  const service = createOpenSpecWorkspaceService({ detectCli: () => null });
+
+  const prepared = service.prepareArchive!({ cwd, changeId: "change-core", date: "2026-07-17" });
+
+  assert.equal(prepared.ok, false);
+  if (!prepared.ok) assert.match(prepared.safeReason, /clean|unrelated|workspace/i);
+  assert.ok(existsSync(join(cwd, "openspec", "changes", "change-core")));
+  assert.match(git(cwd, ["diff", "--cached", "--name-only"]).stdout, /^unrelated\.txt$/m);
+});
+
+test("pending archive restart proves the unique archive commit instead of adopting current HEAD", () => {
+  const cwd = realGitArchiveWorkspace();
+  const service = createOpenSpecWorkspaceService({ detectCli: () => null });
+  const prepared = service.prepareArchive!({ cwd, changeId: "change-core", date: "2026-07-17" });
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  const first = service.archiveChange({
+    cwd, changeId: "change-core", date: "2026-07-17", ...prepared,
+  });
+  assert.equal(first.ok, true);
+  const archiveCommitSha = first.archiveCommitSha!;
+  writeFileSync(join(cwd, "unrelated.txt"), "later descendant\n", "utf8");
+  git(cwd, ["add", "unrelated.txt"]);
+  git(cwd, ["commit", "-m", "later unrelated commit"]);
+  const laterHead = git(cwd, ["rev-parse", "HEAD"]).stdout.trim();
+  assert.notEqual(laterHead, archiveCommitSha);
+
+  const reconciled = service.archiveChange({
+    cwd, changeId: "change-core", date: "2026-07-17", ...prepared,
+  });
+
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.idempotent, true);
+  assert.equal(reconciled.archiveCommitSha, archiveCommitSha);
+});
+
+test("returns a bounded failure when real Git cannot stage the moved archive", () => {
+  const cwd = realGitArchiveWorkspace();
+  const service = createOpenSpecWorkspaceService({ detectCli: () => null });
+  const prepared = service.prepareArchive!({ cwd, changeId: "change-core", date: "2026-07-17" });
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  writeFileSync(join(cwd, ".git", "index.lock"), "locked\n", "utf8");
+
+  const result = service.archiveChange({
+    cwd, changeId: "change-core", date: "2026-07-17", ...prepared,
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.safeReason ?? "", /stage archive|index\.lock/i);
+  assert.ok(existsSync(join(cwd, "openspec", "changes", "archive", "2026-07-17-change-core")));
+});
+
+test("fails closed when archive content changes after preparation but before Git commit", () => {
+  const cwd = realGitArchiveWorkspace();
+  const sourceProposal = join(cwd, "openspec", "changes", "change-core", "proposal.md");
+  writeFileSync(sourceProposal, `${"stable proposal line\n".repeat(200)}`, "utf8");
+  git(cwd, ["add", sourceProposal]);
+  git(cwd, ["commit", "-m", "large stable archive manifest"]);
+  const targetProposal = join(
+    cwd,
+    "openspec",
+    "changes",
+    "archive",
+    "2026-07-17-change-core",
+    "proposal.md",
+  );
+  let injected = false;
+  const service = createOpenSpecWorkspaceService({
+    detectCli: () => null,
+    runGit(args, gitCwd) {
+      if (!injected && args[0] === "add" && args.includes("openspec/changes/archive/2026-07-17-change-core")) {
+        writeFileSync(targetProposal, `${"stable proposal line\n".repeat(200)}tampered after durable preparation\n`, "utf8");
+        injected = true;
+      }
+      const result = spawnSync("git", args, { cwd: gitCwd, encoding: "utf8" });
+      return {
+        status: result.status,
+        stdout: String(result.stdout ?? ""),
+        stderr: String(result.stderr ?? ""),
+      };
+    },
+  });
+  const prepared = service.prepareArchive!({ cwd, changeId: "change-core", date: "2026-07-17" });
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+
+  const result = service.archiveChange({
+    cwd,
+    changeId: "change-core",
+    date: "2026-07-17",
+    ...prepared,
+  });
+
+  assert.equal(injected, true);
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.safeReason ?? "", /manifest digest mismatch/i);
+  assert.equal(git(cwd, ["rev-parse", "HEAD"]).stdout.trim(), prepared.preArchiveHead);
+  assert.equal(git(cwd, ["rev-list", "--count", `${prepared.preArchiveHead}..HEAD`]).stdout.trim(), "0");
+});
+
+test("pending restart rejects zero, mismatched, and conflicting archive commit proofs", () => {
+  {
+    const cwd = realGitArchiveWorkspace();
+    const service = createOpenSpecWorkspaceService({ detectCli: () => null });
+    const prepared = service.prepareArchive!({ cwd, changeId: "change-core", date: "2026-07-17" });
+    assert.equal(prepared.ok, true);
+    if (!prepared.ok) return;
+    const archived = service.archiveChange({ cwd, changeId: "change-core", date: "2026-07-17", ...prepared });
+    assert.equal(archived.ok, true);
+    assert.ok(archived.archiveCommitSha);
+    const zero = service.archiveChange({
+      cwd, changeId: "change-core", date: "2026-07-17", ...prepared,
+      preArchiveHead: archived.archiveCommitSha,
+    });
+    assert.equal(zero.ok, false);
+    if (!zero.ok) assert.match(zero.safeReason ?? "", /0 verified archive commits|exactly one/i);
+    const mismatch = service.archiveChange({
+      cwd, changeId: "change-core", date: "2026-07-17", ...prepared,
+      archiveCommitSha: prepared.preArchiveHead,
+    });
+    assert.equal(mismatch.ok, false);
+    if (!mismatch.ok) assert.match(mismatch.safeReason ?? "", /recorded archive commit does not match/i);
+  }
+
+  {
+    const cwd = realGitArchiveWorkspace();
+    const service = createOpenSpecWorkspaceService({ detectCli: () => null });
+    const prepared = service.prepareArchive!({ cwd, changeId: "change-core", date: "2026-07-17" });
+    assert.equal(prepared.ok, true);
+    if (!prepared.ok) return;
+    assert.equal(service.archiveChange({
+      cwd, changeId: "change-core", date: "2026-07-17", ...prepared,
+    }).ok, true);
+    const source = join(cwd, "openspec", "changes", "change-core");
+    const target = join(cwd, "openspec", "changes", "archive", "2026-07-17-change-core");
+    renameSync(target, source);
+    git(cwd, ["add", "-A"]);
+    git(cwd, ["commit", "-m", "conflicting reverse move"]);
+    renameSync(source, target);
+    git(cwd, ["add", "-A"]);
+    git(cwd, ["commit", "-m", "conflicting second archive move"]);
+
+    const conflicting = service.archiveChange({
+      cwd, changeId: "change-core", date: "2026-07-17", ...prepared,
+    });
+
+    assert.equal(conflicting.ok, false);
+    if (!conflicting.ok) assert.match(conflicting.safeReason ?? "", /history|coherent|exactly one/i);
+  }
+});
+
+function realGitArchiveWorkspace(): string {
+  const cwd = tempWorkspace();
+  git(cwd, ["init", "-q"]);
+  git(cwd, ["config", "user.name", "Archive Test"]);
+  git(cwd, ["config", "user.email", "archive@example.invalid"]);
+  const source = join(cwd, "openspec", "changes", "change-core");
+  mkdirSync(join(source, "specs", "core"), { recursive: true });
+  writeFileSync(join(source, "proposal.md"), "# Proposal\n", "utf8");
+  writeFileSync(join(source, "tasks.md"), "# Tasks\n", "utf8");
+  writeFileSync(join(source, "specs", "core", "spec.md"), "# Spec\n", "utf8");
+  writeFileSync(join(cwd, "unrelated.txt"), "initial\n", "utf8");
+  git(cwd, ["add", "."]);
+  git(cwd, ["commit", "-m", "initial"]);
+  return cwd;
+}
+
+function git(cwd: string, args: string[]): { status: number; stdout: string; stderr: string } {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`);
+  return { status: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
+}

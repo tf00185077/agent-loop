@@ -9,6 +9,10 @@ import type {
 import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type { AppDatabase } from "../../persistence/database.js";
 import type { ManagedTaskRepository } from "../../persistence/managed-task-repository.js";
+import {
+  createManagedChangeArchiveRepository,
+  type ManagedChangeArchiveRepository,
+} from "../../persistence/managed-change-archive-repository.js";
 import type {
   AgentSessionRepository,
   EventRepository,
@@ -18,6 +22,10 @@ import { GoalChangeRegistry, specTaskAcceptance, specTaskId, specValidationVerdi
 import { createDelegationCoordinator, type SupervisorContinuationInput } from "./delegation-coordinator.js";
 import { validateManagedControlEvent } from "./delegation-control-event.js";
 import { evaluateManagedCompletion } from "./managed-completion-evaluator.js";
+import {
+  evaluateDurableManagedTaskLineage,
+  lineageGapsForChange,
+} from "./managed-task-lineage.js";
 import {
   createManagedDeliveryService,
   type ManagedDeliveryResult,
@@ -50,6 +58,9 @@ export interface AgentSessionManagerDeps {
   openSpecWorkspaceService?: OpenSpecWorkspaceService;
   reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   reviewMergeVerificationService?: ReviewMergeVerificationService;
+  managedChangeArchiveRepo?: ManagedChangeArchiveRepository;
+  /** Test-only fault windows around non-transactional archive boundaries. */
+  archiveFault?: (point: "after_intent" | "after_move" | "after_final_event") => void;
   supervisorCwd?: string;
   /**
    * Maximum supervisor continuations started because a delegation-capable
@@ -104,6 +115,13 @@ export interface AgentSessionManager {
   approve(sessionId: string, requestId: string): Promise<boolean>;
   reject(sessionId: string, requestId: string, reason?: string): Promise<boolean>;
   cancel(sessionId: string, reason?: string): Promise<boolean>;
+}
+
+class PostCommitCacheRefreshInterruption extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PostCommitCacheRefreshInterruption";
+  }
 }
 
 export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentSessionManager {
@@ -261,6 +279,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
           deps.eventRepo.listForGoal(input.goalId),
         );
       }
+      if (deps.database && !reconcileDurableArchivesBeforeResume(deps, state, input.goalId)) return;
 
       const continuationPrompt = buildSupervisorPrompt({
         goal,
@@ -375,12 +394,57 @@ function reconcileInterruptedGoal(
   let deliveriesReset = 0;
   let attemptsInterrupted = 0;
   let tasksReset = 0;
+  const blockPendingDeliveryRecovery = (
+    deliveryId: string,
+    blockerType: string,
+    safeReason: string,
+  ): void => {
+    const finishedAt = new Date().toISOString();
+    deps.goalRepo.updateStatus(goalId, "blocked", { completedAt: finishedAt });
+    deps.eventRepo.create({
+      goalId,
+      runId,
+      type: "agent.progress",
+      message: "Restart recovery blocked because a pending delivery could not be reset safely.",
+      data: {
+        runtimeEventType: "recovery.reconciliation_blocked",
+        sessionId: session.id,
+        blockerType,
+        deliveryId,
+        safeReason,
+        recoveryState: "blocked",
+      },
+    });
+  };
 
   // 1. Reset every pending delivery to its recorded clean checkpoint so git and
   //    the ledger agree and no candidate is double-applied or left unvalidated.
   for (const delivery of deps.managedTaskRepo?.listPendingDeliveries(goalId) ?? []) {
-    if (!delivery.checkpointHead || !deliveryService.reconcilePendingDelivery) continue;
-    deliveryService.reconcilePendingDelivery({ supervisorCwd: state.supervisorCwd, checkpointHead: delivery.checkpointHead });
+    if (!delivery.checkpointHead) {
+      blockPendingDeliveryRecovery(
+        delivery.id,
+        "pending_delivery_checkpoint_missing",
+        "Pending delivery has no recorded clean checkpoint for restart reconciliation.",
+      );
+      return;
+    }
+    if (!deliveryService.reconcilePendingDelivery) {
+      blockPendingDeliveryRecovery(
+        delivery.id,
+        "pending_delivery_reconciler_unavailable",
+        "Pending delivery reconciliation is unavailable during restart recovery.",
+      );
+      return;
+    }
+    const reconciled = deliveryService.reconcilePendingDelivery({
+      supervisorCwd: state.supervisorCwd,
+      checkpointHead: delivery.checkpointHead,
+    });
+    if (reconciled.status === "reset_failed") {
+      const safeReason = sanitizeArchiveReason(reconciled.safeSummary, state.supervisorCwd);
+      blockPendingDeliveryRecovery(delivery.id, "pending_delivery_reset_failed", safeReason);
+      return;
+    }
     deliveriesReset += 1;
   }
 
@@ -501,6 +565,8 @@ async function runSessionEvents(
       }
       await persistRuntimeEvent(deps, { ...input, event });
     }
+  } catch (error) {
+    if (!(error instanceof PostCommitCacheRefreshInterruption)) throw error;
   } finally {
     input.activeHandles.delete(input.sessionId);
     clearRuntimeCommandIds(input.runtimeCommandIds, input.sessionId);
@@ -704,13 +770,67 @@ async function persistDelegationControlEvent(
       return;
     }
     const registry = getTaskRegistry(input.state, input.goalId);
-    const registered = registry.registerTaskList(validation.tasks);
-    deps.managedTaskRepo?.registerTasks({
-      goalId: input.goalId,
-      changeId: changeResolution.changeId,
-      runId: input.runId,
-      tasks: validation.tasks,
-    });
+    let registered: ReturnType<GoalTaskRegistry["registerTaskList"]>;
+    if (deps.managedTaskRepo) {
+      try {
+        deps.managedTaskRepo.registerTasks({
+          goalId: input.goalId,
+          changeId: changeResolution.changeId,
+          runId: input.runId,
+          tasks: validation.tasks,
+        });
+      } catch (error) {
+        recordControlRejection(
+          deps,
+          input,
+          data,
+          `Task list rejected: ${safeErrorMessage(error)}`.slice(0, 1000),
+        );
+        return;
+      }
+      try {
+        rehydrateTaskRegistry(registry, deps.managedTaskRepo, input.goalId);
+        registered = {
+          tasks: validation.tasks.map((task) => registry.getTask(task.id)!).filter(Boolean),
+          ignoredMutations: [],
+        };
+      } catch (error) {
+        const safeReason = safeErrorMessage(error).replace(/\s+/g, " ").trim().slice(0, 500);
+        const finishedAt = new Date().toISOString();
+        deps.agentSessionRepo.updateLifecycleState(input.sessionId, "stalled");
+        deps.runRepo.updateStatus(input.runId, "failed", {
+          finishedAt,
+          error: "Durable task registration committed, but runtime cache refresh failed.",
+        });
+        deps.goalRepo.updateStatus(input.goalId, "interrupted");
+        deps.eventRepo.create({
+          goalId: input.goalId,
+          runId: input.runId,
+          type: "agent.progress",
+          message: "Durable task registration committed, but runtime cache refresh failed; restart rehydration is required.",
+          data: {
+            ...data,
+            delegationControlEvent: undefined,
+            runtimeEventType: "managed_task.cache_refresh_failed",
+            recoveryState: "interrupted",
+            safeReason,
+          },
+        });
+        throw new PostCommitCacheRefreshInterruption(safeReason);
+      }
+    } else {
+      try {
+        registered = registry.registerTaskList(validation.tasks);
+      } catch (error) {
+        recordControlRejection(
+          deps,
+          input,
+          data,
+          `Task list rejected: ${safeErrorMessage(error)}`.slice(0, 1000),
+        );
+        return;
+      }
+    }
     if (changeResolution.changeId) {
       for (const task of validation.tasks) {
         // Tasks already owned by another change (e.g. a later change's spec
@@ -1480,6 +1600,7 @@ async function recordDurableChildOutcome(
       supervisorCwd: input.state.supervisorCwd,
       attestedFiles,
       safeSummary: review.safeSummary,
+      activeChangeId: getChangeRegistry(input.state, input.goalId).findChangeByTask(outcome.workerTaskId)?.id ?? null,
     });
     if (!prepared.ok) {
       tasks.recordDelivery({
@@ -1931,29 +2052,74 @@ function tryArchiveActiveChange(deps: AgentSessionManagerDeps, input: PersistRun
     provider: input.providerId,
     model: input.modelLabel,
   };
-  const gate = changeRegistry.canArchive(active.id, getTaskRegistry(input.state, input.goalId));
+  const gate = deps.database && deps.managedTaskRepo
+    ? durableArchiveGate(deps.database, input.goalId, active.id, active.taskIds)
+    : changeRegistry.canArchive(active.id, getTaskRegistry(input.state, input.goalId));
   if (!gate.ok) {
-    if (active.hasUnmergedAttestedChanges) {
-      deps.eventRepo.create({
-        goalId: input.goalId,
-        runId: input.runId,
-        type: "agent.progress",
-        message: `Change ${active.id} cannot archive yet.`,
-        data: {
-          ...baseData,
-          runtimeEventType: "change.archive_blocked",
-          changeId: active.id,
-          safeReason: gate.safeReason,
-        },
-      });
-    }
+    const gateTaskIds = "taskIds" in gate && Array.isArray(gate.taskIds)
+      ? gate.taskIds.filter((taskId): taskId is string => typeof taskId === "string")
+      : [];
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: `Change ${active.id} cannot archive yet.`,
+      data: {
+        ...baseData,
+        runtimeEventType: "change.archive_blocked",
+        changeId: active.id,
+        blockerType: active.hasUnmergedAttestedChanges
+          ? "unmerged_changes"
+          : "blockerType" in gate ? gate.blockerType : "undelivered_task",
+        ...(gateTaskIds.length > 0 ? { taskIds: gateTaskIds } : {}),
+        ...("reasonCode" in gate && gate.reasonCode ? { reasonCode: gate.reasonCode } : {}),
+        safeReason: gate.safeReason,
+      },
+    });
     return;
   }
-  const archived = input.state.openSpec.archiveChange({
-    cwd: input.state.supervisorCwd,
-    changeId: active.id,
-    date: new Date().toISOString().slice(0, 10),
-  });
+  if (active.hasUnmergedAttestedChanges) {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: `Change ${active.id} cannot archive yet.`,
+      data: {
+        ...baseData,
+        runtimeEventType: "change.archive_blocked",
+        changeId: active.id,
+        blockerType: "unmerged_changes",
+        safeReason: `Change ${active.id} has attested worker file changes that were never review-merged.`,
+      },
+    });
+    return;
+  }
+  if (deps.database) {
+    if (!input.state.openSpec.prepareArchive) {
+      recordArchiveOutcome(deps, input, {
+        changeId: active.id,
+        runtimeEventType: "change.archive_blocked",
+        blockerType: "archive_capability_unavailable",
+        safeReason: "Durable archive preparation is unavailable; legacy archive execution is disabled for database-backed Goals.",
+      });
+      return;
+    }
+    completeDurableArchive(deps, deps.database, input, active.id);
+    return;
+  }
+  let archived;
+  try {
+    archived = input.state.openSpec.archiveChange({
+      cwd: input.state.supervisorCwd,
+      changeId: active.id,
+      date: new Date().toISOString().slice(0, 10),
+    });
+  } catch (error) {
+    archived = {
+      ok: false as const,
+      safeReason: sanitizeArchiveReason(safeErrorMessage(error), input.state.supervisorCwd),
+    };
+  }
   if (!archived.ok) {
     deps.eventRepo.create({
       goalId: input.goalId,
@@ -1987,6 +2153,378 @@ function tryArchiveActiveChange(deps: AgentSessionManagerDeps, input: PersistRun
       data: { ...baseData, runtimeEventType: "change.activated", changeId: next.id },
     });
   }
+}
+
+function completeDurableArchive(
+  deps: AgentSessionManagerDeps,
+  database: AppDatabase,
+  input: PersistRuntimeEventInput,
+  changeId: string,
+): void {
+  const archiveRepo = deps.managedChangeArchiveRepo ?? createManagedChangeArchiveRepository(database);
+  const date = new Date().toISOString().slice(0, 10);
+  let operation = archiveRepo.get(input.goalId, changeId);
+  if (!operation) {
+    let prepared;
+    try {
+      prepared = input.state.openSpec.prepareArchive!({
+        cwd: input.state.supervisorCwd,
+        changeId,
+        date,
+      });
+    } catch (error) {
+      recordArchiveOutcome(deps, input, {
+        changeId,
+        runtimeEventType: "change.archive_failed",
+        blockerType: "archive_operation_failed",
+        safeReason: sanitizeArchiveReason(safeErrorMessage(error), input.state.supervisorCwd),
+      });
+      return;
+    }
+    if (!prepared.ok) {
+      recordArchiveOutcome(deps, input, {
+        changeId,
+        runtimeEventType: "change.archive_blocked",
+        blockerType: "archive_state_ambiguous",
+        safeReason: sanitizeArchiveReason(prepared.safeReason, input.state.supervisorCwd),
+      });
+      return;
+    }
+    operation = archiveRepo.beginIntent({ goalId: input.goalId, changeId, ...prepared });
+    deps.archiveFault?.("after_intent");
+  }
+  if (operation.status === "committed") {
+    activateAfterDurableArchive(deps, input, changeId);
+    return;
+  }
+  let archived;
+  try {
+    archived = input.state.openSpec.archiveChange({
+      cwd: input.state.supervisorCwd,
+      changeId,
+      date: archiveDateFromTarget(operation.targetPath, changeId),
+      sourcePath: operation.sourcePath,
+      targetPath: operation.targetPath,
+      manifestDigest: operation.manifestDigest,
+      preArchiveHead: operation.preArchiveHead,
+    });
+  } catch (error) {
+    const safeReason = sanitizeArchiveReason(safeErrorMessage(error), input.state.supervisorCwd);
+    archiveRepo.markBlocked(input.goalId, changeId, [safeReason]);
+    recordArchiveOutcome(deps, input, {
+      changeId,
+      runtimeEventType: "change.archive_failed",
+      blockerType: "archive_operation_failed",
+      safeReason,
+    });
+    return;
+  }
+  if (!archived.ok || !archived.archiveCommitSha) {
+    const safeReason = sanitizeArchiveReason(
+      archived.safeReason ?? "Archive result did not include a verified Git commit.",
+      input.state.supervisorCwd,
+    );
+    archiveRepo.markBlocked(input.goalId, changeId, [safeReason]);
+    recordArchiveOutcome(deps, input, {
+      changeId,
+      runtimeEventType: /ambiguous|mismatch|both|neither|multiple/i.test(safeReason)
+        ? "change.archive_blocked"
+        : "change.archive_failed",
+      blockerType: /ambiguous|mismatch|both|neither|multiple/i.test(safeReason)
+        ? "archive_state_ambiguous"
+        : "archive_operation_failed",
+      safeReason,
+    });
+    return;
+  }
+  deps.archiveFault?.("after_move");
+  try {
+    archiveRepo.finalize({
+      goalId: input.goalId,
+      changeId,
+      archiveCommitSha: archived.archiveCommitSha,
+      runId: input.runId,
+      safeSummary: `Change ${changeId} archived by the backend.`,
+    });
+  } catch (error) {
+    const safeReason = sanitizeArchiveReason(safeErrorMessage(error), input.state.supervisorCwd);
+    archiveRepo.markBlocked(input.goalId, changeId, [safeReason]);
+    recordArchiveOutcome(deps, input, {
+      changeId,
+      runtimeEventType: "change.archive_failed",
+      blockerType: "archive_operation_failed",
+      safeReason,
+    });
+    return;
+  }
+  deps.archiveFault?.("after_final_event");
+  activateAfterDurableArchive(deps, input, changeId);
+}
+
+function activateAfterDurableArchive(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  changeId: string,
+): void {
+  const changeRegistry = getChangeRegistry(input.state, input.goalId);
+  if (changeRegistry.getChange(changeId)?.status !== "archived") changeRegistry.markArchived(changeId);
+  const next = changeRegistry.activeChange();
+  if (!next) return;
+  const alreadyActivated = deps.eventRepo.listForGoal(input.goalId).some((event) =>
+    event.data.runtimeEventType === "change.activated" && event.data.changeId === next.id
+  );
+  if (!alreadyActivated) {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: `Change ${next.id} activated.`,
+      data: {
+        sessionId: input.sessionId,
+        provider: input.providerId,
+        model: input.modelLabel,
+        runtimeEventType: "change.activated",
+        changeId: next.id,
+      },
+    });
+  }
+}
+
+function reconcileDurableArchivesBeforeResume(
+  deps: AgentSessionManagerDeps,
+  state: SupervisorState,
+  goalId: string,
+): boolean {
+  const archiveRepo = deps.managedChangeArchiveRepo ?? createManagedChangeArchiveRepository(deps.database!);
+  const changeRegistry = getChangeRegistry(state, goalId);
+  for (const operation of archiveRepo.listForGoal(goalId)) {
+    let archived;
+    try {
+      archived = state.openSpec.archiveChange({
+        cwd: state.supervisorCwd,
+        changeId: operation.changeId,
+        date: archiveDateFromTarget(operation.targetPath, operation.changeId),
+        sourcePath: operation.sourcePath,
+        targetPath: operation.targetPath,
+        manifestDigest: operation.manifestDigest,
+        preArchiveHead: operation.preArchiveHead,
+        ...(operation.archiveCommitSha ? { archiveCommitSha: operation.archiveCommitSha } : {}),
+      });
+    } catch (error) {
+      archived = {
+        ok: false as const,
+        safeReason: sanitizeArchiveReason(safeErrorMessage(error), state.supervisorCwd),
+      };
+    }
+    const archiveSha = archived.archiveCommitSha;
+    if (!archived.ok || !archiveSha
+      || (operation.status === "committed" && operation.archiveCommitSha !== archiveSha)) {
+      const safeReason = sanitizeArchiveReason(
+        !archived.ok
+          ? archived.safeReason ?? "Archive reconciliation failed."
+          : operation.status === "committed" && operation.archiveCommitSha !== archiveSha
+            ? `Committed archive SHA mismatch for change ${operation.changeId}.`
+            : "Archive reconciliation did not verify a Git commit.",
+        state.supervisorCwd,
+      );
+      if (operation.status !== "committed") {
+        archiveRepo.markBlocked(goalId, operation.changeId, [safeReason]);
+      }
+      deps.eventRepo.create({
+        goalId,
+        type: "agent.progress",
+        message: `Archive reconciliation for ${operation.changeId} is blocked.`,
+        data: {
+          runtimeEventType: "change.archive_blocked",
+          changeId: operation.changeId,
+          blockerType: "archive_state_ambiguous",
+          safeReason,
+          archiveOperationId: operation.id,
+        },
+      });
+      return false;
+    }
+    if (operation.status !== "committed") {
+      archiveRepo.finalize({
+        goalId,
+        changeId: operation.changeId,
+        archiveCommitSha: archiveSha,
+        runId: null,
+        safeSummary: `Change ${operation.changeId} archive reconciled before resume.`,
+      });
+    }
+    if (changeRegistry.getChange(operation.changeId)?.status !== "archived") {
+      changeRegistry.markArchived(operation.changeId);
+    }
+    const next = changeRegistry.activeChange();
+    if (next && !deps.eventRepo.listForGoal(goalId).some((event) =>
+      event.data.runtimeEventType === "change.activated" && event.data.changeId === next.id
+    )) {
+      deps.eventRepo.create({
+        goalId,
+        type: "agent.progress",
+        message: `Change ${next.id} activated after archive reconciliation.`,
+        data: {
+          runtimeEventType: "change.activated",
+          changeId: next.id,
+          archiveOperationId: operation.id,
+          recovery: true,
+        },
+      });
+    }
+  }
+
+  const active = changeRegistry.activeChange();
+  if (!active || archiveRepo.get(goalId, active.id)) return true;
+  if (!state.openSpec.prepareArchive) {
+    const safeReason = "Durable archive preparation is unavailable; restart cannot prove a resumable archive state.";
+    deps.goalRepo.updateStatus(goalId, "blocked", { completedAt: new Date().toISOString() });
+    deps.eventRepo.create({
+      goalId,
+      type: "agent.progress",
+      message: `Archive reconciliation for ${active.id} is blocked.`,
+      data: {
+        runtimeEventType: "change.archive_blocked",
+        changeId: active.id,
+        blockerType: "archive_capability_unavailable",
+        safeReason,
+        recovery: true,
+      },
+    });
+    return false;
+  }
+  let prepared;
+  try {
+    prepared = state.openSpec.prepareArchive({
+      cwd: state.supervisorCwd,
+      changeId: active.id,
+      date: new Date().toISOString().slice(0, 10),
+    });
+  } catch (error) {
+    prepared = {
+      ok: false as const,
+      safeReason: sanitizeArchiveReason(safeErrorMessage(error), state.supervisorCwd),
+    };
+  }
+  if (prepared.ok) return true;
+  const safeReason = sanitizeArchiveReason(prepared.safeReason, state.supervisorCwd);
+  deps.eventRepo.create({
+    goalId,
+    type: "agent.progress",
+    message: `Unowned archive state for ${active.id} is ambiguous.`,
+    data: {
+      runtimeEventType: "change.archive_blocked",
+      changeId: active.id,
+      blockerType: "archive_state_ambiguous",
+      safeReason,
+    },
+  });
+  return false;
+}
+
+function recordArchiveOutcome(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  outcome: {
+    changeId: string;
+    runtimeEventType: "change.archive_blocked" | "change.archive_failed";
+    blockerType: string;
+    safeReason: string;
+  },
+): void {
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "agent.progress",
+    message: `Archiving change ${outcome.changeId} did not complete.`,
+    data: {
+      sessionId: input.sessionId,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType: outcome.runtimeEventType,
+      changeId: outcome.changeId,
+      blockerType: outcome.blockerType,
+      safeReason: outcome.safeReason,
+    },
+  });
+}
+
+function archiveDateFromTarget(targetPath: string, changeId: string): string {
+  const suffix = `-${changeId}`;
+  const directory = targetPath.replace(/\\/g, "/").split("/").at(-1) ?? "";
+  return directory.endsWith(suffix) ? directory.slice(0, -suffix.length) : "invalid-recorded-date";
+}
+
+function sanitizeArchiveReason(reason: string, workspace: string): string {
+  const normalizedWorkspace = workspace.replace(/\\/g, "/");
+  return reason.replace(/\\/g, "/").split(normalizedWorkspace).join("<goal-workspace>")
+    .replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+interface DurableArchiveGateFailure {
+  ok: false;
+  safeReason: string;
+  blockerType: "invalid_split_lineage" | "undelivered_task";
+  taskIds: string[];
+  reasonCode?: string;
+}
+
+function durableArchiveGate(
+  db: AppDatabase,
+  goalId: string,
+  changeId: string,
+  registeredTaskIds: string[],
+): { ok: true } | DurableArchiveGateFailure {
+  const projection = evaluateDurableManagedTaskLineage(db, goalId);
+  const seeded = new Set([
+    ...registeredTaskIds,
+    ...projection.tasks.filter((task) => task.changeId === changeId).map((task) => task.id),
+  ]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const task of projection.tasks) {
+      if (task.parentTaskId && seeded.has(task.parentTaskId) && !seeded.has(task.id)) {
+        seeded.add(task.id);
+        changed = true;
+      }
+    }
+  }
+  const lineageGaps = [
+    ...lineageGapsForChange(projection, changeId),
+    ...projection.gaps.filter((gap) =>
+      (gap.taskIds ?? (gap.taskId ? [gap.taskId] : [])).some((taskId) => seeded.has(taskId))
+    ),
+  ];
+  if (lineageGaps.length > 0) {
+    const gap = lineageGaps[0]!;
+    return {
+      ok: false,
+      blockerType: "invalid_split_lineage",
+      reasonCode: gap.reasonCode ?? "invalid_split_lineage",
+      taskIds: [...new Set(gap.taskIds ?? (gap.taskId ? [gap.taskId] : []))].slice(0, 20),
+      safeReason: gap.safeSummary,
+    };
+  }
+  const durableIds = new Set(projection.tasks.map((task) => task.id));
+  const missing = [...seeded].filter((taskId) => !durableIds.has(taskId));
+  const undelivered = projection.tasks
+    .filter((task) => seeded.has(task.id) && projection.leafTaskIds.includes(task.id) && task.status !== "accepted")
+    .map((task) => task.id);
+  const taskIds = [...new Set([...missing, ...undelivered])].sort().slice(0, 20);
+  if (taskIds.length > 0) {
+    return {
+      ok: false,
+      blockerType: "undelivered_task",
+      taskIds,
+      safeReason: `Change ${changeId} has undelivered tasks: ${taskIds.join(", ")}`,
+    };
+  }
+  return { ok: true };
+}
+
+function safeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

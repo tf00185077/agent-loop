@@ -1,9 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 import type { ManagedChangePlanEntry } from "../../domain/index.js";
 import { detectCliCommand } from "../cli/cli-command-detection.js";
+import {
+  computeArchiveManifestDigest,
+  proveArchiveManifestIdentity,
+} from "./archive-manifest.js";
 
 export interface CommandResult {
   status: number | null;
@@ -45,17 +49,38 @@ export interface ArchiveChangeInput {
   cwd: string;
   changeId: string;
   date: string;
+  sourcePath?: string;
+  targetPath?: string;
+  manifestDigest?: string;
+  preArchiveHead?: string;
+  /** Previously finalized archive commit; terminal replay verifies it remains an ancestor. */
+  archiveCommitSha?: string;
 }
 
 export interface ArchiveChangeResult {
   ok: boolean;
   safeReason?: string;
+  targetPath?: string;
+  manifestDigest?: string;
+  archiveCommitSha?: string;
+  idempotent?: boolean;
 }
+
+export interface PrepareArchiveResultSuccess {
+  ok: true;
+  sourcePath: string;
+  targetPath: string;
+  manifestDigest: string;
+  preArchiveHead: string;
+}
+
+export type PrepareArchiveResult = PrepareArchiveResultSuccess | { ok: false; safeReason: string };
 
 export interface OpenSpecWorkspaceService {
   mode(): "cli" | "degraded";
   scaffoldChange(input: ScaffoldChangeInput): ScaffoldChangeResult;
   validateChange(input: ValidateChangeInput): ValidateChangeResult;
+  prepareArchive?(input: ArchiveChangeInput): PrepareArchiveResult;
   archiveChange(input: ArchiveChangeInput): ArchiveChangeResult;
 }
 
@@ -130,29 +155,261 @@ export function createOpenSpecWorkspaceService(
       return { ok: failures.length === 0, failures };
     },
 
-    archiveChange(input) {
-      // Archive is a dated move in both modes: deterministic, CLI-version
-      // independent, and identical to how this repo's own changes archive.
-      const changeDir = join(input.cwd, "openspec", "changes", input.changeId);
-      const archiveDir = join(input.cwd, "openspec", "changes", "archive");
-      const target = join(archiveDir, `${input.date}-${input.changeId}`);
+    prepareArchive(input) {
       try {
-        if (!existsSync(changeDir)) {
-          return { ok: false, safeReason: `Change directory not found: ${input.changeId}` };
-        }
-        if (existsSync(target)) {
-          return { ok: false, safeReason: `Archive target already exists for ${input.changeId}` };
-        }
-        mkdirSync(archiveDir, { recursive: true });
-        renameSync(changeDir, target);
+        return prepareArchiveIdentity(input, runGit);
       } catch (err) {
-        return { ok: false, safeReason: `Could not archive ${input.changeId}: ${message(err)}` };
+        return { ok: false, safeReason: `Could not prepare archive ${input.changeId}: ${message(err)}` };
       }
-      runGit(["add", "-A", join("openspec", "changes")], input.cwd);
-      runGit(["commit", "-m", `openspec: archive ${input.changeId}`, "--no-verify"], input.cwd);
-      return { ok: true };
+    },
+
+    archiveChange(input) {
+      try {
+        const identity = input.sourcePath && input.targetPath && input.manifestDigest && input.preArchiveHead
+          ? {
+              ok: true as const,
+              sourcePath: input.sourcePath,
+              targetPath: input.targetPath,
+              manifestDigest: input.manifestDigest,
+              preArchiveHead: input.preArchiveHead,
+            }
+          : prepareArchiveIdentity(input, runGit);
+        if (!identity.ok) return identity;
+        const expectedSource = resolve(input.cwd, "openspec", "changes", input.changeId);
+        const expectedTarget = resolve(input.cwd, "openspec", "changes", "archive", `${input.date}-${input.changeId}`);
+        if (resolve(identity.sourcePath) !== expectedSource || resolve(identity.targetPath) !== expectedTarget) {
+          return { ok: false, safeReason: "Archive identity paths do not match the selected Goal change." };
+        }
+        const matches = matchingArchivePaths(input.cwd, input.changeId);
+        const sourceExists = existsSync(identity.sourcePath);
+        const targetExists = existsSync(identity.targetPath);
+        if (matches.some((path) => resolve(path) !== resolve(identity.targetPath))) {
+          return { ok: false, safeReason: `Archive state is ambiguous for ${input.changeId}: multiple dated targets exist.` };
+        }
+        if (sourceExists === targetExists) {
+          return {
+            ok: false,
+            safeReason: `Archive state is ambiguous for ${input.changeId}: source and target are ${sourceExists ? "both present" : "both absent"}.`,
+          };
+        }
+        const manifestPath = sourceExists ? identity.sourcePath : identity.targetPath;
+        if (computeArchiveManifestDigest(manifestPath) !== identity.manifestDigest) {
+          return { ok: false, safeReason: `Archive manifest digest mismatch for ${input.changeId}.` };
+        }
+        const sourceRelative = gitRelativePath(input.cwd, identity.sourcePath);
+        const targetRelative = gitRelativePath(input.cwd, identity.targetPath);
+        let idempotent = !sourceExists && targetExists;
+        if (sourceExists) {
+          const clean = requireCleanGitWorkspace(runGit, input.cwd, input.changeId);
+          if (!clean.ok) return clean;
+          const head = runGit(["rev-parse", "HEAD"], input.cwd);
+          if (head.status !== 0 || head.stdout.trim() !== identity.preArchiveHead) {
+            return { ok: false, safeReason: `Archive workspace HEAD changed for ${input.changeId}.` };
+          }
+          mkdirSync(join(input.cwd, "openspec", "changes", "archive"), { recursive: true });
+          renameSync(identity.sourcePath, identity.targetPath);
+          idempotent = false;
+        }
+        const status = runGit(["status", "--porcelain", "-uall"], input.cwd);
+        if (status.status !== 0) {
+          return { ok: false, safeReason: `Could not inspect archive Git state: ${trimmedOutput(status)}` };
+        }
+        if (status.stdout.trim()) {
+          const scoped = changedGitPaths(runGit, input.cwd);
+          if (!scoped.ok) return scoped;
+          if (scoped.paths.length === 0 || scoped.paths.some((path) =>
+            !isWithinGitPath(path, sourceRelative) && !isWithinGitPath(path, targetRelative)
+          )) {
+            return { ok: false, safeReason: `Archive workspace contains unrelated changes for ${input.changeId}.` };
+          }
+          if (computeArchiveManifestDigest(identity.targetPath) !== identity.manifestDigest) {
+            return { ok: false, safeReason: `Archive manifest digest mismatch for ${input.changeId}.` };
+          }
+          const added = runGit(["add", "-A", "--", sourceRelative, targetRelative], input.cwd);
+          if (added.status !== 0) return { ok: false, safeReason: `Could not stage archive: ${trimmedOutput(added)}` };
+          if (computeArchiveManifestDigest(identity.targetPath) !== identity.manifestDigest) {
+            return { ok: false, safeReason: `Archive manifest digest mismatch for ${input.changeId}.` };
+          }
+          const committed = runGit(
+            ["commit", "--only", "-m", `openspec: archive ${input.changeId}`, "--no-verify", "--", sourceRelative, targetRelative],
+            input.cwd,
+          );
+          if (committed.status !== 0) return { ok: false, safeReason: `Could not commit archive: ${trimmedOutput(committed)}` };
+        }
+        const proof = proveUniqueArchiveCommit({
+          runGit,
+          cwd: input.cwd,
+          preArchiveHead: identity.preArchiveHead,
+          sourceRelative,
+          targetRelative,
+        });
+        if (!proof.ok) return proof;
+        if (input.archiveCommitSha && proof.archiveCommitSha !== input.archiveCommitSha) {
+          return { ok: false, safeReason: `Recorded archive commit does not match the unique verified archive for ${input.changeId}.` };
+        }
+        const manifestProof = proveArchiveManifestIdentity({
+          cwd: input.cwd,
+          targetPath: identity.targetPath,
+          targetRelative,
+          archiveCommitSha: proof.archiveCommitSha,
+          expectedDigest: identity.manifestDigest,
+        });
+        if (!manifestProof.ok) {
+          return { ok: false, safeReason: `Archive manifest digest mismatch for ${input.changeId}.` };
+        }
+        return {
+          ok: true,
+          targetPath: identity.targetPath,
+          manifestDigest: identity.manifestDigest,
+          archiveCommitSha: proof.archiveCommitSha,
+          idempotent,
+        };
+      } catch (err) {
+        return { ok: false, safeReason: `Archive operation failed for ${input.changeId}: ${message(err)}` };
+      }
     },
   };
+}
+
+function prepareArchiveIdentity(
+  input: ArchiveChangeInput,
+  runGit: (args: string[], cwd: string) => CommandResult,
+): PrepareArchiveResult {
+  const sourcePath = resolve(input.cwd, "openspec", "changes", input.changeId);
+  const targetPath = resolve(input.cwd, "openspec", "changes", "archive", `${input.date}-${input.changeId}`);
+  const sourceExists = existsSync(sourcePath);
+  const targetExists = existsSync(targetPath);
+  const matches = matchingArchivePaths(input.cwd, input.changeId);
+  if (!sourceExists || targetExists || matches.length > 0) {
+    return {
+      ok: false,
+      safeReason:
+        `Archive state is ambiguous for ${input.changeId}: expected one active source and no dated target ` +
+        `(source=${sourceExists}, target=${targetExists}, matches=${matches.length}).`,
+    };
+  }
+  const head = runGit(["rev-parse", "HEAD"], input.cwd);
+  if (head.status !== 0 || !head.stdout.trim()) {
+    return { ok: false, safeReason: `Could not record pre-archive workspace HEAD: ${trimmedOutput(head)}` };
+  }
+  const clean = requireCleanGitWorkspace(runGit, input.cwd, input.changeId);
+  if (!clean.ok) return clean;
+  return {
+    ok: true,
+    sourcePath,
+    targetPath,
+    manifestDigest: computeArchiveManifestDigest(sourcePath),
+    preArchiveHead: head.stdout.trim(),
+  };
+}
+
+function requireCleanGitWorkspace(
+  runGit: (args: string[], cwd: string) => CommandResult,
+  cwd: string,
+  changeId: string,
+): PrepareArchiveResult | { ok: true } {
+  const status = runGit(["status", "--porcelain", "-uall"], cwd);
+  if (status.status !== 0) {
+    return { ok: false, safeReason: `Could not inspect archive Git state: ${trimmedOutput(status)}` };
+  }
+  if (status.stdout.trim()) {
+    return { ok: false, safeReason: `Archive requires a clean workspace; unrelated or staged changes exist for ${changeId}.` };
+  }
+  return { ok: true };
+}
+
+function changedGitPaths(
+  runGit: (args: string[], cwd: string) => CommandResult,
+  cwd: string,
+): { ok: true; paths: string[] } | { ok: false; safeReason: string } {
+  const commands = [
+    ["diff", "--name-only"],
+    ["diff", "--cached", "--name-only"],
+    ["ls-files", "--others", "--exclude-standard"],
+  ];
+  const paths = new Set<string>();
+  for (const args of commands) {
+    const result = runGit(args, cwd);
+    if (result.status !== 0) {
+      return { ok: false, safeReason: `Could not inspect archive Git paths: ${trimmedOutput(result)}` };
+    }
+    for (const path of result.stdout.split(/\r?\n/).filter(Boolean)) paths.add(path.replace(/\\/g, "/"));
+  }
+  return { ok: true, paths: [...paths].sort() };
+}
+
+function proveUniqueArchiveCommit(input: {
+  runGit: (args: string[], cwd: string) => CommandResult;
+  cwd: string;
+  preArchiveHead: string;
+  sourceRelative: string;
+  targetRelative: string;
+}): { ok: true; archiveCommitSha: string } | { ok: false; safeReason: string } {
+  const ancestor = input.runGit(["merge-base", "--is-ancestor", input.preArchiveHead, "HEAD"], input.cwd);
+  if (ancestor.status !== 0) {
+    return { ok: false, safeReason: "Pre-archive HEAD is not an ancestor of the current workspace HEAD." };
+  }
+  const listed = input.runGit(["rev-list", "--reverse", `${input.preArchiveHead}..HEAD`], input.cwd);
+  if (listed.status !== 0) {
+    return { ok: false, safeReason: `Could not enumerate archive commits: ${trimmedOutput(listed)}` };
+  }
+  const candidates: string[] = [];
+  for (const commit of listed.stdout.split(/\r?\n/).filter(Boolean)) {
+    const diff = input.runGit(
+      ["diff-tree", "--no-commit-id", "--name-status", "-r", "-M", "--format=", commit],
+      input.cwd,
+    );
+    if (diff.status !== 0) {
+      return { ok: false, safeReason: `Could not verify archive commit contents: ${trimmedOutput(diff)}` };
+    }
+    const entries = diff.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.split("\t"));
+    const touchesArchive = entries.some((entry) => entry.slice(1).some((path) =>
+      isWithinGitPath(path ?? "", input.sourceRelative) || isWithinGitPath(path ?? "", input.targetRelative)
+    ));
+    if (!touchesArchive) continue;
+    const coherentRename = entries.length > 0 && entries.every((entry) => {
+      if (!/^R\d+$/.test(entry[0] ?? "") || entry.length !== 3) return false;
+      const source = entry[1] ?? "";
+      const target = entry[2] ?? "";
+      if (!isWithinGitPath(source, input.sourceRelative) || !isWithinGitPath(target, input.targetRelative)) return false;
+      return source.slice(input.sourceRelative.length) === target.slice(input.targetRelative.length);
+    });
+    if (!coherentRename) {
+      return { ok: false, safeReason: "Archive Git history does not contain one coherent source-to-target rename." };
+    }
+    candidates.push(commit);
+  }
+  if (candidates.length !== 1) {
+    return { ok: false, safeReason: `Archive Git history has ${candidates.length} verified archive commits; exactly one is required.` };
+  }
+  return { ok: true, archiveCommitSha: candidates[0]! };
+}
+
+function gitRelativePath(cwd: string, path: string): string {
+  return relative(resolve(cwd), resolve(path)).replace(/\\/g, "/");
+}
+
+function isWithinGitPath(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
+}
+
+function matchingArchivePaths(cwd: string, changeId: string): string[] {
+  const archiveDir = resolve(cwd, "openspec", "changes", "archive");
+  if (!existsSync(archiveDir)) return [];
+  return readdirSync(archiveDir)
+    .filter((entry) => entry.endsWith(`-${changeId}`))
+    .map((entry) => resolve(archiveDir, entry))
+    .sort();
+}
+
+function listFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) files.push(...listFiles(path));
+    else files.push(path);
+  }
+  return files;
 }
 
 function renderProposalTemplate(change: ManagedChangePlanEntry): string {

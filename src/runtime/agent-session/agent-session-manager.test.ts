@@ -19,6 +19,7 @@ import {
   createRunRepository,
 } from "../../persistence/runtime-repositories.js";
 import { createAgentSessionManager } from "./agent-session-manager.js";
+import { evaluateManagedCompletion } from "./managed-completion-evaluator.js";
 import type { OpenSpecWorkspaceService } from "./openspec-workspace-service.js";
 
 test("starts a managed session consumes adapter events and updates durable session state", async () => {
@@ -1107,6 +1108,52 @@ test("starts bounded nudge continuations and blocks the goal when exhausted", as
   fixture.db.close();
 });
 
+test("continuation accounting preserves configured maximum, reason reset, increments, and exact exhaustion text", async () => {
+  const fixture = createManagerFixture("continuation compatibility");
+  let turn = 0;
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      turn += 1;
+      if (turn === 1) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Malformed completion", occurredAt: "2026-07-17T00:00:01.000Z",
+            metadata: { delegationControlEvent: { type: "managed_delegation.complete" } },
+          },
+          { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Rejected turn ended", occurredAt: "2026-07-17T00:00:02.000Z" },
+        ]);
+      }
+      return createHandle(input.sessionId, [{
+        type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+        message: "Completionless turn ended", occurredAt: `2026-07-17T00:00:0${turn + 1}.000Z`,
+      }]);
+    },
+  };
+  const manager = createAgentSessionManager({ ...fixture, maxSupervisorContinuations: 2 });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  assert.equal(turn, 3, "one initial turn plus exactly two continuations");
+  assert.deepEqual(events.filter((event) => event.data.runtimeEventType === "delegation.continuation_started")
+    .map((event) => event.data.continuationReason), ["control_rejected", "completionless_exit"]);
+  const exhausted = events.find((event) => event.data.runtimeEventType === "supervisor.continuations_exhausted")!;
+  assert.equal(exhausted.data.maxSupervisorContinuations, 2);
+  assert.equal(exhausted.data.completionRequestEvaluated, false);
+  assert.equal(exhausted.message, "Supervisor reached 2 continuations without a completion signal");
+  assert.equal(exhausted.data.reason, exhausted.message);
+  fixture.db.close();
+});
+
 test("continuation exhaustion preserves rejected completion gaps and reports unsuccessful completion", async () => {
   const fixture = createManagerFixture("rejected completion bound");
   const managedTaskRepo = createManagedTaskRepository(fixture.db);
@@ -1480,6 +1527,10 @@ test("refuses the third identical-scope retry and accepts a narrower split", asy
   const workerPrompts: string[] = [];
   const supervisorPrompts: string[] = [];
   const acceptance = [{ id: "A1", text: "Second player can join the lobby." }];
+  const parentAcceptance = [
+    ...acceptance,
+    { id: "A2", text: "A third player is rejected." },
+  ];
   const adapter: AgentRuntimeAdapter = {
     providerId: "codex-local",
     async detectCapabilities() {
@@ -1516,7 +1567,7 @@ test("refuses the third identical-scope retry and accepts a narrower split", asy
             metadata: {
               delegationControlEvent: {
                 type: "managed_delegation.task_list",
-                tasks: [{ id: "task-1", title: "Lobby join", acceptance }],
+                tasks: [{ id: "task-1", title: "Lobby join", acceptance: parentAcceptance }],
               },
             },
           },
@@ -1659,6 +1710,224 @@ test("refuses the third identical-scope retry and accepts a narrower split", asy
   const nudgePrompt = historyPrompts.at(-1);
   assert.ok(nudgePrompt?.includes("task-1"));
   assert.ok(nudgePrompt?.includes("rejections=2"));
+  fixture.db.close();
+});
+
+test("durably splits an exhausted parent when the supervisor directly registers narrower children", async () => {
+  const fixture = createManagerFixture("direct durable narrowing");
+  const managedTaskRepo = createManagedTaskRepository(fixture.db, {
+    now: () => "2026-07-17T00:00:00.000Z",
+  });
+  managedTaskRepo.registerTasks({
+    goalId: fixture.goal.id,
+    tasks: [{
+      id: "parent",
+      title: "Large task",
+      acceptance: [{ id: "A1", text: "First behavior" }, { id: "A2", text: "Second behavior" }],
+    }],
+  });
+  fixture.db.prepare(`
+    UPDATE managed_tasks
+    SET status = 'rejected', attempt_count = 2, substantive_rejection_count = 2,
+      last_cited_criteria = '["A1"]'
+    WHERE goal_id = ? AND logical_task_id = 'parent'
+  `).run(fixture.goal.id);
+  const manager = createAgentSessionManager({
+    ...fixture,
+    database: fixture.db,
+    managedTaskRepo,
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([{
+      type: "progress",
+      sessionId: "session-placeholder",
+      goalId: fixture.goal.id,
+      runId: "run-placeholder",
+      message: "Register the narrowed child directly.",
+      occurredAt: "2026-07-17T00:00:01.000Z",
+      metadata: {
+        delegationControlEvent: {
+          type: "managed_delegation.task_list",
+          tasks: [{
+            id: "child",
+            title: "First behavior only",
+            parentTaskId: "parent",
+            acceptance: [{ id: "A1", text: "First behavior" }],
+          }],
+        },
+      },
+    }]),
+  });
+
+  assert.equal(managedTaskRepo.getTask(fixture.goal.id, "parent")?.status, "split");
+  assert.equal(managedTaskRepo.getTask(fixture.goal.id, "child")?.parentTaskId, "parent");
+  const lineageEvents = fixture.eventRepo.listForGoal(fixture.goal.id)
+    .filter((event) => event.data.runtimeEventType === "managed_task.lineage_split");
+  assert.equal(lineageEvents.length, 1);
+  assert.deepEqual(lineageEvents[0]?.data.taskIds, ["child"]);
+  fixture.db.close();
+});
+
+test("direct narrowing advances archive, next change, reassessment, and completion without a control loop", async () => {
+  const fixture = createManagerFixture("direct narrowing staged pipeline");
+  const openSpec = recordingOpenSpecService("cli");
+  const gates = Array.from({ length: 10 }, () => {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    return { promise, release };
+  });
+  let releaseIndex = 0;
+  let reviewIndex = 0;
+  let supervisorStarted = false;
+  const allRequests = () => fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id)
+    .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id));
+  const latestWorkerId = () => allRequests().filter((request) => request.role === "worker" && request.resultSummary).at(-1)!.id;
+  const control = (
+    input: { sessionId: string; goalId: string; runId: string },
+    block: Record<string, unknown>,
+    occurredAt: string,
+  ): AgentRuntimeEvent => ({
+    type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+    message: "Staged pipeline control.", occurredAt, metadata: { delegationControlEvent: block },
+  });
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        if (input.prompt.includes("review") || input.prompt.includes("Judge")) {
+          reviewIndex += 1;
+          const rejected = reviewIndex === 2 || reviewIndex === 3;
+          return createHandle(input.sessionId, [{
+            type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: rejected ? "A1 still fails after independent review." : "Review merge accepted and merged.",
+            occurredAt: `2026-07-17T00:01:${String(reviewIndex).padStart(2, "0")}.000Z`,
+            metadata: {
+              reviewMergeApplyOutcome: rejected
+                ? { status: "rejected", safeSummary: "A1 still fails." }
+                : { status: "merged", safeSummary: "Merged." },
+            },
+          }]);
+        }
+        return createHandle(input.sessionId, [{
+          type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Worker completed its contracted task.", occurredAt: "2026-07-17T00:01:00.000Z",
+        }]);
+      }
+      if (supervisorStarted) return createHandle(input.sessionId, []);
+      supervisorStarted = true;
+      return {
+        ...createHandle(input.sessionId, []),
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true },
+        async *events() {
+          yield {
+            ...changePlanEvent([
+              { id: "change-one", title: "First", rationale: "Split lineage." },
+              { id: "change-two", title: "Second", rationale: "Tail change." },
+            ]),
+            sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          } satisfies AgentRuntimeEvent;
+          yield control(input, {
+            type: "managed_delegation.request", role: "worker", taskId: "spec:change-one",
+            prompt: "Author change-one specs.", summary: "Author change-one specs.",
+          }, "2026-07-17T00:00:01.000Z");
+          await gates[0]!.promise;
+          yield control(input, {
+            type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: latestWorkerId(),
+            prompt: "Judge and review merge change-one specs.", summary: "Review change-one specs.",
+          }, "2026-07-17T00:00:02.000Z");
+          await gates[1]!.promise;
+          yield control(input, {
+            type: "managed_delegation.task_list", tasks: [{
+              id: "parent", title: "Large implementation",
+              acceptance: [{ id: "A1", text: "First slice passes." }, { id: "A2", text: "Second slice passes." }],
+            }],
+          }, "2026-07-17T00:00:03.000Z");
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            yield control(input, {
+              type: "managed_delegation.request", role: "worker", taskId: "parent",
+              prompt: "Implement the large task.", summary: "Implement parent.",
+            }, `2026-07-17T00:00:${4 + attempt * 2}.000Z`);
+            await gates[2 + attempt * 2]!.promise;
+            yield control(input, {
+              type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: latestWorkerId(),
+              prompt: "Judge review A1 and reject if it still fails.", summary: "Review parent.",
+            }, `2026-07-17T00:00:${5 + attempt * 2}.000Z`);
+            await gates[3 + attempt * 2]!.promise;
+          }
+          yield control(input, {
+            type: "managed_delegation.task_list", tasks: [{
+              id: "child", title: "First slice only", parentTaskId: "parent",
+              acceptance: [{ id: "A1", text: "First slice passes." }],
+            }],
+          }, "2026-07-17T00:00:08.000Z");
+          yield control(input, {
+            type: "managed_delegation.request", role: "worker", taskId: "child",
+            prompt: "Implement only A1.", summary: "Implement child.",
+          }, "2026-07-17T00:00:09.000Z");
+          await gates[6]!.promise;
+          yield control(input, {
+            type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: latestWorkerId(),
+            prompt: "Judge and review merge child.", summary: "Review child.",
+          }, "2026-07-17T00:00:10.000Z");
+          await gates[7]!.promise;
+          yield control(input, {
+            type: "managed_delegation.request", role: "worker", taskId: "spec:change-two",
+            prompt: "Author change-two specs.", summary: "Author change-two specs.",
+          }, "2026-07-17T00:00:11.000Z");
+          await gates[8]!.promise;
+          yield control(input, {
+            type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: latestWorkerId(),
+            prompt: "Judge and review merge change-two specs.", summary: "Review change-two specs.",
+          }, "2026-07-17T00:00:12.000Z");
+          await gates[9]!.promise;
+          yield control(input, {
+            type: "managed_goal.reassessment", goalSatisfied: true,
+            evidence: ["Both changes archived through the repaired child lineage."],
+          }, "2026-07-17T00:00:13.000Z");
+          yield control(input, {
+            type: "managed_delegation.complete", summary: "Staged pipeline completed without exhaustion.",
+          }, "2026-07-17T00:00:14.000Z");
+        },
+        async send() {
+          gates[releaseIndex++]?.release();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+    worktreeAttestor: () => ["src/change.ts"],
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const types = events.map((event) => event.data.runtimeEventType);
+  const splitIndex = types.indexOf("supervisor.task_list", types.indexOf("task.rejection_recorded") + 1);
+  const archiveIndex = types.indexOf("change.archived");
+  const nextActivationIndex = types.findIndex((type, index) =>
+    type === "change.activated" && index > archiveIndex
+  );
+  assert.equal(events.filter((event) => event.data.runtimeEventType === "task.rejection_recorded").length, 2);
+  assert.ok(splitIndex >= 0 && splitIndex < archiveIndex);
+  assert.ok(archiveIndex < nextActivationIndex);
+  assert.deepEqual(events.filter((event) => event.data.runtimeEventType === "change.archived")
+    .map((event) => event.data.changeId), ["change-one", "change-two"]);
+  assert.ok(types.includes("supervisor.reassessment"));
+  assert.ok(types.includes("supervisor.completed"));
+  assert.ok(!types.includes("supervisor.continuations_exhausted"));
   fixture.db.close();
 });
 
@@ -3650,6 +3919,7 @@ test("gates change archives on merged evidence and goal completion on all change
   const blocked = eventOfType("change.archive_blocked");
   assert.ok(blocked.length >= 1, "expected a durable archive-blocked event");
   assert.equal(blocked[0]!.data.changeId, "change-one");
+  assert.equal(blocked[0]!.data.blockerType, "unmerged_changes");
   assert.match(String(blocked[0]!.data.safeReason), /review-merged/i);
 
   // Archives happen in order and activate the next change.
@@ -3732,6 +4002,721 @@ test("gates change archives on merged evidence and goal completion on all change
   assert.equal(reassessmentEvent.data.goalSatisfied, true);
   assert.equal(reassessmentEvent.data.epochSequence, 1);
 
+  fixture.db.close();
+});
+
+test("writes a durable archive intent before workspace mutation and finalizes one archive event", async () => {
+  const fixture = createManagerFixture("durable archive intent");
+  const managedTaskRepo = createManagedTaskRepository(fixture.db);
+  let archiveMutationCount = 0;
+  let supervisorTurn = 0;
+  const archiveIdentity = {
+    sourcePath: "C:\\goal-workspace\\openspec\\changes\\change-one",
+    targetPath: "C:\\goal-workspace\\openspec\\changes\\archive\\2026-07-17-change-one",
+    manifestDigest: "a".repeat(64),
+    preArchiveHead: "head-before",
+  };
+  const openSpec: OpenSpecWorkspaceService = {
+    mode: () => "cli",
+    scaffoldChange: () => ({ ok: true, committed: true }),
+    validateChange: () => ({ ok: true, failures: [] }),
+    prepareArchive: () => ({ ok: true, ...archiveIdentity }),
+    archiveChange() {
+      const intent = fixture.db.prepare(`
+        SELECT status FROM managed_change_archive_operations
+        WHERE goal_id = ? AND change_id = 'change-one'
+      `).get(fixture.goal.id) as { status: string } | undefined;
+      assert.equal(intent?.status, "pending", "intent must commit before workspace mutation");
+      archiveMutationCount += 1;
+      return { ok: true, archiveCommitSha: "head-after", ...archiveIdentity };
+    },
+  };
+  const allRequests = () => fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id)
+    .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id));
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        if (input.prompt.includes("Independent Judge contract")) {
+          const workerId = allRequests().find((request) => request.role === "worker")!.id;
+          return createHandle(input.sessionId, [
+            {
+              type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Accepted.", occurredAt: "2026-07-17T00:00:04.000Z",
+              metadata: { delegationControlEvent: {
+                type: "managed_review.decision", workerDelegationRequestId: workerId, verdict: "accepted",
+                decisions: ["S1", "S2", "S3"].map((criterionId) => ({
+                  criterionId, outcome: "PASS", safeSummary: "Pass",
+                })),
+                safeSummary: "Spec accepted.", deferredFindings: [],
+              } },
+            },
+            { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Judge complete.", occurredAt: "2026-07-17T00:00:05.000Z" },
+          ]);
+        }
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Spec evidence.", occurredAt: "2026-07-17T00:00:02.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_task.result", taskId: "spec:change-one",
+              criterionEvidence: ["S1", "S2", "S3"].map((criterionId) => ({ criterionId, evidence: "Verified" })),
+              claimedFiles: [], tests: [],
+            } },
+          },
+          { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Worker complete.", occurredAt: "2026-07-17T00:00:03.000Z" },
+        ]);
+      }
+      supervisorTurn += 1;
+      if (supervisorTurn === 1) {
+        return createHandle(input.sessionId, [
+          { ...changePlanEvent([{ id: "change-one", title: "One", rationale: "Archive safely." }]),
+            sessionId: input.sessionId, goalId: input.goalId, runId: input.runId },
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Write spec.", occurredAt: "2026-07-17T00:00:01.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "worker", taskId: "spec:change-one",
+              prompt: "Author specs.", summary: "Author specs.",
+            } },
+          },
+        ]);
+      }
+      const workerId = allRequests().find((request) => request.role === "worker")!.id;
+      if (supervisorTurn === 2) {
+        return createHandle(input.sessionId, [{
+          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Review spec.", occurredAt: "2026-07-17T00:00:03.500Z",
+          metadata: { delegationControlEvent: {
+            type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: workerId,
+            prompt: "Judge spec.", summary: "Judge spec.",
+          } },
+        }]);
+      }
+      return createHandle(input.sessionId, [
+        {
+          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Reassess.", occurredAt: "2026-07-17T00:00:06.000Z",
+          metadata: { delegationControlEvent: {
+            type: "managed_goal.reassessment", goalSatisfied: true, evidence: ["Spec archived."],
+          } },
+        },
+        {
+          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Complete.", occurredAt: "2026-07-17T00:00:07.000Z",
+          metadata: { delegationControlEvent: {
+            type: "managed_delegation.complete", summary: "Archive intent flow complete.",
+          } },
+        },
+      ]);
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture, database: fixture.db, managedTaskRepo, openSpecWorkspaceService: openSpec,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
+
+  assert.equal(archiveMutationCount, 1);
+  assert.equal(fixture.db.prepare(`
+    SELECT status FROM managed_change_archive_operations WHERE goal_id = ? AND change_id = 'change-one'
+  `).pluck().get(fixture.goal.id), "committed");
+  assert.equal(fixture.eventRepo.listForGoal(fixture.goal.id)
+    .filter((event) => event.data.runtimeEventType === "change.archived").length, 1);
+  fixture.db.close();
+});
+
+test("turns an archive service exception into a durable sanitized failed outcome", async () => {
+  const fixture = createManagerFixture("durable archive exception");
+  fixture.goalRepo.updateStatus(fixture.goal.id, "interrupted", {
+    completedAt: "2026-07-17T00:00:00.000Z",
+  });
+  const tasks = createManagedTaskRepository(fixture.db);
+  tasks.registerTasks({
+    goalId: fixture.goal.id,
+    changeId: "change-one",
+    tasks: [{ id: "spec:change-one", title: "Done", acceptance: [{ id: "A1", text: "Done" }] }],
+  });
+  fixture.db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE goal_id = ?").run(fixture.goal.id);
+  fixture.db.prepare("UPDATE managed_task_criteria SET outcome = 'PASS'").run();
+  fixture.eventRepo.create({
+    goalId: fixture.goal.id,
+    type: "agent.progress",
+    message: "Plan",
+    data: {
+      runtimeEventType: "supervisor.change_plan",
+      changePlan: [{ id: "change-one", title: "One", rationale: "Archive" }],
+    },
+  });
+  fixture.eventRepo.create({
+    goalId: fixture.goal.id,
+    type: "agent.progress",
+    message: "Spec approved",
+    data: { runtimeEventType: "change.spec_approved", changeId: "change-one" },
+  });
+  const openSpec: OpenSpecWorkspaceService = {
+    mode: () => "cli",
+    scaffoldChange: () => ({ ok: true, committed: true }),
+    validateChange: () => ({ ok: true, failures: [] }),
+    prepareArchive: () => ({
+      ok: true,
+      sourcePath: "C:\\goal-workspace\\openspec\\changes\\change-one",
+      targetPath: "C:\\goal-workspace\\openspec\\changes\\archive\\2026-07-17-change-one",
+      manifestDigest: "a".repeat(64),
+      preArchiveHead: "head-before",
+    }),
+    archiveChange: () => {
+      throw new Error("permission denied at C:\\goal-workspace\\openspec\\changes");
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    database: fixture.db,
+    managedTaskRepo: tasks,
+    openSpecWorkspaceService: openSpec,
+    supervisorCwd: "C:\\goal-workspace",
+    maxSupervisorContinuations: 0,
+  });
+
+  await manager.resumeInterruptedGoal({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([{
+      type: "progress",
+      sessionId: "session-placeholder",
+      goalId: fixture.goal.id,
+      runId: "run-placeholder",
+      message: "Complete",
+      occurredAt: "2026-07-17T00:00:01.000Z",
+      metadata: { delegationControlEvent: { type: "managed_delegation.complete", summary: "Done" } },
+    }]),
+  });
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id)
+    .some((event) => event.data.runtimeEventType === "change.archive_failed"));
+
+  const failed = fixture.eventRepo.listForGoal(fixture.goal.id)
+    .find((event) => event.data.runtimeEventType === "change.archive_failed")!;
+  assert.equal(failed.data.blockerType, "archive_operation_failed");
+  assert.match(String(failed.data.safeReason), /^permission denied at <goal-workspace>/);
+  assert.equal(fixture.db.prepare(`
+    SELECT status FROM managed_change_archive_operations WHERE goal_id = ? AND change_id = 'change-one'
+  `).pluck().get(fixture.goal.id), "blocked");
+  fixture.db.close();
+});
+
+test("durable archive mode blocks when the workspace service lacks prepareArchive", async () => {
+  const fixture = createManagerFixture("durable archive capability missing");
+  fixture.goalRepo.updateStatus(fixture.goal.id, "interrupted", {
+    completedAt: "2026-07-17T00:00:00.000Z",
+  });
+  const tasks = createManagedTaskRepository(fixture.db);
+  tasks.registerTasks({
+    goalId: fixture.goal.id,
+    changeId: "change-one",
+    tasks: [{ id: "spec:change-one", title: "Done", acceptance: [{ id: "A1", text: "Done" }] }],
+  });
+  fixture.db.prepare("UPDATE managed_tasks SET status = 'accepted' WHERE goal_id = ?").run(fixture.goal.id);
+  fixture.db.prepare("UPDATE managed_task_criteria SET outcome = 'PASS'").run();
+  fixture.eventRepo.create({
+    goalId: fixture.goal.id,
+    type: "agent.progress",
+    message: "Plan",
+    data: {
+      runtimeEventType: "supervisor.change_plan",
+      changePlan: [{ id: "change-one", title: "One", rationale: "Archive" }],
+    },
+  });
+  fixture.eventRepo.create({
+    goalId: fixture.goal.id,
+    type: "agent.progress",
+    message: "Spec approved",
+    data: { runtimeEventType: "change.spec_approved", changeId: "change-one" },
+  });
+  let legacyArchiveCalls = 0;
+  const openSpec: OpenSpecWorkspaceService = {
+    mode: () => "cli",
+    scaffoldChange: () => ({ ok: true, committed: true }),
+    validateChange: () => ({ ok: true, failures: [] }),
+    archiveChange: () => {
+      legacyArchiveCalls += 1;
+      return { ok: true };
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    database: fixture.db,
+    managedTaskRepo: tasks,
+    openSpecWorkspaceService: openSpec,
+    supervisorCwd: "C:\\goal-workspace",
+    maxSupervisorContinuations: 0,
+  });
+
+  await manager.resumeInterruptedGoal({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([{
+      type: "progress",
+      sessionId: "session-placeholder",
+      goalId: fixture.goal.id,
+      runId: "run-placeholder",
+      message: "Complete",
+      occurredAt: "2026-07-17T00:00:01.000Z",
+      metadata: { delegationControlEvent: { type: "managed_delegation.complete", summary: "Done" } },
+    }]),
+  });
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id).some((event) =>
+    ["change.archive_blocked", "change.archive_failed", "change.archived"].includes(
+      String(event.data.runtimeEventType),
+    ),
+  ));
+
+  assert.equal(legacyArchiveCalls, 0);
+  const blocker = fixture.eventRepo.listForGoal(fixture.goal.id)
+    .find((event) => event.data.runtimeEventType === "change.archive_blocked");
+  assert.equal(blocker?.data.blockerType, "archive_capability_unavailable");
+  assert.equal(fixture.db.prepare(`
+    SELECT COUNT(*) FROM managed_change_archive_operations WHERE goal_id = ? AND change_id = 'change-one'
+  `).pluck().get(fixture.goal.id), 0);
+  assert.equal(fixture.eventRepo.listForGoal(fixture.goal.id)
+    .filter((event) => event.data.runtimeEventType === "change.archived").length, 0);
+  fixture.db.close();
+});
+
+test("durable archive blockers expose undelivered and invalid-lineage task ids", async (t) => {
+  for (const scenario of [
+    "undelivered",
+    "invalid-lineage",
+    "frozen-tamper",
+    "frozen-contract-ambiguity",
+    "frozen-contract-truncated-legacy",
+    "frozen-contract-malformed-json",
+    "frozen-contract-non-object",
+  ] as const) {
+    await t.test(scenario, async () => {
+    const fixture = createManagerFixture(`archive blocker ${scenario}`);
+    fixture.goalRepo.updateStatus(fixture.goal.id, "interrupted", {
+      completedAt: "2026-07-17T00:00:00.000Z",
+    });
+    const tasks = createManagedTaskRepository(fixture.db);
+    tasks.registerTasks({
+      goalId: fixture.goal.id,
+      changeId: "change-one",
+      tasks: [{ id: "spec:change-one", title: "Spec", acceptance: [{ id: "S1", text: "Valid" }] }],
+    });
+    fixture.db.prepare(`
+      UPDATE managed_task_criteria SET outcome = 'PASS'
+      WHERE task_id = (SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'spec:change-one')
+    `).run(fixture.goal.id);
+    fixture.db.prepare(`
+      UPDATE managed_tasks SET status = 'accepted'
+      WHERE goal_id = ? AND logical_task_id = 'spec:change-one'
+    `).run(fixture.goal.id);
+    if (scenario === "undelivered") {
+      tasks.registerTasks({
+        goalId: fixture.goal.id,
+        changeId: "change-one",
+        tasks: [{ id: "implementation", title: "Pending", acceptance: [{ id: "A1", text: "Deliver" }] }],
+      });
+    } else if ([
+      "frozen-contract-ambiguity",
+      "frozen-contract-truncated-legacy",
+      "frozen-contract-malformed-json",
+      "frozen-contract-non-object",
+    ].includes(scenario)) {
+      tasks.registerTasks({
+        goalId: fixture.goal.id,
+        changeId: "change-one",
+        tasks: [{ id: "implementation", title: "Guessed contract", acceptance: [{ id: "A1", text: "Guessed pass" }] }],
+      });
+      fixture.db.prepare(`UPDATE managed_tasks SET status = 'accepted'
+        WHERE goal_id = ? AND logical_task_id = 'implementation'`).run(fixture.goal.id);
+      fixture.db.prepare(`UPDATE managed_task_criteria SET outcome = 'PASS'
+        WHERE task_id = (SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'implementation')`)
+        .run(fixture.goal.id);
+      const marker = {
+          mode: "initialized_repair",
+          ambiguousTaskCount: 51,
+          ambiguousTasks: Array.from({ length: 50 }, (_, index) =>
+            `other-goal-${String(index + 1).padStart(3, "0")}:implementation`
+          ),
+          ...(scenario === "frozen-contract-ambiguity" ? { ambiguousTaskEnforcementIds: [
+            ...Array.from({ length: 50 }, (_, index) =>
+              `other-goal-${String(index + 1).padStart(3, "0")}:implementation`
+            ),
+            `${fixture.goal.id}:implementation`,
+          ] } : {}),
+        };
+      const markerDetails = scenario === "frozen-contract-malformed-json"
+        ? "{not-json"
+        : scenario === "frozen-contract-non-object"
+          ? "[]"
+          : JSON.stringify(marker);
+      fixture.db.prepare(`UPDATE schema_migrations SET details = ?
+        WHERE name = 'managed-task-frozen-contract-repair-v1'`).run(markerDetails);
+    } else {
+      tasks.registerTasks({
+        goalId: fixture.goal.id,
+        changeId: "change-one",
+        tasks: [{
+          id: "parent", title: "Parent",
+          acceptance: [{ id: "A1", text: "First" }, { id: "A2", text: "Second" }],
+        }],
+      });
+      fixture.db.prepare(`
+        UPDATE managed_tasks SET status = 'rejected', attempt_count = 2, substantive_rejection_count = 2,
+          last_cited_criteria = '["A1"]'
+        WHERE goal_id = ? AND logical_task_id = 'parent'
+      `).run(fixture.goal.id);
+      tasks.registerTasks({
+        goalId: fixture.goal.id,
+        changeId: "change-one",
+        tasks: [{
+          id: "child", title: "Child", parentTaskId: "parent",
+          acceptance: [{ id: "A1", text: "First" }],
+        }],
+      });
+      if (scenario === "invalid-lineage") {
+        // Incident-shaped corruption: a child exists but its parent is no longer durably split.
+        fixture.db.prepare(`
+          UPDATE managed_tasks SET status = 'accepted'
+          WHERE goal_id = ? AND logical_task_id = 'parent'
+        `).run(fixture.goal.id);
+      } else {
+        fixture.db.prepare(`UPDATE managed_tasks SET status = 'accepted'
+          WHERE goal_id = ? AND logical_task_id = 'child'`).run(fixture.goal.id);
+        fixture.db.prepare(`UPDATE managed_task_criteria SET outcome = 'PASS'
+          WHERE task_id = (SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'child')`)
+          .run(fixture.goal.id);
+        const parentDatabaseId = fixture.db.prepare(`SELECT id FROM managed_tasks
+          WHERE goal_id = ? AND logical_task_id = 'parent'`).pluck().get(fixture.goal.id) as string;
+        fixture.db.prepare(`
+          INSERT INTO managed_tasks (
+            id, goal_id, logical_task_id, change_id, parent_task_id, title, status, attempt_count,
+            substantive_rejection_count, last_cited_criteria, last_safe_summary, created_at, updated_at
+          ) VALUES ('archive-tampered-child-db', ?, 'tampered-child', 'change-one', ?, 'Tampered',
+            'accepted', 0, 0, '[]', NULL, '2026-07-17T00:00:02.000Z', '2026-07-17T00:00:02.000Z')
+        `).run(fixture.goal.id, parentDatabaseId);
+        fixture.db.prepare(`
+          INSERT INTO managed_task_criteria (task_id, criterion_id, text, outcome, created_at, updated_at)
+          VALUES ('archive-tampered-child-db', 'T1', 'Tampered', 'PASS',
+            '2026-07-17T00:00:02.000Z', '2026-07-17T00:00:02.000Z')
+        `).run();
+        assert.ok(evaluateManagedCompletion(fixture.db, { goalId: fixture.goal.id }).gaps.some((gap) =>
+          gap.type === "invalid_split_lineage" && gap.reasonCode === "frozen_child_set_mismatch"
+        ));
+      }
+    }
+    fixture.eventRepo.create({
+      goalId: fixture.goal.id,
+      type: "agent.progress",
+      message: "Plan",
+      data: {
+        runtimeEventType: "supervisor.change_plan",
+        changePlan: [{ id: "change-one", title: "One", rationale: "Test blocker" }],
+      },
+    });
+    fixture.eventRepo.create({
+      goalId: fixture.goal.id,
+      type: "agent.progress",
+      message: "Spec approved",
+      data: { runtimeEventType: "change.spec_approved", changeId: "change-one" },
+    });
+    let archiveCalls = 0;
+    const openSpec: OpenSpecWorkspaceService = {
+      mode: () => "cli",
+      scaffoldChange: () => ({ ok: true, committed: true }),
+      validateChange: () => ({ ok: true, failures: [] }),
+      prepareArchive(input) {
+        return {
+          ok: true,
+          sourcePath: `C:\\goal-workspace\\openspec\\changes\\${input.changeId}`,
+          targetPath: `C:\\goal-workspace\\openspec\\changes\\archive\\2026-07-17-${input.changeId}`,
+          manifestDigest: "a".repeat(64),
+          preArchiveHead: "head-before",
+        };
+      },
+      archiveChange() {
+        archiveCalls += 1;
+        return { ok: false, safeReason: "Archive should not run while a durable task gate is blocked." };
+      },
+    };
+    const manager = createAgentSessionManager({
+      ...fixture,
+      database: fixture.db,
+      managedTaskRepo: tasks,
+      openSpecWorkspaceService: openSpec,
+      supervisorCwd: "C:\\goal-workspace",
+      maxSupervisorContinuations: 0,
+    });
+
+    await manager.resumeInterruptedGoal({
+      goalId: fixture.goal.id,
+      providerId: "codex-local",
+      modelLabel: "gpt-5-codex",
+      adapter: adapterWithEvents([{
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: fixture.goal.id,
+        runId: "run-placeholder",
+        message: "Complete",
+        occurredAt: "2026-07-17T00:00:01.000Z",
+        metadata: { delegationControlEvent: { type: "managed_delegation.complete", summary: "Done" } },
+      }]),
+    });
+    await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id)
+      .some((event) => ["change.archive_blocked", "change.archive_failed"].includes(
+        String(event.data.runtimeEventType),
+      )));
+
+    const blocked = fixture.eventRepo.listForGoal(fixture.goal.id)
+      .find((event) => event.data.runtimeEventType === "change.archive_blocked");
+    assert.ok(blocked, `expected ${scenario} to block before archive execution`);
+    assert.equal(blocked.data.blockerType,
+      scenario === "undelivered" ? "undelivered_task" : "invalid_split_lineage");
+    assert.deepEqual(blocked.data.taskIds,
+      scenario === "undelivered" ? ["implementation"]
+          : scenario === "invalid-lineage" ? ["child", "parent"]
+          : scenario === "frozen-tamper" ? ["child", "parent", "tampered-child"]
+            : scenario === "frozen-contract-ambiguity" ? ["implementation"] : undefined);
+    if (scenario !== "undelivered") {
+      assert.equal(blocked.data.reasonCode,
+        scenario === "invalid-lineage" ? "parent_not_split"
+          : scenario === "frozen-tamper" ? "frozen_child_set_mismatch"
+            : "ambiguous_frozen_contract");
+    }
+    assert.equal(archiveCalls, 0);
+    fixture.db.close();
+    });
+  }
+});
+
+test("durable split lineage, not continuation policy, archives and activates the next change", async () => {
+  const fixture = createManagerFixture("durable split continuation compatibility");
+  fixture.goalRepo.updateStatus(fixture.goal.id, "interrupted", { completedAt: "2026-07-17T00:00:00.000Z" });
+  const tasks = createManagedTaskRepository(fixture.db);
+  tasks.registerTasks({
+    goalId: fixture.goal.id,
+    changeId: "change-one",
+    tasks: [
+      { id: "spec:change-one", title: "Spec one", acceptance: [{ id: "S1", text: "Valid" }] },
+      { id: "parent", title: "Parent", acceptance: [{ id: "A1", text: "One" }, { id: "A2", text: "Two" }] },
+    ],
+  });
+  fixture.db.prepare(`UPDATE managed_tasks SET status = 'accepted'
+    WHERE goal_id = ? AND logical_task_id = 'spec:change-one'`).run(fixture.goal.id);
+  fixture.db.prepare(`UPDATE managed_task_criteria SET outcome = 'PASS'
+    WHERE task_id = (SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'spec:change-one')`)
+    .run(fixture.goal.id);
+  fixture.db.prepare(`UPDATE managed_tasks SET status = 'rejected', attempt_count = 2,
+    substantive_rejection_count = 2, last_cited_criteria = '["A1"]'
+    WHERE goal_id = ? AND logical_task_id = 'parent'`).run(fixture.goal.id);
+  tasks.registerTasks({
+    goalId: fixture.goal.id,
+    changeId: "change-one",
+    tasks: [{ id: "child", title: "Child", parentTaskId: "parent", acceptance: [{ id: "A1", text: "One" }] }],
+  });
+  fixture.db.prepare(`UPDATE managed_tasks SET status = 'accepted'
+    WHERE goal_id = ? AND logical_task_id = 'child'`).run(fixture.goal.id);
+  fixture.db.prepare(`UPDATE managed_task_criteria SET outcome = 'PASS'
+    WHERE task_id = (SELECT id FROM managed_tasks WHERE goal_id = ? AND logical_task_id = 'child')`)
+    .run(fixture.goal.id);
+  assert.deepEqual(evaluateManagedCompletion(fixture.db, { goalId: fixture.goal.id }), { ok: true, gaps: [] });
+  tasks.registerTasks({
+    goalId: fixture.goal.id,
+    changeId: "change-two",
+    tasks: [{ id: "spec:change-two", title: "Spec two", acceptance: [{ id: "S1", text: "Valid" }] }],
+  });
+  fixture.eventRepo.create({
+    goalId: fixture.goal.id,
+    type: "agent.progress",
+    message: "Plan",
+    data: {
+      runtimeEventType: "supervisor.change_plan",
+      changePlan: [
+        { id: "change-one", title: "One", rationale: "Split" },
+        { id: "change-two", title: "Two", rationale: "Next", dependsOn: ["change-one"] },
+      ],
+    },
+  });
+  fixture.eventRepo.create({
+    goalId: fixture.goal.id,
+    type: "agent.progress",
+    message: "Spec one approved",
+    data: { runtimeEventType: "change.spec_approved", changeId: "change-one" },
+  });
+  let turn = 0;
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      turn += 1;
+      if (turn === 1) {
+        return createHandle(input.sessionId, [{
+          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Try completion", occurredAt: "2026-07-17T00:00:01.000Z",
+          metadata: { delegationControlEvent: { type: "managed_delegation.complete", summary: "Advance" } },
+        }]);
+      }
+      return {
+        ...createHandle(input.sessionId, []),
+        async *events() { await new Promise<void>(() => undefined); },
+      };
+    },
+  };
+  const archiveIdentity = {
+    sourcePath: "C:\\goal-workspace\\openspec\\changes\\change-one",
+    targetPath: "C:\\goal-workspace\\openspec\\changes\\archive\\2026-07-17-change-one",
+    manifestDigest: "a".repeat(64),
+    preArchiveHead: "head-before",
+  };
+  const openSpec: OpenSpecWorkspaceService = {
+    mode: () => "cli",
+    scaffoldChange: () => ({ ok: true, committed: true }),
+    validateChange: () => ({ ok: true, failures: [] }),
+    prepareArchive: () => ({ ok: true, ...archiveIdentity }),
+    archiveChange: () => ({ ok: true, archiveCommitSha: "head-after", ...archiveIdentity }),
+  };
+  const manager = createAgentSessionManager({
+    ...fixture, database: fixture.db, managedTaskRepo: tasks,
+    openSpecWorkspaceService: openSpec, supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.resumeInterruptedGoal({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id)
+    .some((event) => event.data.runtimeEventType === "change.activated" && event.data.changeId === "change-two"));
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const split = events.findIndex((event) => event.data.runtimeEventType === "managed_task.lineage_split");
+  const archived = events.findIndex((event) => event.data.runtimeEventType === "change.archived"
+    && event.data.changeId === "change-one");
+  const activated = events.findIndex((event) => event.data.runtimeEventType === "change.activated"
+    && event.data.changeId === "change-two");
+  assert.ok(split >= 0 && split < archived && archived < activated);
+  assert.ok(!events.some((event) => event.data.runtimeEventType === "supervisor.continuations_exhausted"));
+  fixture.db.close();
+});
+
+test("ambiguous archive topology is durably blocked with a sanitized reason", async () => {
+  const fixture = createManagerFixture("ambiguous archive topology");
+  const tasks = createManagedTaskRepository(fixture.db);
+  let supervisorTurn = 0;
+  const openSpec: OpenSpecWorkspaceService = {
+    mode: () => "cli",
+    scaffoldChange: () => ({ ok: true, committed: true }),
+    validateChange: () => ({ ok: true, failures: [] }),
+    prepareArchive: () => ({
+      ok: false,
+      safeReason: "C:\\goal-workspace\\openspec\\changes and target are both present",
+    }),
+    archiveChange: () => ({ ok: false, safeReason: "must not mutate" }),
+  };
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        const workerId = fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id)
+          .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id))
+          .find((request) => request.role === "worker")!.id;
+        if (input.prompt.includes("Independent Judge")) {
+          return createHandle(input.sessionId, [
+            {
+              type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Accepted", occurredAt: "2026-07-17T00:00:04.000Z",
+              metadata: { delegationControlEvent: {
+                type: "managed_review.decision", workerDelegationRequestId: workerId, verdict: "accepted",
+                decisions: ["S1", "S2", "S3"].map((criterionId) => ({
+                  criterionId, outcome: "PASS", safeSummary: "Pass",
+                })),
+                safeSummary: "Accepted", deferredFindings: [],
+              } },
+            },
+            { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Judge complete", occurredAt: "2026-07-17T00:00:04.500Z" },
+          ]);
+        }
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Evidence", occurredAt: "2026-07-17T00:00:02.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_task.result", taskId: "spec:change-one",
+              criterionEvidence: ["S1", "S2", "S3"].map((criterionId) => ({ criterionId, evidence: "Verified" })),
+              claimedFiles: [], tests: [],
+            } },
+          },
+          { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Worker complete", occurredAt: "2026-07-17T00:00:02.500Z" },
+        ]);
+      }
+      supervisorTurn += 1;
+      if (supervisorTurn === 1) {
+        return createHandle(input.sessionId, [
+          { ...changePlanEvent([{ id: "change-one", title: "One", rationale: "Archive" }]),
+            sessionId: input.sessionId, goalId: input.goalId, runId: input.runId },
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Write spec", occurredAt: "2026-07-17T00:00:01.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "worker", taskId: "spec:change-one",
+              prompt: "Author specs", summary: "Author specs",
+            } },
+          },
+        ]);
+      }
+      const workerId = fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id)
+        .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id))
+        .find((request) => request.role === "worker")!.id;
+      if (supervisorTurn === 2) {
+        return createHandle(input.sessionId, [{
+          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Review", occurredAt: "2026-07-17T00:00:03.000Z",
+          metadata: { delegationControlEvent: {
+            type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: workerId,
+            prompt: "Judge spec", summary: "Judge spec",
+          } },
+        }]);
+      }
+      return createHandle(input.sessionId, [{
+        type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+        message: "Complete", occurredAt: "2026-07-17T00:00:05.000Z",
+        metadata: { delegationControlEvent: { type: "managed_delegation.complete", summary: "Done" } },
+      }]);
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture, database: fixture.db, managedTaskRepo: tasks,
+    openSpecWorkspaceService: openSpec, supervisorCwd: "C:\\goal-workspace", maxSupervisorContinuations: 0,
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id)
+    .some((event) => event.data.blockerType === "archive_state_ambiguous"));
+
+  const blocked = fixture.eventRepo.listForGoal(fixture.goal.id)
+    .find((event) => event.data.blockerType === "archive_state_ambiguous")!;
+  assert.equal(blocked.data.runtimeEventType, "change.archive_blocked");
+  assert.match(String(blocked.data.safeReason), /^<goal-workspace>\/openspec\/changes/);
+  assert.ok(!String(blocked.data.safeReason).includes("C:\\goal-workspace"));
   fixture.db.close();
 });
 

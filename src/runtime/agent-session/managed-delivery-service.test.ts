@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -143,6 +143,57 @@ test("prepareCandidate fails closed when the worker changed after attestation", 
   if (!prepared.ok) assert.equal(prepared.result.status, "verification_failed");
 });
 
+test("prepareCandidate reserves archive, main-spec sync, and active-change deletion paths", () => {
+  for (const scenario of [
+    { path: "openspec/changes/archive/2026-07-17-change-a/proposal.md", kind: "add" },
+    { path: "openspec/specs/core/spec.md", kind: "add" },
+    { path: "openspec/changes/change-a/proposal.md", kind: "delete" },
+  ] as const) {
+    const fixture = gitFixture();
+    if (scenario.kind === "delete") {
+      mkdirSync(join(fixture.supervisor, "openspec", "changes", "change-a"), { recursive: true });
+      writeFileSync(join(fixture.supervisor, scenario.path), "proposal\n");
+      git(fixture.supervisor, ["add", scenario.path]);
+      git(fixture.supervisor, ["-c", "user.name=Runtime", "-c", "user.email=runtime@example.invalid", "commit", "-m", "active"]);
+      git(fixture.worker, ["reset", "--hard", git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim()]);
+      rmSync(join(fixture.worker, scenario.path));
+    } else {
+      mkdirSync(join(fixture.worker, scenario.path, ".."), { recursive: true });
+      writeFileSync(join(fixture.worker, scenario.path), "provider mutation\n");
+    }
+
+    const prepared = createManagedDeliveryService().prepareCandidate({
+      workerCwd: fixture.worker,
+      supervisorCwd: fixture.supervisor,
+      attestedFiles: [scenario.path],
+      activeChangeId: "change-a",
+      safeSummary: "Provider attempted backend-owned mutation",
+    });
+
+    assert.equal(prepared.ok, false, scenario.path);
+    if (!prepared.ok) assert.match(prepared.result.safeSummary, /backend-owned|reserved/i);
+  }
+});
+
+test("prepareCandidate allows ordinary active spec and production edits", () => {
+  const fixture = gitFixture();
+  const paths = ["openspec/changes/change-a/design.md", "src/feature.ts", "src/feature.test.ts"];
+  for (const path of paths) {
+    mkdirSync(join(fixture.worker, path, ".."), { recursive: true });
+    writeFileSync(join(fixture.worker, path), "allowed\n");
+  }
+
+  const prepared = createManagedDeliveryService().prepareCandidate({
+    workerCwd: fixture.worker,
+    supervisorCwd: fixture.supervisor,
+    attestedFiles: paths,
+    activeChangeId: "change-a",
+    safeSummary: "Normal candidate",
+  });
+
+  assert.equal(prepared.ok, true);
+});
+
 test("reconcilePendingDelivery resets a delivered commit back to the checkpoint", () => {
   const fixture = gitFixture();
   const checkpoint = git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim();
@@ -172,6 +223,42 @@ test("reconcilePendingDelivery is a no-op when already at the checkpoint", () =>
   assert.equal(reconciled.status, "at_checkpoint");
   assert.equal(reconciled.reset, false);
   assert.equal(git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim(), checkpoint);
+});
+
+test("reconcilePendingDelivery fails closed when an ignored generated artifact cannot be proven absent", () => {
+  const fixture = gitFixture();
+  writeFileSync(join(fixture.supervisor, ".gitignore"), "generated/\n", "utf8");
+  git(fixture.supervisor, ["add", ".gitignore"]);
+  git(fixture.supervisor, ["-c", "user.name=Runtime", "-c", "user.email=runtime@example.invalid", "commit", "-m", "ignore generated"]);
+  const checkpoint = git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim();
+  mkdirSync(join(fixture.supervisor, "generated"), { recursive: true });
+  writeFileSync(join(fixture.supervisor, "generated", "stale.log"), "stale runtime output\n", "utf8");
+
+  const reconciled = createManagedDeliveryService()
+    .reconcilePendingDelivery({ supervisorCwd: fixture.supervisor, checkpointHead: checkpoint });
+
+  assert.equal(reconciled.status, "reset_failed");
+  assert.equal(reconciled.reset, false);
+  assert.match(reconciled.safeSummary, /ignored workspace artifacts prevent exact checkpoint reconciliation/i);
+  assert.match(git(fixture.supervisor, ["status", "--porcelain", "--ignored", "-uall"]).stdout, /generated\/stale\.log/);
+});
+
+test("reconcilePendingDelivery preserves explicitly protected ignored supervisor inputs", () => {
+  const fixture = gitFixture();
+  writeFileSync(join(fixture.supervisor, ".gitignore"), ".env\nnode_modules/\n", "utf8");
+  git(fixture.supervisor, ["add", ".gitignore"]);
+  git(fixture.supervisor, ["-c", "user.name=Runtime", "-c", "user.email=runtime@example.invalid", "commit", "-m", "protect local inputs"]);
+  const checkpoint = git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim();
+  writeFileSync(join(fixture.supervisor, ".env"), "LOCAL_ONLY=1\n", "utf8");
+  mkdirSync(join(fixture.supervisor, "node_modules", "local-package"), { recursive: true });
+  writeFileSync(join(fixture.supervisor, "node_modules", "local-package", "index.js"), "module.exports = 1;\n", "utf8");
+
+  const reconciled = createManagedDeliveryService()
+    .reconcilePendingDelivery({ supervisorCwd: fixture.supervisor, checkpointHead: checkpoint });
+
+  assert.equal(reconciled.status, "at_checkpoint");
+  assert.equal(existsSync(join(fixture.supervisor, ".env")), true);
+  assert.equal(existsSync(join(fixture.supervisor, "node_modules", "local-package", "index.js")), true);
 });
 
 function gitFixture(): { supervisor: string; worker: string } {

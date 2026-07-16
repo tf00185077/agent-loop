@@ -5,6 +5,7 @@ import type {
   TaskAcceptanceCriterion,
 } from "../../domain/index.js";
 import type { GoalTaskRegistry } from "./task-registry.js";
+import { evaluateTaskSnapshotLineage } from "./managed-task-lineage.js";
 
 export interface ChangeRecord {
   id: string;
@@ -252,6 +253,14 @@ export class GoalChangeRegistry {
     const change = this.getChange(changeId);
     if (!change) {
       return { ok: false, safeReason: `Unknown change: ${changeId}` };
+    }
+    const lineageGaps = evaluateTaskSnapshotLineage(tasks.listTasks());
+    if (lineageGaps.length > 0) {
+      const gap = lineageGaps[0]!;
+      return {
+        ok: false,
+        safeReason: `Invalid split lineage for change ${changeId}: ${gap.safeSummary}`,
+      };
     }
     const undone = change.taskIds.filter((taskId) => !isTaskDelivered(taskId, tasks));
     if (undone.length > 0) {

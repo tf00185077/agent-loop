@@ -206,7 +206,10 @@ test("split tasks count as delivered through their descendants", () => {
   const tasks = new GoalTaskRegistry();
   tasks.registerTaskList([
     { id: specTaskId("change-core"), title: "Specs", acceptance: [{ id: "S1", text: "Valid." }] },
-    { id: "task-1", title: "Big task", acceptance: [{ id: "A1", text: "Works." }] },
+    {
+      id: "task-1", title: "Big task",
+      acceptance: [{ id: "A1", text: "Works." }, { id: "A2", text: "Also works." }],
+    },
   ]);
   registry.registerTask("change-core", "task-1");
   tasks.gateWorkerDelegation(specTaskId("change-core"), null);
@@ -220,4 +223,26 @@ test("split tasks count as delivered through their descendants", () => {
   tasks.gateWorkerDelegation("task-1a", null);
   tasks.recordOutcome("task-1a", { kind: "success", safeSummary: "done" });
   assert.deepEqual(registry.canArchive("change-core", tasks), { ok: true });
+});
+
+test("archive fails closed with a structured reason when cache lineage is inconsistent", () => {
+  const registry = registryWithPlan();
+  const tasks = new GoalTaskRegistry();
+  tasks.registerTaskList([
+    { id: specTaskId("change-core"), title: "Specs", acceptance: [{ id: "S1", text: "Valid." }] },
+    { id: "parent", title: "Parent", acceptance: [{ id: "A1", text: "One" }, { id: "A2", text: "Two" }] },
+  ]);
+  registry.registerTask("change-core", "parent");
+  tasks.getTask("parent")!.status = "failed";
+  tasks.getTask("parent")!.substantiveRejections = 2;
+  tasks.registerTaskList([
+    { id: "child", title: "Child", acceptance: [{ id: "A1", text: "One" }], parentTaskId: "parent" },
+  ]);
+  tasks.getTask("parent")!.status = "failed";
+  tasks.getTask("child")!.status = "done";
+
+  const gate = registry.canArchive("change-core", tasks);
+
+  assert.equal(gate.ok, false);
+  assert.match(gate.ok ? "" : gate.safeReason, /invalid split lineage.*parent_not_split/i);
 });
