@@ -120,3 +120,38 @@ test("crash-to-continue survives a restart end to end: running -> interrupted ->
   assert.match(capturedPrompt, /Resumed after backend restart/, "resumed via a continuation, not a fresh bootstrap");
   db.close();
 });
+
+test("resumeInterruptedGoal passes the persisted provider session id as resumeSessionId", async () => {
+  const db = openDatabase({ path: ":memory:" });
+  const goals = createGoalRepository(db);
+  const goal = goals.create({ title: "R", description: "d" });
+  const run = createRunRepository(db).create({ goalId: goal.id, provider: "mock", model: "m" });
+  const sessions = createAgentSessionRepository(db);
+  const session = sessions.createSession({
+    goalId: goal.id, runId: run.id, providerId: "mock", modelLabel: "m", lifecycleState: "stalled", capabilities: CAPS,
+  });
+  sessions.updateProviderSessionId(session.id, "codex-rollout-9");
+  createManagedTaskRepository(db).registerTasks({ goalId: goal.id, tasks: [{ id: "task-1", title: "T", acceptance: [{ id: "A1", text: "x" }] }] });
+  goals.updateStatus(goal.id, "interrupted");
+
+  let capturedResume: string | null | undefined = "unset";
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "mock",
+    async detectCapabilities() { return CAPS; },
+    async startSession(input) {
+      capturedResume = input.resumeSessionId;
+      return {
+        sessionId: input.sessionId, capabilities: CAPS,
+        async *events() {}, async send() {}, async approve() {}, async reject() {}, async cancel() {},
+      };
+    },
+  };
+  const mgr = createAgentSessionManager({
+    goalRepo: goals, runRepo: createRunRepository(db), eventRepo: createEventRepository(db),
+    agentSessionRepo: sessions, database: db, maxSupervisorContinuations: 0,
+  });
+
+  await mgr.resumeInterruptedGoal({ goalId: goal.id, providerId: "mock", modelLabel: "m", adapter });
+  assert.equal(capturedResume, "codex-rollout-9");
+  db.close();
+});

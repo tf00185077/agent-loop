@@ -541,6 +541,8 @@ export interface AgentSessionStartInput {
   modelLabel?: string | null;
   parent?: AgentRuntimeSessionParent | null;
   cwd?: string | null;
+  /** Provider-native session id to resume (Phase 4b); adapters ignore it when resume is unsupported. */
+  resumeSessionId?: string | null;
 }
 
 export type AgentSessionInput =

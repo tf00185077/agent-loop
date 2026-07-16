@@ -74,6 +74,8 @@ export interface StartManagedSessionInput {
   modelLabel: string | null;
   /** Session prompt override; when omitted the supervisor bootstrap prompt is built from the goal. */
   prompt?: string;
+  /** Provider-native session id to resume (Phase 4b); the adapter ignores it when resume is unsupported. */
+  resumeSessionId?: string | null;
   adapter: AgentRuntimeAdapter;
 }
 
@@ -155,6 +157,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
         providerId: input.providerId,
         modelLabel: input.modelLabel,
         prompt: input.prompt ?? buildSupervisorPrompt({ goal, phase: { kind: "bootstrap" } }),
+        resumeSessionId: input.resumeSessionId ?? null,
       });
       activeHandles.set(session.id, handle);
       deps.agentSessionRepo.updateLifecycleState(session.id, "running");
@@ -260,12 +263,25 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
         changeHistory: getChangeRegistry(state, input.goalId).listChanges(),
       });
 
+      // The most recent persisted provider session id, if any, lets the adapter
+      // replay the prior transcript (Phase 4b); it falls back to fresh when the
+      // provider does not support resume.
+      const resumeSessionId = deps.agentSessionRepo
+        .listSessionsForGoal(input.goalId)
+        .reverse()
+        .find((session) => session.providerSessionId)?.providerSessionId ?? null;
+
       deps.goalRepo.updateStatus(input.goalId, "running");
       deps.eventRepo.create({
         goalId: input.goalId,
         type: "agent.progress",
         message: "Interrupted goal resumed from durable projection.",
-        data: { runtimeEventType: "recovery.resumed", provider: input.providerId, model: input.modelLabel },
+        data: {
+          runtimeEventType: "recovery.resumed",
+          provider: input.providerId,
+          model: input.modelLabel,
+          providerResume: Boolean(resumeSessionId),
+        },
       });
 
       try {
@@ -275,6 +291,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
           modelLabel: input.modelLabel,
           adapter: input.adapter,
           prompt: continuationPrompt,
+          resumeSessionId,
         });
       } catch (error) {
         // Best-effort: a resume that cannot start must not spin. Revert to the

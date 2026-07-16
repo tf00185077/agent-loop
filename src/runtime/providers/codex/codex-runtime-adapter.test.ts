@@ -44,6 +44,7 @@ test("detects approval-supported Codex mode only when the probe verifies resume 
     probe: async () => ({
       execJson: true,
       approvalResume: true,
+      sessionResume: true,
     }),
   });
 

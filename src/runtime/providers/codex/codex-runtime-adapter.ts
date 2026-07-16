@@ -28,6 +28,8 @@ export interface CodexRuntimeCapabilityDetectionOptions {
 export interface CodexRuntimeCapabilityProbeResult {
   execJson: boolean;
   approvalResume: boolean;
+  /** True when the CLI supports `codex exec resume` (session transcript resume). */
+  sessionResume?: boolean;
   reason?: string;
 }
 
@@ -76,7 +78,15 @@ async function createCodexSessionHandle(
       let providerSessionEmitted = false;
 
       try {
-        for await (const result of sessionRunner({ ...input, commandPath: options.commandPath, signal: controller.signal })) {
+        // Only resume when the CLI actually supports it; otherwise ignore the id
+        // and start a fresh session (the continuation prompt still carries state).
+        const runnerInput = {
+          ...input,
+          resumeSessionId: capabilities.resume ? input.resumeSessionId ?? null : null,
+          commandPath: options.commandPath,
+          signal: controller.signal,
+        };
+        for await (const result of sessionRunner(runnerInput)) {
           if (cancelled) {
             yield createRuntimeEvent(input, "session.cancelled", "Codex managed session cancelled.");
             return;
@@ -183,12 +193,16 @@ async function* runCodexJsonlSession(input: CodexRuntimeSessionRunnerInput): Asy
   }
 }
 
-function buildCodexManagedSessionArgs(input: CodexRuntimeSessionRunnerInput): string[] {
+export function buildCodexManagedSessionArgs(input: CodexRuntimeSessionRunnerInput): string[] {
   // Pin the sandbox instead of inheriting machine config defaults: managed
   // sessions must write inside their own cwd (workers in isolated worktrees,
   // review merges in the supervisor workspace), and a read-only default
   // silently strands every file-producing delegation.
-  const args = ["exec", "--skip-git-repo-check", "--json", "--sandbox", "workspace-write"];
+  // `codex exec resume <id>` replays the prior session (verified against the real
+  // CLI); the continuation prompt is still delivered on stdin as the next message.
+  const args = input.resumeSessionId
+    ? ["exec", "resume", input.resumeSessionId, "--skip-git-repo-check", "--json", "--sandbox", "workspace-write"]
+    : ["exec", "--skip-git-repo-check", "--json", "--sandbox", "workspace-write"];
   const modelArgument = resolveCodexModelArgument(input.modelLabel);
   if (modelArgument) {
     args.push("--model", modelArgument);
@@ -292,7 +306,7 @@ export async function detectCodexRuntimeCapabilities(
       eventStreaming: true,
       approval: result.approvalResume,
       cancellation: true,
-      resume: result.approvalResume,
+      resume: result.sessionResume ?? false,
       childSessions: true,
       unsupportedReasons: unsupportedReasonsForSupportedJsonMode(result),
     };
@@ -328,10 +342,14 @@ async function defaultCodexRuntimeCapabilityProbe(commandPath: string): Promise<
   });
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   const execJson = result.status === 0 && /--json/i.test(output) && /exec|Run Codex non-interactively/i.test(output);
+  // `codex exec --help` lists `resume  Resume a previous session by id …` when the
+  // CLI supports session transcript resume (verified against the real CLI).
+  const sessionResume = execJson && /\bresume\b/i.test(output) && /resume a previous session/i.test(output);
 
   return {
     execJson,
     approvalResume: false,
+    sessionResume,
     reason: execJson ? undefined : "Codex exec --json is not supported by this CLI.",
   };
 }
@@ -343,7 +361,9 @@ function unsupportedReasonsForSupportedJsonMode(
 
   if (!result.approvalResume) {
     unsupportedReasons.approval = "Codex capability probe did not verify backend-mediated approval resume.";
-    unsupportedReasons.resume = "Codex capability probe did not verify resumable managed sessions.";
+  }
+  if (!result.sessionResume) {
+    unsupportedReasons.resume = "Codex capability probe did not verify `codex exec resume` support.";
   }
 
   return unsupportedReasons;
