@@ -3717,13 +3717,20 @@ test("uses durable task, structured Judge, and completion gates without fixture-
       }]);
     },
   };
+  // Proves write-ahead ordering: the pending delivery row must be durable at the
+  // instant the supervisor-mutating apply runs.
+  let pendingRowsAtApply = -1;
   const manager = createAgentSessionManager({
     ...fixture,
     database: fixture.db,
     managedTaskRepo,
     worktreeAttestor: () => ["src/change.ts"],
     managedDeliveryService: {
-      deliver() {
+      prepareCandidate() {
+        return { ok: true as const, candidateCommitSha: "candidate", checkpointHead: "base", candidateFiles: ["src/change.ts"] };
+      },
+      deliverCandidate() {
+        pendingRowsAtApply = managedTaskRepo.listPendingDeliveries(fixture.goal.id).length;
         return {
           status: "committed", safeSummary: "Backend mock delivery committed.", checkpointHead: "base",
           checkpointStatus: "clean", candidateCommitSha: "candidate", commitSha: "delivered",
@@ -3737,6 +3744,7 @@ test("uses durable task, structured Judge, and completion gates without fixture-
   });
   await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
 
+  assert.equal(pendingRowsAtApply, 1, "a pending delivery row must exist before the supervisor-mutating apply");
   assert.equal(managedTaskRepo.getTask("task-1")?.status, "accepted");
   assert.equal(managedTaskRepo.listReviews("task-1")[0]?.verdict, "accepted");
   assert.equal(managedTaskRepo.listDeliveries("task-1")[0]?.status, "committed");
@@ -3859,24 +3867,32 @@ test("dispatches Integrator and candidate-bound re-Judge immediately after backe
     database: fixture.db,
     managedTaskRepo,
     worktreeAttestor: () => ["src/change.ts"],
-    managedDeliveryService: {
-      deliver() {
-        return {
-          status: "conflict", safeSummary: "Candidate conflicted; checkpoint restored.", checkpointHead: "base",
-          checkpointStatus: "clean", candidateCommitSha: "candidate-1", commitSha: null,
-          validationCommand: null, validationExitCode: null, validationSummary: null,
-          rollbackSummary: "restored", candidateFiles: ["src/change.ts"], conflictFiles: ["src/change.ts"],
-          conflictSummary: "CONFLICT src/change.ts",
-        };
-      },
-      deliverCandidate() {
-        return {
-          status: "committed", safeSummary: "Resolved candidate committed.", checkpointHead: "base",
-          checkpointStatus: "clean", candidateCommitSha: "candidate-2", commitSha: "delivered-2",
-          validationCommand: "npm test", validationExitCode: 0, validationSummary: "passed", rollbackSummary: null,
-        };
-      },
-    },
+    managedDeliveryService: (() => {
+      let applyCount = 0;
+      return {
+        prepareCandidate() {
+          return { ok: true as const, candidateCommitSha: "candidate-1", checkpointHead: "base", candidateFiles: ["src/change.ts"] };
+        },
+        deliverCandidate() {
+          applyCount += 1;
+          // First apply is the normal delivery (conflicts → integration recovery);
+          // the second is the resolved candidate after the integrator.
+          return applyCount === 1
+            ? {
+                status: "conflict" as const, safeSummary: "Candidate conflicted; checkpoint restored.", checkpointHead: "base",
+                checkpointStatus: "clean", candidateCommitSha: "candidate-1", commitSha: null,
+                validationCommand: null, validationExitCode: null, validationSummary: null,
+                rollbackSummary: "restored", candidateFiles: ["src/change.ts"], conflictFiles: ["src/change.ts"],
+                conflictSummary: "CONFLICT src/change.ts",
+              }
+            : {
+                status: "committed" as const, safeSummary: "Resolved candidate committed.", checkpointHead: "base",
+                checkpointStatus: "clean", candidateCommitSha: "candidate-2", commitSha: "delivered-2",
+                validationCommand: "npm test", validationExitCode: 0, validationSummary: "passed", rollbackSummary: null,
+              };
+        },
+      };
+    })(),
     managedIntegrationService: {
       async prepare() {
         return { ok: true as const, worktree: { path: "C:\\integration", label: "integration-1" },

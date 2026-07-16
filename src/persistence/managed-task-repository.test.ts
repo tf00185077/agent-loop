@@ -289,3 +289,53 @@ function testDatabasePath(): string {
 }
 
 const fixedNow = (): string => "2026-07-14T00:00:00.000Z";
+
+test("recordDelivery upserts a pending intent then its terminal outcome into one row", () => {
+  const { db, goalId, delegationId } = managedFixture();
+  const tasks = createManagedTaskRepository(db, { now: fixedNow });
+  tasks.registerTasks({ goalId, tasks: [{ id: "task-1", title: "T", acceptance: [{ id: "A1", text: "Done" }] }] });
+  tasks.beginAttempt("task-1", delegationId);
+
+  tasks.recordDelivery({
+    taskId: "task-1", workerDelegationRequestId: delegationId, status: "pending",
+    safeSummary: "prepared", candidateCommitSha: "cand-sha", checkpointHead: "chk", checkpointStatus: "clean",
+  });
+  assert.equal(tasks.listPendingDeliveries(goalId).length, 1);
+
+  tasks.recordDelivery({
+    taskId: "task-1", workerDelegationRequestId: delegationId, status: "committed",
+    safeSummary: "done", candidateCommitSha: "cand-sha", checkpointHead: "chk", commitSha: "final-sha",
+  });
+  const deliveries = tasks.listDeliveries("task-1");
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0]?.status, "committed");
+  assert.equal(deliveries[0]?.candidateCommitSha, "cand-sha");
+  assert.equal(deliveries[0]?.commitSha, "final-sha");
+  assert.equal(tasks.listPendingDeliveries(goalId).length, 0);
+  db.close();
+});
+
+test("listPendingDeliveries returns only pending rows for the goal", () => {
+  const { db, goalId, delegationId } = managedFixture();
+  const tasks = createManagedTaskRepository(db, { now: fixedNow });
+  tasks.registerTasks({ goalId, tasks: [
+    { id: "task-1", title: "T1", acceptance: [{ id: "A1", text: "x" }] },
+    { id: "task-2", title: "T2", acceptance: [{ id: "B1", text: "y" }] },
+  ] });
+  tasks.beginAttempt("task-1", delegationId);
+  const del2 = createDelegation(db, goalId, "task-2");
+  tasks.beginAttempt("task-2", del2);
+
+  tasks.recordDelivery({
+    taskId: "task-1", workerDelegationRequestId: delegationId, status: "pending",
+    safeSummary: "p", candidateCommitSha: "c1", checkpointHead: "h1",
+  });
+  tasks.recordDelivery({
+    taskId: "task-2", workerDelegationRequestId: del2, status: "committed", safeSummary: "c", commitSha: "s2",
+  });
+
+  const pending = tasks.listPendingDeliveries(goalId);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.taskId, "task-1");
+  db.close();
+});

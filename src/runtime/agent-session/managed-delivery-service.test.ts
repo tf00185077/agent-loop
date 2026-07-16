@@ -110,6 +110,70 @@ test("records revert_failed when rollback cannot restore the checkpoint", () => 
   assert.match(result.rollbackSummary ?? "", /failed/i);
 });
 
+test("prepareCandidate creates a candidate + checkpoint without mutating the supervisor", () => {
+  const fixture = gitFixture();
+  const checkpoint = git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim();
+  writeFileSync(join(fixture.worker, "feature.txt"), "delivered\n");
+
+  const prepared = createManagedDeliveryService().prepareCandidate({
+    workerCwd: fixture.worker, supervisorCwd: fixture.supervisor, attestedFiles: ["feature.txt"], safeSummary: "Prep",
+  });
+
+  assert.ok(prepared.ok);
+  if (prepared.ok) {
+    assert.match(prepared.candidateCommitSha, /^[0-9a-f]{40}$/);
+    assert.equal(prepared.checkpointHead, checkpoint);
+    assert.deepEqual(prepared.candidateFiles, ["feature.txt"]);
+  }
+  // The supervisor workspace must be untouched (no cherry-pick yet).
+  assert.equal(git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim(), checkpoint);
+  assert.equal(git(fixture.supervisor, ["status", "--porcelain"]).stdout.trim(), "");
+});
+
+test("prepareCandidate fails closed when the worker changed after attestation", () => {
+  const fixture = gitFixture();
+  writeFileSync(join(fixture.worker, "feature.txt"), "expected\n");
+  writeFileSync(join(fixture.worker, "extra.txt"), "stale\n");
+
+  const prepared = createManagedDeliveryService().prepareCandidate({
+    workerCwd: fixture.worker, supervisorCwd: fixture.supervisor, attestedFiles: ["feature.txt"], safeSummary: "Prep",
+  });
+
+  assert.equal(prepared.ok, false);
+  if (!prepared.ok) assert.equal(prepared.result.status, "verification_failed");
+});
+
+test("reconcilePendingDelivery resets a delivered commit back to the checkpoint", () => {
+  const fixture = gitFixture();
+  const checkpoint = git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim();
+  writeFileSync(join(fixture.worker, "feature.txt"), "delivered\n");
+  const service = createManagedDeliveryService({ fixedValidationCommand: `node -e "process.exit(0)"` });
+  const delivered = service.deliver({
+    workerCwd: fixture.worker, supervisorCwd: fixture.supervisor, attestedFiles: ["feature.txt"], safeSummary: "Deliver",
+  });
+  assert.equal(delivered.status, "committed");
+  assert.notEqual(git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim(), checkpoint);
+
+  const reconciled = service.reconcilePendingDelivery({ supervisorCwd: fixture.supervisor, checkpointHead: checkpoint });
+
+  assert.equal(reconciled.status, "reset");
+  assert.equal(reconciled.reset, true);
+  assert.equal(git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim(), checkpoint);
+  assert.equal(git(fixture.supervisor, ["status", "--porcelain"]).stdout.trim(), "");
+});
+
+test("reconcilePendingDelivery is a no-op when already at the checkpoint", () => {
+  const fixture = gitFixture();
+  const checkpoint = git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim();
+
+  const reconciled = createManagedDeliveryService()
+    .reconcilePendingDelivery({ supervisorCwd: fixture.supervisor, checkpointHead: checkpoint });
+
+  assert.equal(reconciled.status, "at_checkpoint");
+  assert.equal(reconciled.reset, false);
+  assert.equal(git(fixture.supervisor, ["rev-parse", "HEAD"]).stdout.trim(), checkpoint);
+});
+
 function gitFixture(): { supervisor: string; worker: string } {
   const root = mkdtempSync(join(tmpdir(), "managed-delivery-"));
   const supervisor = join(root, "repo");

@@ -1126,10 +1126,37 @@ async function recordDurableChildOutcome(
       });
       return "Reviewed worker worktree path is unavailable for backend delivery.";
     }
-    const delivered = (deps.managedDeliveryService ?? createManagedDeliveryService()).deliver({
+    const deliveryService = deps.managedDeliveryService ?? createManagedDeliveryService();
+    const prepared = deliveryService.prepareCandidate({
       workerCwd: outcome.worktreePath,
       supervisorCwd: input.state.supervisorCwd,
       attestedFiles,
+      safeSummary: review.safeSummary,
+    });
+    if (!prepared.ok) {
+      tasks.recordDelivery({
+        taskId: outcome.workerTaskId,
+        workerDelegationRequestId: outcome.workerDelegationRequestId,
+        ...prepared.result,
+        runId: input.runId,
+      });
+      return prepared.result.safeSummary;
+    }
+    // Write-ahead delivery intent (candidate + checkpoint) before the supervisor mutation.
+    tasks.recordDelivery({
+      taskId: outcome.workerTaskId,
+      workerDelegationRequestId: outcome.workerDelegationRequestId,
+      status: "pending",
+      checkpointHead: prepared.checkpointHead,
+      checkpointStatus: "clean",
+      candidateCommitSha: prepared.candidateCommitSha,
+      safeSummary: "Delivery candidate prepared; applying under backend authority.",
+      runId: input.runId,
+    });
+    const delivered = deliveryService.deliverCandidate({
+      supervisorCwd: input.state.supervisorCwd,
+      checkpointHead: prepared.checkpointHead,
+      candidateCommitSha: prepared.candidateCommitSha,
       safeSummary: review.safeSummary,
     });
     tasks.recordDelivery({
@@ -1344,6 +1371,18 @@ async function startConditionalIntegrationRecovery(
               return;
             }
             const deliveryService = deps.managedDeliveryService ?? createManagedDeliveryService();
+            // Write-ahead delivery intent before the supervisor-mutating apply.
+            tasks.recordDelivery({
+              taskId,
+              workerDelegationRequestId,
+              integrationAttemptId: integration.id,
+              status: "pending",
+              checkpointHead: integration.checkpointHead,
+              checkpointStatus: "clean",
+              candidateCommitSha: candidate.resolvedCandidateCommitSha,
+              safeSummary: "Resolved candidate prepared; applying under backend authority.",
+              runId: input.runId,
+            });
             const delivered = deliveryService.deliverCandidate?.({
               supervisorCwd: input.state.supervisorCwd,
               checkpointHead: integration.checkpointHead,

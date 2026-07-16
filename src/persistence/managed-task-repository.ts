@@ -148,6 +148,7 @@ export interface ManagedTaskRepository {
   listReviews(taskId: string): ManagedReviewRecord[];
   recordDelivery(input: RecordManagedDeliveryInput): ManagedTaskDeliveryRecord;
   listDeliveries(taskId: string): ManagedTaskDeliveryRecord[];
+  listPendingDeliveries(goalId: string): ManagedTaskDeliveryRecord[];
   beginIntegration(input: BeginManagedIntegrationInput): ManagedTaskIntegrationRecord;
   transitionIntegration(
     integrationAttemptId: string,
@@ -559,6 +560,14 @@ export function createManagedTaskRepository(
     },
     listDeliveries(taskId) {
       return db.prepare("SELECT * FROM managed_task_deliveries WHERE task_id = ? ORDER BY created_at, rowid").all(taskId).map(mapDelivery);
+    },
+    listPendingDeliveries(goalId) {
+      return db.prepare(`
+        SELECT d.* FROM managed_task_deliveries d
+        JOIN managed_tasks t ON t.id = d.task_id
+        WHERE t.goal_id = ? AND d.status = 'pending'
+        ORDER BY d.created_at, d.rowid
+      `).all(goalId).map(mapDelivery);
     },
     beginIntegration(input) {
       return db.transaction(() => {
