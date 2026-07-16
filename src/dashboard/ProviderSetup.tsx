@@ -7,6 +7,8 @@ import {
   saveProviderSettings,
   testCodexLocalConnection,
   type AgentAssignableRole,
+  type AgentRoleAssignment,
+  type CodexModelCatalogEntry,
   type CodexModelCatalogResult,
   type ProviderSettings,
   type RoleAssignments,
@@ -302,12 +304,17 @@ const roleDisplayNames: Record<AgentAssignableRole, string> = {
   integrator: "Integrator (conflict recovery)",
 };
 
+/** Stable Claude tier aliases — the Claude CLI has no model-list command, and
+ * these aliases always resolve to the latest of each tier. */
+const CLAUDE_MODEL_ALIASES = ["opus", "sonnet", "haiku"] as const;
+
 interface RoleAssignmentsEditorProps {
   roleAssignments: RoleAssignments;
   onChange: (assignments: RoleAssignments) => void;
+  catalogModels?: CodexModelCatalogEntry[];
 }
 
-export function RoleAssignmentsEditor({ roleAssignments, onChange }: RoleAssignmentsEditorProps) {
+export function RoleAssignmentsEditor({ roleAssignments, onChange, catalogModels = [] }: RoleAssignmentsEditorProps) {
   function updateRole(role: AgentAssignableRole, provider: string) {
     const next = { ...roleAssignments };
     if (provider === "inherit") {
@@ -359,33 +366,67 @@ export function RoleAssignmentsEditor({ roleAssignments, onChange }: RoleAssignm
               </select>
             </label>
             {assignment && assignment.provider !== "mock" && (
-              <>
-                <label style={roleFieldLabelStyle}>
-                  Model
-                  <input
-                    aria-label={`${roleDisplayNames[role]} model`}
-                    value={assignment.modelLabel}
-                    onChange={(event) => updateField(role, "modelLabel", event.target.value)}
-                    placeholder="Provider default"
-                    style={inputStyle}
-                  />
-                </label>
-                <label style={roleFieldLabelStyle}>
-                  Command path
-                  <input
-                    aria-label={`${roleDisplayNames[role]} command path`}
-                    value={assignment.commandPath ?? ""}
-                    onChange={(event) => updateField(role, "commandPath", event.target.value)}
-                    placeholder="Auto-detect"
-                    style={inputStyle}
-                  />
-                </label>
-              </>
+              <label style={roleFieldLabelStyle}>
+                Model
+                {renderRoleModelField(role, assignment, catalogModels, updateField)}
+              </label>
             )}
           </div>
         );
       })}
     </details>
+  );
+}
+
+function renderRoleModelField(
+  role: AgentAssignableRole,
+  assignment: AgentRoleAssignment,
+  catalogModels: CodexModelCatalogEntry[],
+  updateField: (role: AgentAssignableRole, field: "modelLabel" | "commandPath", value: string) => void,
+) {
+  const ariaLabel = `${roleDisplayNames[role]} model`;
+  const onChange = (event: React.ChangeEvent<HTMLSelectElement | HTMLInputElement>) =>
+    updateField(role, "modelLabel", event.target.value);
+
+  if (assignment.provider === "codex-local" && catalogModels.length > 0) {
+    const listed = catalogModels.some((model) => model.slug === assignment.modelLabel);
+    return (
+      <select aria-label={ariaLabel} value={assignment.modelLabel} onChange={onChange} style={inputStyle}>
+        <option value="">Provider default</option>
+        {assignment.modelLabel && !listed && (
+          <option value={assignment.modelLabel}>{assignment.modelLabel} (saved)</option>
+        )}
+        {catalogModels.map((model) => (
+          <option key={model.slug} value={model.slug}>{model.displayName}</option>
+        ))}
+      </select>
+    );
+  }
+
+  if (assignment.provider === "claude-local") {
+    const listed = (CLAUDE_MODEL_ALIASES as readonly string[]).includes(assignment.modelLabel);
+    return (
+      <select aria-label={ariaLabel} value={assignment.modelLabel} onChange={onChange} style={inputStyle}>
+        <option value="">Provider default</option>
+        {assignment.modelLabel && !listed && (
+          <option value={assignment.modelLabel}>{assignment.modelLabel} (saved)</option>
+        )}
+        {CLAUDE_MODEL_ALIASES.map((alias) => (
+          <option key={alias} value={alias}>{alias}</option>
+        ))}
+      </select>
+    );
+  }
+
+  // codex-local without a loaded catalog: keep a text input so the role stays selectable.
+  return (
+    <input
+      aria-label={ariaLabel}
+      value={assignment.modelLabel}
+      onChange={onChange}
+      placeholder="Provider default"
+      style={inputStyle}
+    />
   );
 }
 
@@ -605,7 +646,11 @@ export function ProviderSetupPanel(props: ProviderSetupPanelProps) {
         </div>
       )}
 
-      <RoleAssignmentsEditor roleAssignments={roleAssignments} onChange={onRoleAssignmentsChange} />
+      <RoleAssignmentsEditor
+        roleAssignments={roleAssignments}
+        onChange={onRoleAssignmentsChange}
+        catalogModels={catalogModels}
+      />
       {Object.keys(roleAssignments).length > 0 && (
         <div style={actionRowStyle}>
           <button type="button" onClick={onSave} disabled={busy !== null} style={secondaryButtonStyle}>

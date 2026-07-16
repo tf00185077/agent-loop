@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   ProviderSetupPanel,
+  RoleAssignmentsEditor,
   toStartGoalProviderOverride,
 } from "./ProviderSetup.js";
 import type {
@@ -444,4 +445,44 @@ test("Codex troubleshooting keeps manual checks available without making them pr
   assert.match(html, /Test connection/);
   assert.match(html, /Refresh models/);
   assert.match(html, /Save as default/);
+});
+
+test("role editor renders a Codex catalog dropdown for a codex-local role and no command-path field", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(RoleAssignmentsEditor, {
+      roleAssignments: { worker: { provider: "codex-local", modelLabel: "", commandPath: null } },
+      onChange: () => undefined,
+      catalogModels: [{ slug: "gpt-5-codex", displayName: "GPT-5 Codex", description: null, priority: 1 }],
+    }),
+  );
+  assert.match(html, /Provider default/);
+  assert.match(html, /value="gpt-5-codex"/);
+  assert.match(html, /GPT-5 Codex/);
+  assert.doesNotMatch(html, /command path/i);
+});
+
+test("role editor renders curated Claude aliases for a claude-local role and no command-path field", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(RoleAssignmentsEditor, {
+      roleAssignments: { worker: { provider: "claude-local", modelLabel: "", commandPath: null } },
+      onChange: () => undefined,
+      catalogModels: [],
+    }),
+  );
+  assert.match(html, /value="opus"/);
+  assert.match(html, /value="sonnet"/);
+  assert.match(html, /value="haiku"/);
+  assert.doesNotMatch(html, /command path/i);
+});
+
+test("a codex-local role falls back to a text input when no catalog is loaded", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(RoleAssignmentsEditor, {
+      roleAssignments: { worker: { provider: "codex-local", modelLabel: "gpt5-4", commandPath: null } },
+      onChange: () => undefined,
+      catalogModels: [],
+    }),
+  );
+  assert.match(html, /<input aria-label="Worker \(implementation\) model"[^>]*value="gpt5-4"/);
+  assert.doesNotMatch(html, /command path/i);
 });
