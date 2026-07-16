@@ -1,5 +1,5 @@
 import type { AgentRuntimeDelegationSummary, TaskAcceptanceCriterion } from "../../domain/index.js";
-import type { ChangeRecord } from "./change-registry.js";
+import type { ChangeRecord, EpochRecord } from "./change-registry.js";
 import type { TaskRecord } from "./task-registry.js";
 import type { ManagedTaskContextRecord } from "./managed-context-projection.js";
 
@@ -22,6 +22,8 @@ export interface BuildSupervisorPromptInput {
   managedTaskContext?: ManagedTaskContextRecord[];
   /** Durable change-plan state rendered into continuation/nudge/rejection prompts. */
   changeHistory?: ChangeRecord[];
+  /** Planning-epoch metadata grouping the change history. */
+  epochHistory?: EpochRecord[];
 }
 
 const fence = "```";
@@ -41,13 +43,15 @@ const CONTRACT = [
   "0. Assess the goal's scale before anything else. If it is too large for one",
   "   flat task list (several distinct deliverables or proof obligations that",
   "   later work must not contradict), declare an ordered change plan with a",
-  "   `managed_change.plan` control block: 2–8 changes, unique ids, and",
+  "   `managed_change.plan` control block: 1–8 changes, unique ids, and",
   "   optional acyclic `dependsOn` references. The backend scaffolds each",
   "   change's OpenSpec artifacts and registers one spec-authoring task per",
   "   change (`spec:<changeId>`) that you delegate like any worker task; a",
   "   change's implementation tasks run only after its specs are merged, one",
-  "   change at a time. Small goals skip the plan entirely and keep the flat",
-  "   task-list flow below.",
+  "   change at a time. Do NOT try to predict all future work in the first",
+  "   plan: declare only the batch you can justify now — later batches come",
+  "   from the reassessment loop in rule 5. Small goals skip the plan entirely",
+  "   and keep the flat task-list flow below.",
   "1. Decompose the work into an ordered task list and announce it with a",
   "   `managed_delegation.task_list` control block before delegating anything.",
   "   Every task MUST include acceptance criteria: an immutable id (A1, A2, ...)",
@@ -64,9 +68,19 @@ const CONTRACT = [
   "4. After worker results that changed files, request a review-merge child",
   "   (role `review_merge`, referencing the worker delegation request id you were",
   "   given) before treating the task as delivered.",
-  "5. When every task is delivered, emit a `managed_delegation.complete` control",
+  "5. Planned goals loop in epochs. After every change of the current batch is",
+  "   archived, re-read the ORIGINAL goal against the delivered evidence and",
+  "   emit a `managed_goal.reassessment` control block with your structured",
+  "   judgment. If gaps remain (`goalSatisfied: false`), follow with a new",
+  "   `managed_change.plan` for the next batch (new unique change ids) derived",
+  "   from what execution actually revealed. The backend rejects next-batch",
+  "   plans without an unsatisfied reassessment, and blocks the goal when the",
+  "   epoch budget is exhausted or consecutive reassessments repeat the same",
+  "   gaps.",
+  "6. When every task is delivered — and, for planned goals, the latest",
+  "   reassessment is satisfied — emit a `managed_delegation.complete` control",
   "   block with a short result summary. The goal only completes when you emit it.",
-  "6. Only fenced `auto-agent-control` blocks are honored as control signals;",
+  "7. Only fenced `auto-agent-control` blocks are honored as control signals;",
   "   anything else is treated as progress commentary.",
   "",
   "Control block formats (one JSON object per fenced block):",
@@ -124,6 +138,14 @@ const CONTRACT = [
   }),
   "",
   controlExample({
+    type: "managed_goal.reassessment",
+    goalSatisfied: false,
+    evidence: ["What the archived changes verifiably delivered."],
+    remainingGaps: ["What the original goal still lacks."],
+    nextEpochRationale: "Why execution evidence justifies the next batch.",
+  }),
+  "",
+  controlExample({
     type: "managed_delegation.complete",
     summary: "Short safe summary of what was delivered.",
   }),
@@ -132,7 +154,7 @@ const CONTRACT = [
 export function buildSupervisorPrompt(input: BuildSupervisorPromptInput): string {
   const sections = [phaseHeader(input.phase), goalSection(input.goal)];
   if (input.phase.kind !== "bootstrap" && input.changeHistory && input.changeHistory.length > 0) {
-    sections.push(renderChangeHistory(input.changeHistory));
+    sections.push(renderChangeHistory(input.changeHistory, input.epochHistory));
   }
   if (input.phase.kind !== "bootstrap" && input.managedTaskContext && input.managedTaskContext.length > 0) {
     sections.push(renderManagedTaskContext(input.managedTaskContext));
@@ -144,17 +166,23 @@ export function buildSupervisorPrompt(input: BuildSupervisorPromptInput): string
 }
 
 /** Renders the durable change-plan state so continuations do not re-plan. */
-export function renderChangeHistory(changes: ChangeRecord[]): string {
+export function renderChangeHistory(changes: ChangeRecord[], epochs?: EpochRecord[]): string {
   const active = changes.find((change) => change.status !== "archived" && change.status !== "blocked");
-  const lines = [
-    "## Change plan (durable — one active change at a time; do not re-plan)",
-    "",
-    ...changes.map((change) => {
-      const dependsOn = change.dependsOn.length > 0 ? ` (depends on ${change.dependsOn.join(", ")})` : "";
-      const activeMark = change.id === active?.id ? " (active — work here)" : "";
-      return `- ${change.id} "${change.title}" [${change.status}]${dependsOn}${activeMark}`;
-    }),
-  ];
+  const renderChange = (change: ChangeRecord) => {
+    const dependsOn = change.dependsOn.length > 0 ? ` (depends on ${change.dependsOn.join(", ")})` : "";
+    const activeMark = change.id === active?.id ? " (active — work here)" : "";
+    return `- ${change.id} "${change.title}" [${change.status}]${dependsOn}${activeMark}`;
+  };
+  const lines = ["## Change plan (durable — one active change at a time; do not re-plan this epoch)", ""];
+  if (epochs && epochs.length > 0) {
+    for (const epoch of epochs) {
+      const rationale = epoch.rationale ? ` — ${epoch.rationale}` : "";
+      lines.push(`Epoch ${epoch.sequence}${rationale}:`);
+      lines.push(...changes.filter((change) => change.epochSequence === epoch.sequence).map(renderChange));
+    }
+  } else {
+    lines.push(...changes.map(renderChange));
+  }
   return lines.join("\n");
 }
 

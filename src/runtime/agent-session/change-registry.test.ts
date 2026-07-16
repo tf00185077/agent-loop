@@ -85,6 +85,122 @@ test("gates archive on delivered tasks and merged evidence, then activates the n
   assert.equal(registry.allArchived(), true);
 });
 
+test("registerPlan opens epoch 1 and tags its changes", () => {
+  const registry = registryWithPlan();
+
+  assert.deepEqual(registry.listEpochs(), [
+    { sequence: 1, rationale: null, changeIds: ["change-core", "change-4v4"] },
+  ]);
+  assert.equal(registry.epochCount(), 1);
+  assert.equal(registry.getChange("change-core")?.epochSequence, 1);
+  assert.equal(registry.latestReassessment(), null);
+  assert.equal(registry.pendingNextEpoch(), false);
+});
+
+test("recordReassessment gates on plan existence and all changes archived", () => {
+  const planless = new GoalChangeRegistry();
+  const noPlan = planless.recordReassessment({
+    goalSatisfied: true,
+    evidence: ["e"],
+    remainingGaps: [],
+    nextEpochRationale: null,
+  });
+  assert.equal(noPlan.ok, false);
+  assert.match(noPlan.ok ? "" : noPlan.safeReason, /no change plan/i);
+
+  const registry = registryWithPlan();
+  const premature = registry.recordReassessment({
+    goalSatisfied: false,
+    evidence: ["e"],
+    remainingGaps: ["gap"],
+    nextEpochRationale: "r",
+  });
+  assert.equal(premature.ok, false);
+  assert.match(premature.ok ? "" : premature.safeReason, /change-core/);
+
+  registry.markArchived("change-core");
+  registry.markArchived("change-4v4");
+  const recorded = registry.recordReassessment({
+    goalSatisfied: false,
+    evidence: ["core delivered"],
+    remainingGaps: ["missing multiplayer"],
+    nextEpochRationale: "integration surfaced multiplayer gap",
+  });
+  assert.deepEqual(recorded, { ok: true });
+  assert.equal(registry.latestReassessment()?.epochSequence, 1);
+  assert.equal(registry.latestReassessment()?.goalSatisfied, false);
+  assert.equal(registry.pendingNextEpoch(), true);
+});
+
+test("registerNextEpoch requires a pending unsatisfied reassessment and unique change ids", () => {
+  const registry = registryWithPlan();
+  const early = registry.registerNextEpoch([{ id: "change-next", title: "Next", rationale: "r", dependsOn: null }]);
+  assert.equal(early.ok, false);
+  assert.match(early.ok ? "" : early.safeReason, /reassessment/i);
+
+  registry.markArchived("change-core");
+  registry.markArchived("change-4v4");
+  registry.recordReassessment({
+    goalSatisfied: false,
+    evidence: ["e"],
+    remainingGaps: ["gap"],
+    nextEpochRationale: "found gap",
+  });
+
+  const collision = registry.registerNextEpoch([
+    { id: "change-core", title: "Reused id", rationale: "r", dependsOn: null },
+  ]);
+  assert.equal(collision.ok, false);
+  assert.match(collision.ok ? "" : collision.safeReason, /change-core/);
+
+  const accepted = registry.registerNextEpoch([
+    { id: "change-next", title: "Next batch", rationale: "r", dependsOn: null },
+  ]);
+  assert.deepEqual(accepted, { ok: true });
+  assert.equal(registry.epochCount(), 2);
+  assert.deepEqual(registry.listEpochs()[1], {
+    sequence: 2,
+    rationale: "found gap",
+    changeIds: ["change-next"],
+  });
+  assert.equal(registry.getChange("change-next")?.status, "specifying");
+  assert.equal(registry.getChange("change-next")?.epochSequence, 2);
+  assert.equal(registry.activeChange()?.id, "change-next");
+  assert.equal(registry.allArchived(), false);
+  assert.equal(registry.pendingNextEpoch(), false);
+
+  // The gate is consumed: another plan needs another unsatisfied reassessment.
+  const second = registry.registerNextEpoch([{ id: "change-more", title: "More", rationale: "r", dependsOn: null }]);
+  assert.equal(second.ok, false);
+
+  registry.markArchived("change-next");
+  assert.equal(registry.allArchived(), true);
+  registry.recordReassessment({
+    goalSatisfied: true,
+    evidence: ["all gaps closed"],
+    remainingGaps: [],
+    nextEpochRationale: null,
+  });
+  assert.equal(registry.latestReassessment()?.goalSatisfied, true);
+  assert.equal(registry.latestReassessment()?.epochSequence, 2);
+  assert.equal(registry.pendingNextEpoch(), false);
+});
+
+test("a satisfied reassessment does not arm the next-epoch gate", () => {
+  const registry = registryWithPlan();
+  registry.markArchived("change-core");
+  registry.markArchived("change-4v4");
+  registry.recordReassessment({
+    goalSatisfied: true,
+    evidence: ["e"],
+    remainingGaps: [],
+    nextEpochRationale: null,
+  });
+
+  const rejected = registry.registerNextEpoch([{ id: "change-next", title: "N", rationale: "r", dependsOn: null }]);
+  assert.equal(rejected.ok, false);
+});
+
 test("split tasks count as delivered through their descendants", () => {
   const registry = registryWithPlan();
   const tasks = new GoalTaskRegistry();

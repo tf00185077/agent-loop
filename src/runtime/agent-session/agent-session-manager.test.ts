@@ -2303,11 +2303,9 @@ test("registers the same synthetic task ids independently for two managed goals"
 });
 
 test("rejects a change plan that violates the plan budget without registering changes", async () => {
-  const fixture = createManagerFixture("undersized change plan goal");
+  const fixture = createManagerFixture("empty change plan goal");
   const openSpec = recordingOpenSpecService("cli");
-  const adapter = adapterWithEvents([
-    changePlanEvent([{ id: "only-change", title: "Only change", rationale: "Too small to plan." }]),
-  ]);
+  const adapter = adapterWithEvents([changePlanEvent([])]);
   const manager = createAgentSessionManager({
     ...fixture,
     openSpecWorkspaceService: openSpec.service,
@@ -2324,7 +2322,7 @@ test("rejects a change plan that violates the plan budget without registering ch
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   const rejection = events.find((event) => event.data.runtimeEventType === "delegation.rejected");
   assert.ok(rejection, "expected the plan to be rejected");
-  assert.match(String(rejection.data.safeReason), /between 2 and 8/i);
+  assert.match(String(rejection.data.safeReason), /between 1 and 8/i);
   assert.ok(!events.some((event) => event.data.runtimeEventType === "supervisor.change_plan"));
   assert.ok(!events.some((event) => event.data.runtimeEventType === "change.activated"));
   assert.deepEqual(openSpec.scaffolded, []);
@@ -2332,7 +2330,36 @@ test("rejects a change plan that violates the plan budget without registering ch
   fixture.db.close();
 });
 
-test("rejects a second change plan for the same goal", async () => {
+test("accepts a single-change plan as one planning epoch", async () => {
+  const fixture = createManagerFixture("single change plan goal");
+  const openSpec = recordingOpenSpecService("cli");
+  const adapter = adapterWithEvents([
+    changePlanEvent([{ id: "only-change", title: "Only change", rationale: "Small planned goal." }]),
+  ]);
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const planEvent = events.find((event) => event.data.runtimeEventType === "supervisor.change_plan");
+  assert.ok(planEvent, "expected the single-change plan to be accepted");
+  assert.equal(planEvent.data.epochSequence, 1);
+  assert.equal(planEvent.data.epochRationale, undefined);
+  assert.deepEqual(openSpec.scaffolded.map((call) => call.changeId), ["only-change"]);
+
+  fixture.db.close();
+});
+
+test("rejects a second change plan without an unsatisfied reassessment", async () => {
   const fixture = createManagerFixture("re-planned goal");
   const openSpec = recordingOpenSpecService("cli");
   const adapter = adapterWithEvents([
@@ -2363,7 +2390,7 @@ test("rejects a second change plan for the same goal", async () => {
   assert.equal(planEvents.length, 1);
   const rejection = events.find((event) => event.data.runtimeEventType === "delegation.rejected");
   assert.ok(rejection, "expected the second plan to be rejected");
-  assert.match(String(rejection.data.safeReason), /plan already exists/i);
+  assert.match(String(rejection.data.safeReason), /unsatisfied goal reassessment/i);
   assert.deepEqual(
     openSpec.scaffolded.map((call) => call.changeId),
     ["change-one", "change-two"],
@@ -3525,10 +3552,25 @@ test("gates change archives on merged evidence and goal completion on all change
             "2026-07-13T00:00:11.000Z",
           );
           await gates[5]!.promise;
+          // Completion before a reassessment: rejected (AC5).
           yield controlEvent(
             input,
             { type: "managed_delegation.complete", summary: "Both changes delivered." },
             "2026-07-13T00:00:12.000Z",
+          );
+          yield controlEvent(
+            input,
+            {
+              type: "managed_goal.reassessment",
+              goalSatisfied: true,
+              evidence: ["Both changes archived with merged evidence."],
+            },
+            "2026-07-13T00:00:13.000Z",
+          );
+          yield controlEvent(
+            input,
+            { type: "managed_delegation.complete", summary: "Both changes delivered." },
+            "2026-07-13T00:00:14.000Z",
           );
         },
         async send() {
@@ -3609,6 +3651,7 @@ test("gates change archives on merged evidence and goal completion on all change
     "change.archive_blocked",
     "change.archived",
     "delegation.rejected",
+    "supervisor.reassessment",
     "supervisor.completed",
   ]);
   const lifecycle = events
@@ -3624,11 +3667,461 @@ test("gates change archives on merged evidence and goal completion on all change
     ["delegation.rejected", null],
     ["change.spec_approved", "change-two"],
     ["change.archived", "change-two"],
+    ["delegation.rejected", null],
+    ["supervisor.reassessment", null],
     ["supervisor.completed", null],
     ["supervisor.completed", null],
   ]);
 
+  // The completion-without-reassessment rejection names the missing gate.
+  const reassessmentRejection = eventOfType("delegation.rejected").find((event) =>
+    /managed_goal\.reassessment/.test(String(event.data.safeReason)),
+  );
+  assert.ok(reassessmentRejection, "expected completion to require a reassessment first");
+  const reassessmentEvent = eventOfType("supervisor.reassessment")[0];
+  assert.ok(reassessmentEvent, "expected a durable reassessment event");
+  assert.equal(reassessmentEvent.data.goalSatisfied, true);
+  assert.equal(reassessmentEvent.data.epochSequence, 1);
+
   fixture.db.close();
+});
+
+interface EpochScriptTools {
+  gates: Array<{ promise: Promise<void> }>;
+  controlEvent: (block: Record<string, unknown>, at: string) => AgentRuntimeEvent;
+  latestWorkerRequestId: () => string;
+}
+
+/**
+ * Resume-capable scripted supervisor whose children alternate worker success
+ * and merged review outcomes; each child outcome releases the next gate.
+ * Mirrors the change-lifecycle fixture for multi-epoch flows.
+ */
+function scriptedEpochAdapter(
+  fixture: ReturnType<typeof createManagerFixture>,
+  gateCount: number,
+  script: (
+    input: { sessionId: string; goalId: string; runId: string },
+    tools: EpochScriptTools,
+  ) => AsyncGenerator<AgentRuntimeEvent>,
+): AgentRuntimeAdapter {
+  const gates = Array.from({ length: gateCount }, () => {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  });
+  let sendCount = 0;
+  let supervisorStarted = false;
+  let childCount = 0;
+  return {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        childCount += 1;
+        const isWorker = childCount % 2 === 1;
+        return createHandle(input.sessionId, [
+          {
+            type: "session.completed",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
+            message: isWorker ? "Worker finished." : "Review merge completed.",
+            occurredAt: "2026-07-13T00:00:03.000Z",
+            ...(isWorker
+              ? {}
+              : {
+                  metadata: {
+                    reviewMergeApplyOutcome: {
+                      status: "merged" as const,
+                      diffSummary: "changes applied",
+                      safeSummary: "Merged.",
+                    },
+                  },
+                }),
+          },
+        ]);
+      }
+      if (supervisorStarted) {
+        return createHandle(input.sessionId, []);
+      }
+      supervisorStarted = true;
+      const tools: EpochScriptTools = {
+        gates,
+        controlEvent: (block, at) => ({
+          type: "progress",
+          sessionId: input.sessionId,
+          goalId: input.goalId,
+          runId: input.runId,
+          message: "Supervisor control block.",
+          occurredAt: at,
+          metadata: { delegationControlEvent: block },
+        }),
+        latestWorkerRequestId: () =>
+          fixture.agentSessionRepo
+            .listDelegationRequests(input.sessionId)
+            .filter((request) => request.role === "worker" && request.resultSummary)
+            .at(-1)?.id ?? "missing",
+      };
+      return {
+        ...createHandle(input.sessionId, []),
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true },
+        events: () => script({ sessionId: input.sessionId, goalId: input.goalId, runId: input.runId }, tools),
+        async send() {
+          gates[sendCount++]?.release();
+        },
+      };
+    },
+  };
+}
+
+function* specFlow(
+  tools: EpochScriptTools,
+  changeId: string,
+  firstGate: number,
+  at: (offset: number) => string,
+): Generator<AgentRuntimeEvent | Promise<void>> {
+  yield tools.controlEvent(
+    {
+      type: "managed_delegation.request",
+      role: "worker",
+      taskId: `spec:${changeId}`,
+      prompt: `Author ${changeId} specs.`,
+      summary: `Author ${changeId} specs.`,
+    },
+    at(0),
+  );
+  yield tools.gates[firstGate]!.promise;
+  yield tools.controlEvent(
+    {
+      type: "managed_delegation.request",
+      role: "review_merge",
+      workerDelegationRequestId: tools.latestWorkerRequestId(),
+      prompt: `Merge ${changeId} specs.`,
+      summary: `Merge ${changeId} specs.`,
+    },
+    at(1),
+  );
+  yield tools.gates[firstGate + 1]!.promise;
+}
+
+async function* runScript(
+  steps: Generator<AgentRuntimeEvent | Promise<void>>,
+): AsyncGenerator<AgentRuntimeEvent> {
+  for (const step of steps) {
+    if (step instanceof Promise) await step;
+    else yield step;
+  }
+}
+
+test("admits a next epoch after an unsatisfied reassessment and completes after a satisfied one", async () => {
+  const fixture = createManagerFixture("multi epoch goal");
+  const openSpec = recordingOpenSpecService("cli");
+  const adapter = scriptedEpochAdapter(fixture, 4, (_input, tools) =>
+    runScript(
+      (function* () {
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-one", title: "Change one", rationale: "First batch." }],
+          },
+          "2026-07-13T00:00:01.000Z",
+        );
+        yield* specFlow(tools, "change-one", 0, (offset) => `2026-07-13T00:00:0${2 + offset}.000Z`);
+        yield tools.controlEvent(
+          {
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-one delivered and archived."],
+            remainingGaps: ["End-to-end verification is missing."],
+            nextEpochRationale: "Integration revealed a verification gap.",
+          },
+          "2026-07-13T00:00:04.000Z",
+        );
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-two", title: "Verification", rationale: "Close the verification gap." }],
+          },
+          "2026-07-13T00:00:05.000Z",
+        );
+        yield* specFlow(tools, "change-two", 2, (offset) => `2026-07-13T00:00:0${6 + offset}.000Z`);
+        yield tools.controlEvent(
+          {
+            type: "managed_goal.reassessment",
+            goalSatisfied: true,
+            evidence: ["Verification change archived; original goal is met."],
+          },
+          "2026-07-13T00:00:08.000Z",
+        );
+        yield tools.controlEvent(
+          { type: "managed_delegation.complete", summary: "Goal delivered over two epochs." },
+          "2026-07-13T00:00:09.000Z",
+        );
+      })(),
+    ),
+  );
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "completed");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const eventOfType = (type: string) => events.filter((event) => event.data.runtimeEventType === type);
+
+  const planEvents = eventOfType("supervisor.change_plan");
+  assert.deepEqual(planEvents.map((event) => event.data.epochSequence), [1, 2]);
+  assert.equal(planEvents[0]!.data.epochRationale, undefined);
+  assert.equal(planEvents[1]!.data.epochRationale, "Integration revealed a verification gap.");
+  assert.deepEqual(
+    (planEvents[1]!.data.changePlan as Array<{ id: string }>).map((change) => change.id),
+    ["change-two"],
+  );
+
+  const reassessments = eventOfType("supervisor.reassessment");
+  assert.deepEqual(
+    reassessments.map((event) => [event.data.goalSatisfied, event.data.epochSequence]),
+    [
+      [false, 1],
+      [true, 2],
+    ],
+  );
+  assert.deepEqual(reassessments[0]!.data.remainingGaps, ["End-to-end verification is missing."]);
+
+  assert.deepEqual(
+    eventOfType("change.archived").map((event) => event.data.changeId),
+    ["change-one", "change-two"],
+  );
+  assert.deepEqual(
+    eventOfType("change.activated").map((event) => event.data.changeId),
+    ["change-one", "change-two"],
+  );
+  assert.deepEqual(
+    openSpec.scaffolded.map((call) => call.changeId),
+    ["change-one", "change-two"],
+  );
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "completed");
+
+  fixture.db.close();
+});
+
+test("blocks the goal when consecutive reassessments repeat the same gaps", async () => {
+  const fixture = createManagerFixture("repeated gaps goal");
+  const openSpec = recordingOpenSpecService("cli");
+  const adapter = scriptedEpochAdapter(fixture, 4, (_input, tools) =>
+    runScript(
+      (function* () {
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-one", title: "Change one", rationale: "First batch." }],
+          },
+          "2026-07-13T00:00:01.000Z",
+        );
+        yield* specFlow(tools, "change-one", 0, (offset) => `2026-07-13T00:00:0${2 + offset}.000Z`);
+        yield tools.controlEvent(
+          {
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-one archived."],
+            remainingGaps: ["The same gap remains."],
+            nextEpochRationale: "Retry the gap.",
+          },
+          "2026-07-13T00:00:04.000Z",
+        );
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-two", title: "Retry", rationale: "Close the gap again." }],
+          },
+          "2026-07-13T00:00:05.000Z",
+        );
+        yield* specFlow(tools, "change-two", 2, (offset) => `2026-07-13T00:00:0${6 + offset}.000Z`);
+        // Identical gap signature modulo case and whitespace: circuit breaker.
+        yield tools.controlEvent(
+          {
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-two archived."],
+            remainingGaps: ["  The SAME   gap remains. "],
+            nextEpochRationale: "Try once more.",
+          },
+          "2026-07-13T00:00:08.000Z",
+        );
+      })(),
+    ),
+  );
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const breaker = events.find(
+    (event) => event.data.runtimeEventType === "supervisor.reassessment_circuit_breaker",
+  );
+  assert.ok(breaker, "expected a durable circuit-breaker event");
+  assert.equal(breaker.type, "goal.blocked");
+  assert.match(String(breaker.data.safeReason), /same remaining gaps/i);
+  assert.deepEqual(breaker.data.remainingGaps, ["The SAME   gap remains."]);
+  // Only the two consumed plans exist; no third epoch was admitted.
+  assert.equal(
+    events.filter((event) => event.data.runtimeEventType === "supervisor.change_plan").length,
+    2,
+  );
+
+  fixture.db.close();
+});
+
+test("blocks the goal when the planning-epoch budget is exhausted with gaps remaining", async () => {
+  const fixture = createManagerFixture("epoch budget goal");
+  const openSpec = recordingOpenSpecService("cli");
+  const adapter = scriptedEpochAdapter(fixture, 2, (_input, tools) =>
+    runScript(
+      (function* () {
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-one", title: "Change one", rationale: "Only batch." }],
+          },
+          "2026-07-13T00:00:01.000Z",
+        );
+        yield* specFlow(tools, "change-one", 0, (offset) => `2026-07-13T00:00:0${2 + offset}.000Z`);
+        yield tools.controlEvent(
+          {
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-one archived."],
+            remainingGaps: ["More work is needed."],
+            nextEpochRationale: "Open another epoch.",
+          },
+          "2026-07-13T00:00:04.000Z",
+        );
+      })(),
+    ),
+  );
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+    maxPlanningEpochs: 1,
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const exhausted = events.find(
+    (event) => event.data.runtimeEventType === "supervisor.epoch_budget_exhausted",
+  );
+  assert.ok(exhausted, "expected a durable epoch-budget event");
+  assert.equal(exhausted.type, "goal.blocked");
+  assert.match(String(exhausted.data.safeReason), /planning-epoch budget \(1\)/);
+
+  fixture.db.close();
+});
+
+test("rejects reassessments for flat goals and while changes remain unarchived", async () => {
+  const flatFixture = createManagerFixture("flat goal reassessment");
+  const flatManager = createAgentSessionManager({
+    ...flatFixture,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+  await flatManager.startManagedSession({
+    goalId: flatFixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([
+      {
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: flatFixture.goal.id,
+        runId: "run-placeholder",
+        message: "Reassessing.",
+        occurredAt: "2026-07-13T00:00:01.000Z",
+        metadata: {
+          delegationControlEvent: {
+            type: "managed_goal.reassessment",
+            goalSatisfied: true,
+            evidence: ["Flat flow finished."],
+          },
+        },
+      },
+    ]),
+  });
+  const flatRejection = flatFixture.eventRepo
+    .listForGoal(flatFixture.goal.id)
+    .find((event) => event.data.runtimeEventType === "delegation.rejected");
+  assert.ok(flatRejection, "expected the flat-goal reassessment to be rejected");
+  assert.match(String(flatRejection.data.safeReason), /no change plan/i);
+  flatFixture.db.close();
+
+  const plannedFixture = createManagerFixture("premature reassessment");
+  const openSpec = recordingOpenSpecService("cli");
+  const plannedManager = createAgentSessionManager({
+    ...plannedFixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+  await plannedManager.startManagedSession({
+    goalId: plannedFixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([
+      changePlanEvent([{ id: "change-one", title: "Change one", rationale: "Batch." }]),
+      {
+        type: "progress",
+        sessionId: "session-placeholder",
+        goalId: plannedFixture.goal.id,
+        runId: "run-placeholder",
+        message: "Reassessing too early.",
+        occurredAt: "2026-07-13T00:00:02.000Z",
+        metadata: {
+          delegationControlEvent: {
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["Nothing archived yet."],
+            remainingGaps: ["Everything."],
+            nextEpochRationale: "Way too early.",
+          },
+        },
+      },
+    ]),
+  });
+  const prematureRejection = plannedFixture.eventRepo
+    .listForGoal(plannedFixture.goal.id)
+    .find((event) => event.data.runtimeEventType === "delegation.rejected");
+  assert.ok(prematureRejection, "expected the premature reassessment to be rejected");
+  assert.match(String(prematureRejection.data.safeReason), /archived first.*change-one/i);
+  assert.equal(plannedFixture.goalRepo.getById(plannedFixture.goal.id)?.status, "running");
+  plannedFixture.db.close();
 });
 
 test("records a durable OpenSpec downgrade once when the CLI is unavailable", async () => {

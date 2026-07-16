@@ -1,4 +1,5 @@
 import type {
+  GoalReassessment,
   ManagedChangePlanEntry,
   ManagedChangeStatus,
   TaskAcceptanceCriterion,
@@ -15,6 +16,20 @@ export interface ChangeRecord {
   taskIds: string[];
   /** Whether any worker under this change produced attested file changes. */
   hasUnmergedAttestedChanges: boolean;
+  /** Planning epoch this change belongs to (1-based). */
+  epochSequence: number;
+}
+
+export interface EpochRecord {
+  sequence: number;
+  /** Reassessment rationale that admitted this epoch; null for epoch 1. */
+  rationale: string | null;
+  changeIds: string[];
+}
+
+export interface ReassessmentRecord extends GoalReassessment {
+  /** Epoch the judgment concluded (the goal's epoch count at record time). */
+  epochSequence: number;
 }
 
 export type RegistryGate = { ok: true } | { ok: false; safeReason: string };
@@ -62,18 +77,100 @@ export function specTaskAcceptance(changeId: string): TaskAcceptanceCriterion[] 
 }
 
 /**
- * Per-goal change-plan working state. One plan per goal; exactly one active
- * change at a time in dependency-then-plan order. Every transition it gates
- * is also persisted as durable events by the caller.
+ * Per-goal change-plan working state. One plan per planning epoch; later
+ * epochs are admitted only through an unsatisfied goal reassessment. Exactly
+ * one active change at a time in dependency-then-plan order across epochs.
+ * Every transition it gates is also persisted as durable events by the caller.
  */
 export class GoalChangeRegistry {
   private plan: ChangeRecord[] | null = null;
+  private epochs: EpochRecord[] = [];
+  private reassessments: ReassessmentRecord[] = [];
 
   registerPlan(changes: ManagedChangePlanEntry[]): RegistryGate {
     if (this.plan) {
       return { ok: false, safeReason: "A change plan already exists for this goal." };
     }
-    this.plan = orderByDependencies(changes).map((change) => ({
+    this.plan = this.buildEpochChanges(changes, 1);
+    this.epochs.push({ sequence: 1, rationale: null, changeIds: this.plan.map((change) => change.id) });
+    const first = this.plan[0];
+    if (first) first.status = "specifying";
+    return { ok: true };
+  }
+
+  /**
+   * Open the next planning epoch. Deterministic gate for AC3: unreachable
+   * without a recorded unsatisfied reassessment that no epoch consumed yet.
+   */
+  registerNextEpoch(changes: ManagedChangePlanEntry[]): RegistryGate {
+    if (!this.plan) {
+      return { ok: false, safeReason: "No change plan exists; announce the first plan instead." };
+    }
+    if (!this.pendingNextEpoch()) {
+      return {
+        ok: false,
+        safeReason:
+          "A next epoch requires an unsatisfied goal reassessment first. " +
+          "Emit managed_goal.reassessment after all changes archive.",
+      };
+    }
+    const existing = new Set(this.plan.map((change) => change.id));
+    const collisions = changes.map((change) => change.id).filter((id) => existing.has(id));
+    if (collisions.length > 0) {
+      return {
+        ok: false,
+        safeReason: `Change ids must be unique across epochs; already used: ${collisions.join(", ")}.`,
+      };
+    }
+    const sequence = this.epochCount() + 1;
+    const batch = this.buildEpochChanges(changes, sequence);
+    this.plan.push(...batch);
+    this.epochs.push({
+      sequence,
+      rationale: this.latestReassessment()?.nextEpochRationale ?? null,
+      changeIds: batch.map((change) => change.id),
+    });
+    const active = this.activeChange();
+    if (active && active.status === "planned") active.status = "specifying";
+    return { ok: true };
+  }
+
+  /** Record a goal-level judgment; gated on a plan with every change archived. */
+  recordReassessment(reassessment: GoalReassessment): RegistryGate {
+    if (!this.plan) {
+      return { ok: false, safeReason: "Goal has no change plan; reassessment applies to planned goals only." };
+    }
+    const unarchived = this.unarchivedIds();
+    if (unarchived.length > 0) {
+      return {
+        ok: false,
+        safeReason: `Reassessment requires every change archived first; unarchived: ${unarchived.join(", ")}.`,
+      };
+    }
+    this.reassessments.push({ ...reassessment, epochSequence: this.epochCount() });
+    return { ok: true };
+  }
+
+  latestReassessment(): ReassessmentRecord | null {
+    return this.reassessments.at(-1) ?? null;
+  }
+
+  /** True when the latest reassessment found gaps and no epoch consumed it yet. */
+  pendingNextEpoch(): boolean {
+    const latest = this.latestReassessment();
+    return latest !== null && !latest.goalSatisfied && latest.epochSequence === this.epochCount();
+  }
+
+  listEpochs(): EpochRecord[] {
+    return this.epochs.map((epoch) => ({ ...epoch, changeIds: [...epoch.changeIds] }));
+  }
+
+  epochCount(): number {
+    return this.epochs.length;
+  }
+
+  private buildEpochChanges(changes: ManagedChangePlanEntry[], epochSequence: number): ChangeRecord[] {
+    return orderByDependencies(changes).map((change) => ({
       id: change.id,
       title: change.title,
       rationale: change.rationale,
@@ -81,10 +178,8 @@ export class GoalChangeRegistry {
       status: "planned",
       taskIds: [specTaskId(change.id)],
       hasUnmergedAttestedChanges: false,
+      epochSequence,
     }));
-    const first = this.plan[0];
-    if (first) first.status = "specifying";
-    return { ok: true };
   }
 
   hasPlan(): boolean {

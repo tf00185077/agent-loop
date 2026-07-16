@@ -56,6 +56,11 @@ export interface AgentSessionManagerDeps {
    */
   maxSupervisorContinuations?: number;
   /**
+   * Maximum planning epochs per goal; an unsatisfied reassessment beyond this
+   * budget blocks the goal instead of opening another epoch.
+   */
+  maxPlanningEpochs?: number;
+  /**
    * Resolves user-configured role→agent assignments for child dispatch.
    * Returning null keeps the goal's default adapter.
    */
@@ -113,6 +118,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     openspecDowngradeReported: new Set(),
     roleResolutions: new Map(),
     maxSupervisorContinuations: deps.maxSupervisorContinuations ?? 10,
+    maxPlanningEpochs: deps.maxPlanningEpochs ?? 5,
     openSpec: deps.openSpecWorkspaceService ?? createOpenSpecWorkspaceService(),
     supervisorCwd: deps.supervisorCwd ?? process.cwd(),
   };
@@ -261,6 +267,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
           ? projectManagedTaskContext(deps.managedTaskRepo, input.goalId)
           : undefined,
         changeHistory: getChangeRegistry(state, input.goalId).listChanges(),
+        epochHistory: getChangeRegistry(state, input.goalId).listEpochs(),
       });
 
       // The most recent persisted provider session id, if any, lets the adapter
@@ -432,6 +439,7 @@ interface SupervisorState {
   /** Per goal+role resolved child agent (null = use the goal default). */
   roleResolutions: Map<string, ResolvedRoleAgentLike | null>;
   maxSupervisorContinuations: number;
+  maxPlanningEpochs: number;
   openSpec: OpenSpecWorkspaceService;
   supervisorCwd: string;
 }
@@ -741,6 +749,28 @@ async function persistDelegationControlEvent(
         );
         return;
       }
+      // Completion binds to the latest goal-level reassessment (AC5): the
+      // registered work being done is not proof the original goal is met.
+      const latestReassessment = completionChangeRegistry.latestReassessment();
+      if (!latestReassessment || latestReassessment.epochSequence !== completionChangeRegistry.epochCount()) {
+        recordControlRejection(
+          deps,
+          input,
+          data,
+          "Completion requires a goal-level reassessment of this epoch first. " +
+            "Emit a managed_goal.reassessment control block re-reading the original goal against delivered evidence.",
+        );
+        return;
+      }
+      if (!latestReassessment.goalSatisfied) {
+        recordControlRejection(
+          deps,
+          input,
+          data,
+          "The latest reassessment found remaining gaps; announce the next epoch's change plan instead of completing.",
+        );
+        return;
+      }
     }
     if (deps.database && deps.managedTaskRepo) {
       const evaluated = evaluateManagedCompletion(deps.database, {
@@ -796,11 +826,16 @@ async function persistDelegationControlEvent(
 
   if (validation.kind === "change_plan") {
     const changeRegistry = getChangeRegistry(input.state, input.goalId);
-    const planGate = changeRegistry.registerPlan(validation.plan.changes);
+    // A goal with a plan may only open the next epoch; the registry gate
+    // requires an unconsumed unsatisfied reassessment (AC3).
+    const planGate = changeRegistry.hasPlan()
+      ? changeRegistry.registerNextEpoch(validation.plan.changes)
+      : changeRegistry.registerPlan(validation.plan.changes);
     if (!planGate.ok) {
       recordControlRejection(deps, input, data, planGate.safeReason);
       return;
     }
+    const epoch = changeRegistry.listEpochs().at(-1)!;
 
     if (input.state.openSpec.mode() === "degraded" && !input.state.openspecDowngradeReported.has(input.goalId)) {
       input.state.openspecDowngradeReported.add(input.goalId);
@@ -817,7 +852,9 @@ async function persistDelegationControlEvent(
       });
     }
 
-    const orderedChanges = changeRegistry.listChanges();
+    const orderedChanges = changeRegistry
+      .listChanges()
+      .filter((change) => change.epochSequence === epoch.sequence);
     const specTasks = orderedChanges.map((change) => ({
       taskId: specTaskId(change.id),
       changeId: change.id,
@@ -842,13 +879,15 @@ async function persistDelegationControlEvent(
         goalId: input.goalId,
         runId: input.runId,
         type: "agent.progress",
-        message: "Supervisor change plan recorded.",
+        message: `Supervisor change plan recorded (planning epoch ${epoch.sequence}).`,
         data: {
           ...data,
           delegationControlEvent: undefined,
           runtimeEventType: "supervisor.change_plan",
           changePlan: validation.plan.changes,
           specTasks,
+          epochSequence: epoch.sequence,
+          ...(epoch.rationale ? { epochRationale: epoch.rationale } : {}),
         },
       });
     };
@@ -905,6 +944,92 @@ async function persistDelegationControlEvent(
         },
       });
     }
+    return;
+  }
+
+  if (validation.kind === "reassessment") {
+    const changeRegistry = getChangeRegistry(input.state, input.goalId);
+    if (!changeRegistry.hasPlan()) {
+      recordControlRejection(
+        deps, input, data,
+        "Goal has no change plan; reassessment applies to planned goals only.",
+      );
+      return;
+    }
+    // Close out an archivable tail change before judging the batch (same
+    // courtesy as the completion path).
+    tryArchiveActiveChange(deps, input);
+    const unarchived = changeRegistry.unarchivedIds();
+    if (unarchived.length > 0) {
+      recordControlRejection(
+        deps, input, data,
+        `Reassessment requires every change archived first; unarchived: ${unarchived.join(", ")}.`,
+      );
+      return;
+    }
+    if (validation.reassessment.goalSatisfied && deps.database && deps.managedTaskRepo) {
+      // The durable ledger outranks the supervisor's prose: a satisfied claim
+      // must survive the same evidence check completion uses.
+      const evaluated = evaluateManagedCompletion(deps.database, { goalId: input.goalId, unarchivedChangeIds: [] });
+      if (!evaluated.ok) {
+        recordControlRejection(
+          deps,
+          input,
+          { ...data, completionGaps: evaluated.gaps },
+          `Satisfied reassessment contradicts durable gaps: ${evaluated.gaps.map((gap) => gap.safeSummary).join(" ")}`
+            .slice(0, 1000),
+        );
+        return;
+      }
+    }
+    if (!validation.reassessment.goalSatisfied) {
+      const previous = changeRegistry.latestReassessment();
+      const signature = reassessmentGapSignature(validation.reassessment.remainingGaps);
+      if (previous && !previous.goalSatisfied && reassessmentGapSignature(previous.remainingGaps) === signature) {
+        blockGoalForMacroLoop(
+          deps, input,
+          "supervisor.reassessment_circuit_breaker",
+          "Consecutive reassessments reported the same remaining gaps; the macro loop is not converging.",
+          validation.reassessment,
+        );
+        return;
+      }
+      if (changeRegistry.epochCount() >= input.state.maxPlanningEpochs) {
+        blockGoalForMacroLoop(
+          deps, input,
+          "supervisor.epoch_budget_exhausted",
+          `Goal reached its planning-epoch budget (${input.state.maxPlanningEpochs}) with gaps remaining.`,
+          validation.reassessment,
+        );
+        return;
+      }
+    }
+    const recorded = changeRegistry.recordReassessment(validation.reassessment);
+    if (!recorded.ok) {
+      recordControlRejection(deps, input, data, recorded.safeReason);
+      return;
+    }
+    const epochSequence = changeRegistry.latestReassessment()!.epochSequence;
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: validation.reassessment.goalSatisfied
+        ? `Goal reassessment recorded: satisfied (epoch ${epochSequence}).`
+        : `Goal reassessment recorded: gaps remain (epoch ${epochSequence}); next epoch admitted.`,
+      data: {
+        ...data,
+        delegationControlEvent: undefined,
+        runtimeEventType: "supervisor.reassessment",
+        epochSequence,
+        goalSatisfied: validation.reassessment.goalSatisfied,
+        evidence: validation.reassessment.evidence,
+        remainingGaps: validation.reassessment.remainingGaps,
+        ...(validation.reassessment.nextEpochRationale
+          ? { nextEpochRationale: validation.reassessment.nextEpochRationale }
+          : {}),
+      },
+    });
     return;
   }
 
@@ -1848,6 +1973,51 @@ function tryArchiveActiveChange(deps: AgentSessionManagerDeps, input: PersistRun
   }
 }
 
+/**
+ * Normalized remaining-gap signature for the repeated-gap circuit breaker:
+ * two consecutive unsatisfied reassessments with the same signature mean the
+ * macro loop is not converging.
+ */
+function reassessmentGapSignature(remainingGaps: string[]): string {
+  return remainingGaps
+    .map((gap) => gap.trim().toLowerCase().replace(/\s+/g, " "))
+    .sort()
+    .join("|");
+}
+
+/**
+ * Bounded macro loop (AC7): epoch budget exhaustion or a repeated-gap
+ * signature moves the goal to blocked with the judgment preserved durably,
+ * instead of opening another epoch.
+ */
+function blockGoalForMacroLoop(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  runtimeEventType: "supervisor.epoch_budget_exhausted" | "supervisor.reassessment_circuit_breaker",
+  reason: string,
+  reassessment: { goalSatisfied: boolean; evidence: string[]; remainingGaps: string[]; nextEpochRationale: string | null },
+): void {
+  const finishedAt = new Date().toISOString();
+  deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "goal.blocked",
+    message: `Goal blocked: ${reason}`,
+    data: {
+      sessionId: input.sessionId,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType,
+      safeReason: reason,
+      goalSatisfied: reassessment.goalSatisfied,
+      evidence: reassessment.evidence,
+      remainingGaps: reassessment.remainingGaps,
+      ...(reassessment.nextEpochRationale ? { nextEpochRationale: reassessment.nextEpochRationale } : {}),
+    },
+  });
+}
+
 /** v1 rule: a blocked change blocks the goal, durably and visibly. */
 function blockChangeAndGoal(
   deps: AgentSessionManagerDeps,
@@ -1951,6 +2121,7 @@ async function startCompletionlessContinuation(
       ? projectManagedTaskContext(deps.managedTaskRepo, input.goalId)
       : undefined,
     changeHistory: getChangeRegistry(input.state, input.goalId).listChanges(),
+    epochHistory: getChangeRegistry(input.state, input.goalId).listEpochs(),
   });
 
   const run = deps.runRepo.create({
@@ -2055,6 +2226,7 @@ async function continueSupervisorAfterChild(
             ? projectManagedTaskContext(deps.managedTaskRepo, input.goalId)
             : undefined,
           changeHistory: getChangeRegistry(input.state, input.goalId).listChanges(),
+          epochHistory: getChangeRegistry(input.state, input.goalId).listEpochs(),
         })
       : message,
   });
