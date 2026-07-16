@@ -2,8 +2,8 @@
 
 ## Why
 
-先建立完整、可執行且可驗收的長計畫，固定範圍、順序、證據要求與禁止 commit 的約束。
+Define the plan purpose, scope, assumptions, deliverables, and success criteria before assigning execution work.
 
 ## What Changes
 
-<!-- Spec-writer: describe what "長計畫與驗收基線" changes. -->
+<!-- Spec-writer: describe what "Long-plan foundation" changes. -->
