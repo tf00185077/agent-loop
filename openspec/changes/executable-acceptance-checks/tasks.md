@@ -14,9 +14,9 @@ sanitization helpers, durable criterion outcomes.
 
 ## 2. Check runner and review-time execution
 
-- [ ] 2.1 Failing test: a checked criterion's command executes in the worker worktree at review dispatch; exit 0 stamps PASS, nonzero stamps FAIL, output sanitized and truncated in a durable execution record
-- [ ] 2.2 Check-runner service (spawn with timeout via killProcessTree; per-attempt execution records in managed-task-repository)
-- [ ] 2.3 Wire into the review-merge dispatch path before the judge starts; judge packet includes the execution table; unrunnable/timeout checks record `check.execution_failed` and fail closed
+- [x] 2.1 Failing test: a checked criterion's command executes in the worker worktree at review dispatch; exit 0 stamps PASS, nonzero stamps FAIL, output sanitized and truncated in a durable execution record
+- [x] 2.2 Check-runner service (spawn with timeout via killProcessTree; per-attempt execution records in managed-task-repository)
+- [x] 2.3 Wire into the review-merge dispatch path before the judge starts; judge packet includes the execution table; unrunnable/timeout checks record `check.execution_failed` and fail closed
 - [ ] 2.4 Full suite + typecheck green; commit
 
 ## 3. Baseline discrimination (red-green / regression)

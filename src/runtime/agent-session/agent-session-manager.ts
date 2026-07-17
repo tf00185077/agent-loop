@@ -45,6 +45,7 @@ import {
 import { buildIntegratorContractAppendix, buildSpecWriterAppendix, buildSupervisorPrompt } from "./supervisor-prompt.js";
 import { GoalTaskRegistry } from "./task-registry.js";
 import { buildSpecReviewPacket } from "./spec-review-packet.js";
+import { createShellCheckRunner, DEFAULT_CHECK_TIMEOUT_MS, type CheckRunner } from "./check-runner.js";
 import type { ReviewMergeVerificationService } from "./review-merge-verification-service.js";
 import type { ReviewMergeWorkspaceService } from "./review-merge-workspace-service.js";
 import { createGitWorktreeService, type WorktreeAttestor, type WorktreeService } from "./worktree-service.js";
@@ -60,6 +61,8 @@ export interface AgentSessionManagerDeps {
   managedIntegrationService?: ManagedIntegrationService;
   worktreeService?: WorktreeService;
   worktreeAttestor?: WorktreeAttestor;
+  /** Executes acceptance checks; defaults to the shell runner. */
+  checkRunner?: CheckRunner;
   openSpecWorkspaceService?: OpenSpecWorkspaceService;
   reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   reviewMergeVerificationService?: ReviewMergeVerificationService;
@@ -1473,6 +1476,7 @@ async function persistDelegationControlEvent(
     }
   }
 
+  let checkAppendix: string | null = null;
   if (validation.request.role === "review_merge" && validation.request.workerDelegationRequestId) {
     const worker = findDelegationForGoal(deps, input.goalId, validation.request.workerDelegationRequestId);
     const workerTaskId = worker?.taskId;
@@ -1486,6 +1490,9 @@ async function persistDelegationControlEvent(
         recordControlRejection(deps, input, data, gate.safeReason);
         return;
       }
+    }
+    if (worker) {
+      checkAppendix = await executeAcceptanceChecks(deps, input, worker);
     }
   }
 
@@ -1512,7 +1519,7 @@ async function persistDelegationControlEvent(
               ? specChange.specReview.summary
               : null,
           })
-        : null,
+        : checkAppendix,
       workerDelegationRequestId: validation.request.workerDelegationRequestId,
       adapter: childAgent.adapter,
       eventData: { ...data, ...(uncontracted ? { uncontracted: true } : {}) },
@@ -2146,6 +2153,101 @@ function findDelegationForGoal(
  * citing the frozen S1–S3 criteria. Returns the failure summary when the
  * result was rejected, null otherwise.
  */
+/**
+ * Backend-executed acceptance checks for a reviewed worker attempt: run each
+ * checked criterion's command in the worker's worktree, persist one durable
+ * execution record per criterion, and return the judge-packet appendix.
+ * A check that cannot run records a visible failed execution (fail closed).
+ * Returns null when the task has no checked criteria.
+ */
+async function executeAcceptanceChecks(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  worker: { id: string; taskId?: string | null; childSessionId?: string | null },
+): Promise<string | null> {
+  if (!deps.managedTaskRepo || !worker.taskId) return null;
+  const checked = deps.managedTaskRepo
+    .listCriteria(input.goalId, worker.taskId)
+    .filter((criterion) => criterion.check);
+  if (checked.length === 0) return null;
+
+  const worktreePath = worker.childSessionId
+    ? deps.agentSessionRepo.getSession(worker.childSessionId)?.worktree?.path ?? null
+    : null;
+  const runner = deps.checkRunner ?? createShellCheckRunner();
+  const lines = [
+    "## Executed acceptance checks",
+    "",
+    "Backend-executed results for checked criteria (authoritative; your prose cannot override them):",
+    "",
+  ];
+  for (const criterion of checked) {
+    const check = criterion.check!;
+    const base = {
+      goalId: input.goalId,
+      taskId: worker.taskId,
+      workerDelegationRequestId: worker.id,
+      criterionId: criterion.criterionId,
+      target: "candidate" as const,
+      kind: check.kind,
+      command: check.command,
+    };
+    const record = worktreePath
+      ? await (async () => {
+          const result = await runner.run({
+            cwd: worktreePath,
+            command: check.command,
+            timeoutMs: check.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS,
+          });
+          return deps.managedTaskRepo!.recordCheckExecution({
+            ...base,
+            exitCode: result.exitCode,
+            durationMs: result.durationMs,
+            outputSummary: sanitizeArchiveReason(
+              result.outputSummary || "(no output)",
+              input.state.supervisorCwd,
+            ).slice(0, 2000),
+            failedToRun: result.failedToRun,
+          });
+        })()
+      : deps.managedTaskRepo.recordCheckExecution({
+          ...base,
+          exitCode: null,
+          durationMs: 0,
+          outputSummary: "Worker worktree unavailable; check could not run.",
+          failedToRun: true,
+        });
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: record.failedToRun
+        ? `Acceptance check ${criterion.criterionId} for ${worker.taskId} could not run.`
+        : `Acceptance check ${criterion.criterionId} for ${worker.taskId} exited ${record.exitCode}.`,
+      data: {
+        sessionId: input.sessionId,
+        provider: input.providerId,
+        model: input.modelLabel,
+        runtimeEventType: record.failedToRun ? "check.execution_failed" : "check.executed",
+        taskId: worker.taskId,
+        workerDelegationRequestId: worker.id,
+        criterionId: criterion.criterionId,
+        checkKind: check.kind,
+        target: record.target,
+        exitCode: record.exitCode,
+        durationMs: record.durationMs,
+        safeReason: record.outputSummary.slice(0, 500),
+      },
+    });
+    lines.push(
+      `- ${criterion.criterionId} [${check.kind}] ` +
+        `${record.failedToRun ? "FAILED TO RUN" : `exit ${record.exitCode}`} ` +
+        `(${record.durationMs}ms): ${record.outputSummary.slice(0, 300)}`,
+    );
+  }
+  return lines.join("\n");
+}
+
 /**
  * After a structurally valid spec worker result: durably request the
  * Supervisor's semantic review and return the continuation appendix carrying

@@ -6784,3 +6784,139 @@ test("review-merge with an unresolvable worker id is rejected naming the latest 
   assert.match(reason, /not the task id/i, "the rejection must teach the id-vs-task distinction");
   fixture.db.close();
 });
+
+test("executes checked criteria in the worker worktree before the judge and persists execution records", async () => {
+  const fixture = createManagerFixture("check execution goal");
+  const managedTaskRepo = createManagedTaskRepository(fixture.db);
+  const runnerCalls: Array<{ cwd: string; command: string; timeoutMs: number }> = [];
+  const judgePrompts: string[] = [];
+  let supervisorTurn = 0;
+  const allDelegations = () => fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id)
+    .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id));
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        if (input.prompt.includes("Independent Judge contract")) {
+          judgePrompts.push(input.prompt);
+          const workerId = allDelegations().find((request) => request.taskId === "task-1")!.id;
+          return createHandle(input.sessionId, [
+            {
+              type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Judged.", occurredAt: "2026-07-18T00:00:04.000Z",
+              metadata: { delegationControlEvent: {
+                type: "managed_review.decision", workerDelegationRequestId: workerId, verdict: "accepted",
+                decisions: [{ criterionId: "A1", outcome: "PASS", safeSummary: "Check passed." }],
+                safeSummary: "Accepted.", deferredFindings: [],
+              } },
+            },
+            { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Judge complete.", occurredAt: "2026-07-18T00:00:05.000Z" },
+          ]);
+        }
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Result.", occurredAt: "2026-07-18T00:00:02.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_task.result", taskId: "task-1",
+              criterionEvidence: [{ criterionId: "A1", evidence: "Implemented and tested." }],
+              claimedFiles: ["src/notes.js"], tests: [],
+            } },
+          },
+          { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Worker complete.", occurredAt: "2026-07-18T00:00:03.000Z" },
+        ]);
+      }
+      supervisorTurn += 1;
+      if (supervisorTurn === 1) {
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Announce.", occurredAt: "2026-07-18T00:00:00.500Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.task_list",
+              tasks: [{
+                id: "task-1", title: "Notes storage",
+                acceptance: [{
+                  id: "A1", text: "Storage round-trips notes.",
+                  check: { kind: "command", command: "node --test tests/notes.test.js", timeoutMs: 30000 },
+                }],
+              }],
+            } },
+          },
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Delegate.", occurredAt: "2026-07-18T00:00:01.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "worker", taskId: "task-1",
+              prompt: "Implement notes storage.", summary: "Implement notes storage.",
+            } },
+          },
+        ]);
+      }
+      if (supervisorTurn === 2) {
+        const workerId = allDelegations().find((request) => request.taskId === "task-1")!.id;
+        return createHandle(input.sessionId, [{
+          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Review.", occurredAt: "2026-07-18T00:00:03.500Z",
+          metadata: { delegationControlEvent: {
+            type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: workerId,
+            prompt: "Judge the result.", summary: "Judge the result.",
+          } },
+        }]);
+      }
+      return createHandle(input.sessionId, []);
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    database: fixture.db,
+    managedTaskRepo,
+    supervisorCwd: "C:\\goal-workspace",
+    worktreeAttestor: () => ["src/notes.js"],
+    checkRunner: {
+      async run(input) {
+        runnerCalls.push(input);
+        return { exitCode: 0, durationMs: 42, outputSummary: "1 passing", failedToRun: false };
+      },
+    },
+    managedDeliveryService: {
+      prepareCandidate() {
+        return { ok: true as const, candidateCommitSha: "candidate", checkpointHead: "base",
+          candidateFiles: ["src/notes.js"] };
+      },
+      deliverCandidate() {
+        return { status: "committed" as const, safeSummary: "Delivered.", checkpointHead: "base",
+          checkpointStatus: "clean" as const, candidateCommitSha: "candidate", commitSha: "delivered",
+          validationCommand: "npm test", validationExitCode: 0, validationSummary: "passed", rollbackSummary: null };
+      },
+    },
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => managedTaskRepo.getTask(fixture.goal.id, "task-1")?.status === "accepted");
+
+  const workerId = allDelegations().find((request) => request.taskId === "task-1")!.id;
+  assert.equal(runnerCalls.length, 1, "the backend must execute the check exactly once");
+  assert.match(runnerCalls[0]!.cwd, /^C:\\worktrees\\/, "checks run in the worker worktree");
+  assert.equal(runnerCalls[0]!.command, "node --test tests/notes.test.js");
+  assert.equal(runnerCalls[0]!.timeoutMs, 30000);
+
+  const executions = managedTaskRepo.listCheckExecutions(workerId);
+  assert.equal(executions.length, 1);
+  assert.equal(executions[0]!.criterionId, "A1");
+  assert.equal(executions[0]!.exitCode, 0);
+  assert.equal(executions[0]!.target, "candidate");
+  assert.equal(executions[0]!.outputSummary, "1 passing");
+
+  assert.equal(judgePrompts.length, 1);
+  assert.match(judgePrompts[0]!, /## Executed acceptance checks/);
+  assert.match(judgePrompts[0]!, /A1.*exit 0/s);
+  fixture.db.close();
+});

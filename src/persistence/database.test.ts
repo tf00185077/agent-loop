@@ -36,6 +36,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "goals",
     "managed_change_archive_operations",
     "managed_goal_recovery_authorizations",
+    "managed_task_check_executions",
     "managed_task_criteria",
     "managed_task_criterion_results",
     "managed_task_deliveries",

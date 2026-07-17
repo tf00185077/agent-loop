@@ -38,6 +38,35 @@ export interface ManagedTaskTransitionOptions {
   goalId?: string;
 }
 
+export interface RecordCheckExecutionInput {
+  goalId?: string;
+  taskId: string;
+  workerDelegationRequestId: string;
+  criterionId: string;
+  target: "candidate" | "baseline";
+  kind: string;
+  command: string;
+  exitCode: number | null;
+  durationMs: number;
+  outputSummary: string;
+  failedToRun: boolean;
+}
+
+export interface ManagedCheckExecutionRecord {
+  id: string;
+  taskId: string;
+  workerDelegationRequestId: string;
+  criterionId: string;
+  target: "candidate" | "baseline";
+  kind: string;
+  command: string;
+  exitCode: number | null;
+  durationMs: number;
+  outputSummary: string;
+  failedToRun: boolean;
+  createdAt: string;
+}
+
 export interface RecordExecutorEvidenceInput {
   goalId?: string;
   taskId: string;
@@ -142,6 +171,8 @@ export interface ManagedTaskRepository {
     runId?: string | null,
     goalId?: string,
   ): ManagedTaskRecord;
+  recordCheckExecution(input: RecordCheckExecutionInput): ManagedCheckExecutionRecord;
+  listCheckExecutions(workerDelegationRequestId: string): ManagedCheckExecutionRecord[];
   recordExecutorEvidence(input: RecordExecutorEvidenceInput): ManagedTaskRecord;
   listCriterionResults(workerDelegationRequestId: string): ManagedCriterionResultRecord[];
   beginReview(input: {
@@ -433,6 +464,56 @@ export function createManagedTaskRepository(
         });
         return toManagedTask(requireTask(db, task.goalId, taskId));
       })();
+    },
+    recordCheckExecution(input) {
+      const task = requireTask(db, input.goalId, input.taskId);
+      const id = randomUUID();
+      const now = clock();
+      db.prepare(`
+        INSERT INTO managed_task_check_executions (
+          id, task_id, worker_delegation_request_id, criterion_id, target, kind, command,
+          exit_code, duration_ms, output_summary, failed_to_run, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id, task.databaseId, input.workerDelegationRequestId, input.criterionId, input.target,
+        input.kind, input.command, input.exitCode, input.durationMs, input.outputSummary,
+        input.failedToRun ? 1 : 0, now,
+      );
+      return {
+        id,
+        taskId: task.id,
+        workerDelegationRequestId: input.workerDelegationRequestId,
+        criterionId: input.criterionId,
+        target: input.target,
+        kind: input.kind,
+        command: input.command,
+        exitCode: input.exitCode,
+        durationMs: input.durationMs,
+        outputSummary: input.outputSummary,
+        failedToRun: input.failedToRun,
+        createdAt: now,
+      };
+    },
+    listCheckExecutions(workerDelegationRequestId) {
+      const rows = db.prepare(`
+        SELECT e.*, t.logical_task_id FROM managed_task_check_executions e
+        JOIN managed_tasks t ON t.id = e.task_id
+        WHERE e.worker_delegation_request_id = ? ORDER BY e.created_at, e.rowid
+      `).all(workerDelegationRequestId) as Array<Record<string, unknown>>;
+      return rows.map((row) => ({
+        id: row.id as string,
+        taskId: row.logical_task_id as string,
+        workerDelegationRequestId: row.worker_delegation_request_id as string,
+        criterionId: row.criterion_id as string,
+        target: row.target as "candidate" | "baseline",
+        kind: row.kind as string,
+        command: row.command as string,
+        exitCode: row.exit_code as number | null,
+        durationMs: row.duration_ms as number,
+        outputSummary: row.output_summary as string,
+        failedToRun: row.failed_to_run === 1,
+        createdAt: row.created_at as string,
+      }));
     },
     recordExecutorEvidence(input) {
       return db.transaction(() => {

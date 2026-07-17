@@ -222,6 +222,21 @@ function initializeSchema(
       PRIMARY KEY (task_id, criterion_id)
     );
 
+    CREATE TABLE IF NOT EXISTS managed_task_check_executions (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES managed_tasks(id) ON DELETE CASCADE,
+      worker_delegation_request_id TEXT NOT NULL,
+      criterion_id TEXT NOT NULL,
+      target TEXT NOT NULL CHECK (target IN ('candidate', 'baseline')),
+      kind TEXT NOT NULL,
+      command TEXT NOT NULL,
+      exit_code INTEGER,
+      duration_ms INTEGER NOT NULL,
+      output_summary TEXT NOT NULL,
+      failed_to_run INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS managed_task_criterion_results (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
