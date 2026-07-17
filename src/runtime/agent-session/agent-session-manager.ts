@@ -1783,6 +1783,13 @@ async function recordDurableChildOutcome(
   }
 
   {
+    // Executed check outcomes outrank judge prose: a judge PASS over an
+    // executed FAIL is overridden durably and the attempt rejected.
+    const overrideRejection = enforceExecutedCheckOutcomes(deps, input, outcome, review.verdict);
+    if (overrideRejection) return overrideRejection;
+  }
+
+  {
     // A spec attempt that changed nothing has nothing to merge: the scaffold
     // alone must never advance the change (zero-attestation gate).
     const changeRegistry = getChangeRegistry(input.state, input.goalId);
@@ -2171,7 +2178,12 @@ function findDelegationForGoal(
 async function executeAcceptanceChecks(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
-  worker: { id: string; taskId?: string | null; childSessionId?: string | null },
+  worker: {
+    id: string;
+    taskId?: string | null;
+    childSessionId?: string | null;
+    resultSummary?: { attestedFiles?: string[] | null } | null;
+  },
 ): Promise<{ appendix: string | null; rejectReason: string | null }> {
   if (!deps.managedTaskRepo || !worker.taskId) return { appendix: null, rejectReason: null };
   const taskId = worker.taskId;
@@ -2179,6 +2191,24 @@ async function executeAcceptanceChecks(
     .listCriteria(input.goalId, taskId)
     .filter((criterion) => criterion.check);
   if (checked.length === 0) return { appendix: null, rejectReason: null };
+
+  // Whoever must pass a check cannot edit it: an attested diff touching any
+  // protected path rejects the attempt before a single check runs.
+  const attested = new Set(
+    (worker.resultSummary?.attestedFiles ?? []).map((path) => path.replaceAll("\\", "/")),
+  );
+  const touchedProtected = [...new Set(checked
+    .flatMap((criterion) => criterion.check!.protectedPaths ?? [])
+    .map((path) => path.replaceAll("\\", "/"))
+    .filter((path) => attested.has(path)))];
+  if (touchedProtected.length > 0) {
+    const reason =
+      `Worker attempt ${worker.id} modified protected check paths: ${touchedProtected.join(", ")}. ` +
+      `The party that must pass a check cannot edit it. The attempt is rejected; dispatch a corrective ` +
+      `${taskId} attempt that leaves the protected paths untouched.`;
+    reopenTaskForCheckViolation(deps, input, taskId, reason);
+    return { appendix: null, rejectReason: reason };
+  }
 
   const candidatePath = worker.childSessionId
     ? deps.agentSessionRepo.getSession(worker.childSessionId)?.worktree?.path ?? null
@@ -2277,7 +2307,7 @@ async function executeAcceptanceChecks(
             break;
           }
           if (baseline.exitCode === 0) {
-            reopenTaskForVacuousCheck(deps, input, taskId,
+            reopenTaskForCheckViolation(deps, input, taskId,
               `Acceptance check ${criterion.criterionId} passed on the baseline (exit 0), so it does not ` +
               "discriminate this change.");
             rejectReason =
@@ -2308,8 +2338,71 @@ async function executeAcceptanceChecks(
   return { appendix: lines.join("\n"), rejectReason: null };
 }
 
-/** A vacuous red_green check reopens the attempt so a corrective one can dispatch. */
-function reopenTaskForVacuousCheck(
+/**
+ * For checked criteria the executed outcome is authoritative: a disagreeing
+ * judge decision is overridden with a durable event naming both, and an
+ * accepted verdict over any executed FAIL downgrades to a rejection.
+ */
+function enforceExecutedCheckOutcomes(
+  deps: AgentSessionManagerDeps & { managedTaskRepo: ManagedTaskRepository },
+  input: PersistRuntimeEventInput,
+  outcome: SupervisorContinuationInput,
+  verdict: string,
+): string | null {
+  const taskId = outcome.workerTaskId!;
+  const workerDelegationRequestId = outcome.workerDelegationRequestId!;
+  const latestByCriterion = new Map<string, ReturnType<ManagedTaskRepository["listCheckExecutions"]>[number]>();
+  for (const execution of deps.managedTaskRepo.listCheckExecutions(workerDelegationRequestId)) {
+    if (execution.target === "candidate") latestByCriterion.set(execution.criterionId, execution);
+  }
+  if (latestByCriterion.size === 0) return null;
+
+  let anyExecutedFail = false;
+  for (const [criterionId, execution] of latestByCriterion) {
+    const executedPass = !execution.failedToRun && execution.exitCode === 0;
+    if (!executedPass) anyExecutedFail = true;
+    const judge = outcome.reviewDecision?.decisions.find((decision) => decision.criterionId === criterionId);
+    if (judge && (judge.outcome === "PASS") !== executedPass) {
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        runId: input.runId,
+        type: "agent.progress",
+        message: `Judge decision for ${criterionId} overridden by the executed check result.`,
+        data: {
+          sessionId: input.sessionId,
+          provider: input.providerId,
+          model: input.modelLabel,
+          runtimeEventType: "check.judge_overridden",
+          taskId,
+          workerDelegationRequestId,
+          criterionId,
+          judgeOutcome: judge.outcome,
+          executedExitCode: execution.exitCode,
+          executedFailedToRun: execution.failedToRun,
+        },
+      });
+    }
+  }
+  if (verdict !== "accepted" || !anyExecutedFail) return null;
+
+  const safeReason =
+    `Executed acceptance checks failed for task ${taskId} even though the judge accepted the attempt; ` +
+    "executed outcomes are authoritative for checked criteria. The attempt is rejected — dispatch a corrective " +
+    "attempt that makes the checks pass.";
+  deps.managedTaskRepo.recordDelivery({
+    goalId: input.goalId,
+    taskId,
+    workerDelegationRequestId,
+    status: "rejected",
+    safeSummary: safeReason,
+    runId: input.runId,
+  });
+  getTaskRegistry(input.state, input.goalId).markFailed(taskId);
+  return safeReason;
+}
+
+/** A check violation reopens the attempt so a corrective one can dispatch. */
+function reopenTaskForCheckViolation(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
   taskId: string,

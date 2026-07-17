@@ -27,9 +27,9 @@ sanitization helpers, durable criterion outcomes.
 
 ## 4. Protected paths and judge precedence
 
-- [ ] 4.1 Failing tests: attested diff touching protectedPaths is rejected naming the files; judge PASS over an executed FAIL is overridden durably and the attempt rejected; prose-only criteria behave exactly as before
-- [ ] 4.2 Protected-path gate against attested files before delivery preparation; `check.judge_overridden` durable event; acceptance precedence in the review path
-- [ ] 4.3 Full suite + typecheck green; commit
+- [x] 4.1 Failing tests: attested diff touching protectedPaths is rejected naming the files; judge PASS over an executed FAIL is overridden durably and the attempt rejected; prose-only criteria behave exactly as before
+- [x] 4.2 Protected-path gate against attested files before delivery preparation; `check.judge_overridden` durable event; acceptance precedence in the review path
+- [x] 4.3 Full suite + typecheck green; commit
 
 ## 5. Prompt contract, dashboard, and closeout
 

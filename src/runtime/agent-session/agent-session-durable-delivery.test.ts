@@ -928,6 +928,7 @@ async function runCheckedReviewScenario(input: {
   title: string;
   check: Record<string, unknown>;
   runResult: (call: number) => { exitCode: number | null; failedToRun: boolean };
+  attestedFiles?: string[];
   settledWhen: (scenario: { fixture: ReturnType<typeof createManagerFixture>; managedTaskRepo: ReturnType<typeof createManagedTaskRepository> }) => boolean;
 }): Promise<CheckedReviewScenario> {
   const fixture = createManagerFixture(input.title);
@@ -1017,7 +1018,7 @@ async function runCheckedReviewScenario(input: {
     database: fixture.db,
     managedTaskRepo,
     supervisorCwd: "C:\\goal-workspace",
-    worktreeAttestor: () => ["src/notes.js"],
+    worktreeAttestor: () => input.attestedFiles ?? ["src/notes.js"],
     checkRunner: {
       async run(runInput) {
         runnerCalls.push(runInput);
@@ -1115,5 +1116,43 @@ test("accepts a regression check that stays green on baseline and candidate", as
     executions.map((execution) => [execution.target, execution.exitCode]),
     [["baseline", 0], ["candidate", 0]],
   );
+  scenario.fixture.db.close();
+});
+
+test("rejects an attempt whose attested diff touches a protected check path", async () => {
+  const scenario = await runCheckedReviewScenario({
+    title: "protected path violation",
+    check: { kind: "command", command: "node --test tests/notes.test.js", protectedPaths: ["tests/notes.test.js"] },
+    runResult: () => ({ exitCode: 0, failedToRun: false }),
+    attestedFiles: ["src/notes.js", "tests/notes.test.js"],
+    settledWhen: ({ managedTaskRepo, fixture }) =>
+      managedTaskRepo.getTask(fixture.goal.id, "task-1")?.status === "rejected",
+  });
+  assert.equal(scenario.runnerCalls.length, 0, "no check runs for an attempt that edited the check itself");
+  assert.equal(scenario.judgePrompts.length, 0);
+  const rejection = scenario.fixture.eventRepo.listForGoal(scenario.fixture.goal.id)
+    .find((event) => event.data.runtimeEventType === "delegation.rejected");
+  assert.match(String(rejection?.data.safeReason), /protected/i);
+  assert.match(String(rejection?.data.safeReason), /tests\/notes\.test\.js/);
+  scenario.fixture.db.close();
+});
+
+test("overrides a judge PASS over an executed FAIL and rejects the attempt durably", async () => {
+  const scenario = await runCheckedReviewScenario({
+    title: "judge overridden by execution",
+    check: { kind: "command", command: "node --test tests/notes.test.js" },
+    runResult: () => ({ exitCode: 1, failedToRun: false }),
+    settledWhen: ({ fixture }) => fixture.eventRepo.listForGoal(fixture.goal.id)
+      .some((event) => event.data.runtimeEventType === "check.judge_overridden"),
+  });
+  const events = scenario.fixture.eventRepo.listForGoal(scenario.fixture.goal.id);
+  const override = events.find((event) => event.data.runtimeEventType === "check.judge_overridden")!;
+  assert.equal(override.data.criterionId, "A1");
+  assert.equal(override.data.judgeOutcome, "PASS");
+  assert.equal(override.data.executedExitCode, 1);
+  const task = scenario.managedTaskRepo.getTask(scenario.fixture.goal.id, "task-1");
+  assert.notEqual(task?.status, "accepted", "an executed FAIL must never accept the attempt");
+  const delivery = scenario.managedTaskRepo.listDeliveries(scenario.fixture.goal.id, "task-1")[0];
+  assert.equal(delivery?.status, "rejected");
   scenario.fixture.db.close();
 });
