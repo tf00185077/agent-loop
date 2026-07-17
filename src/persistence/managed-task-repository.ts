@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  AcceptanceCheck,
   ManagedDeliveryOutcome,
   ManagedJudgeCriterionDecision,
   ManagedJudgeVerdict,
@@ -267,9 +268,9 @@ export function createManagedTaskRepository(
       `).run(databaseId, input.goalId, entry.id, input.changeId ?? null, parentDatabaseId, entry.title, now, now);
       for (const criterion of entry.acceptance ?? []) {
         db.prepare(`
-          INSERT INTO managed_task_criteria (task_id, criterion_id, text, outcome, created_at, updated_at)
-          VALUES (?, ?, ?, 'UNKNOWN', ?, ?)
-        `).run(databaseId, criterion.id, criterion.text, now, now);
+          INSERT INTO managed_task_criteria (task_id, criterion_id, text, check_json, outcome, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'UNKNOWN', ?, ?)
+        `).run(databaseId, criterion.id, criterion.text, criterion.check ? JSON.stringify(criterion.check) : null, now, now);
       }
       inserted += 1;
       output.push(toManagedTask(getStoredTask(db, input.goalId, entry.id)!));
@@ -944,14 +945,15 @@ function toManagedTask(task: StoredManagedTask): ManagedTaskRecord {
 }
 
 function mapCriterion(row: unknown, logicalTaskId: string): ManagedTaskCriterionRecord {
-  const value = row as Record<string, string>;
+  const value = row as Record<string, string | null>;
   return {
     taskId: logicalTaskId,
-    criterionId: value.criterion_id,
-    text: value.text,
+    criterionId: value.criterion_id as string,
+    text: value.text as string,
+    check: value.check_json ? (JSON.parse(value.check_json) as AcceptanceCheck) : null,
     outcome: value.outcome as ManagedTaskCriterionRecord["outcome"],
-    createdAt: value.created_at,
-    updatedAt: value.updated_at,
+    createdAt: value.created_at as string,
+    updatedAt: value.updated_at as string,
   };
 }
 

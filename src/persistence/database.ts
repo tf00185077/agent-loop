@@ -215,6 +215,7 @@ function initializeSchema(
       task_id TEXT NOT NULL REFERENCES managed_tasks(id) ON DELETE CASCADE,
       criterion_id TEXT NOT NULL,
       text TEXT NOT NULL,
+      check_json TEXT,
       outcome TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (outcome IN ('UNKNOWN', 'PASS', 'FAIL', 'BLOCKED')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -348,6 +349,7 @@ function initializeSchema(
   ensureColumn(db, "agent_delegation_requests", "attempt_number", "INTEGER");
   ensureColumn(db, "provider_settings", "role_assignments", "TEXT");
   ensureColumn(db, "managed_task_reviews", "integration_attempt_id", "TEXT");
+  ensureColumn(db, "managed_task_criteria", "check_json", "TEXT");
   ensureColumn(db, "managed_task_reviews", "reviewed_candidate_commit_sha", "TEXT");
   ensureColumn(db, "managed_task_deliveries", "integration_attempt_id", "TEXT");
   migrateManagedTaskDeliveriesOutcome(db);

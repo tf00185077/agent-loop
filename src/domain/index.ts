@@ -104,6 +104,8 @@ export type {
   ManagedTaskRecord,
   ManagedTaskReviewRecord,
   ManagedTaskStatus,
+  AcceptanceCheck,
+  AcceptanceCheckKind,
   TaskAcceptanceCriterion,
   TaskCriterionEvidence,
   TaskTestEvidence,

@@ -263,6 +263,7 @@ export interface ManagedTaskCriterionRecord {
   taskId: string;
   criterionId: string;
   text: string;
+  check: AcceptanceCheck | null;
   outcome: ManagedCriterionOutcome;
   createdAt: string;
   updatedAt: string;
@@ -354,11 +355,28 @@ export const managedControlEventTypes = [
 
 export type ManagedControlEventType = (typeof managedControlEventTypes)[number];
 
+export type AcceptanceCheckKind = "red_green" | "regression" | "command";
+
+/**
+ * Executable acceptance check, frozen with its criterion. The backend runs
+ * the command itself at review time; `red_green` also runs it against the
+ * baseline and rejects checks that already pass there, `regression` requires
+ * baseline-green and candidate-green, `command` runs candidate-only.
+ */
+export interface AcceptanceCheck {
+  kind: AcceptanceCheckKind;
+  command: string;
+  timeoutMs?: number | null;
+  /** Repo-relative paths the checked worker's diff must not touch. */
+  protectedPaths?: string[] | null;
+}
+
 export interface TaskAcceptanceCriterion {
   /** Immutable criterion identifier, unique within its task (e.g. "A1"). */
   id: string;
   /** Binary, testable condition text. */
   text: string;
+  check?: AcceptanceCheck | null;
 }
 
 export interface ManagedDelegationRequestControlEvent {

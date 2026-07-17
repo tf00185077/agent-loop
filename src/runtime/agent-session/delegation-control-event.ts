@@ -8,6 +8,7 @@ import type {
   ManagedSpecReviewControlEvent,
   ManagedIntegrationResultControlEvent,
   ReassessmentGap,
+  AcceptanceCheck,
   TaskAcceptanceCriterion,
   TaskCriterionEvidence,
   TaskTestEvidence,
@@ -553,9 +554,73 @@ function validateAcceptanceCriteria(value: unknown): AcceptanceValidation {
       return { ok: false, safeReason: "Acceptance criterion ids must be unique within a task." };
     }
     seen.add(id);
-    criteria.push({ id, text: entry.text.trim() });
+    const check = validateAcceptanceCheck(entry.check);
+    if (!check.ok) {
+      return { ok: false, safeReason: check.safeReason };
+    }
+    criteria.push({ id, text: entry.text.trim(), ...(check.check ? { check: check.check } : {}) });
   }
   return { ok: true, criteria };
+}
+
+const ACCEPTANCE_CHECK_KINDS = new Set(["red_green", "regression", "command"]);
+const MAX_CHECK_TIMEOUT_MS = 600_000;
+
+type AcceptanceCheckValidation =
+  | { ok: true; check: AcceptanceCheck | null }
+  | { ok: false; safeReason: string };
+
+function validateAcceptanceCheck(value: unknown): AcceptanceCheckValidation {
+  if (value === undefined || value === null) {
+    return { ok: true, check: null };
+  }
+  if (!isRecord(value)) {
+    return { ok: false, safeReason: "Acceptance check must be an object with kind and command." };
+  }
+  const kind = typeof value.kind === "string" ? value.kind.trim() : "";
+  if (!ACCEPTANCE_CHECK_KINDS.has(kind)) {
+    return { ok: false, safeReason: "Acceptance check kind must be red_green, regression, or command." };
+  }
+  if (typeof value.command !== "string" || value.command.trim().length === 0) {
+    return { ok: false, safeReason: "Acceptance check command must be a non-empty string." };
+  }
+  let timeoutMs: number | null = null;
+  if (value.timeoutMs !== undefined && value.timeoutMs !== null) {
+    if (
+      typeof value.timeoutMs !== "number" ||
+      !Number.isInteger(value.timeoutMs) ||
+      value.timeoutMs <= 0 ||
+      value.timeoutMs > MAX_CHECK_TIMEOUT_MS
+    ) {
+      return {
+        ok: false,
+        safeReason: `Acceptance check timeoutMs must be a positive integer up to ${MAX_CHECK_TIMEOUT_MS}.`,
+      };
+    }
+    timeoutMs = value.timeoutMs;
+  }
+  let protectedPaths: string[] | null = null;
+  if (value.protectedPaths !== undefined && value.protectedPaths !== null) {
+    if (
+      !Array.isArray(value.protectedPaths) ||
+      value.protectedPaths.some((path) => typeof path !== "string" || path.trim().length === 0)
+    ) {
+      return {
+        ok: false,
+        safeReason: "Acceptance check protectedPaths must be a list of non-empty repo-relative paths.",
+      };
+    }
+    protectedPaths = value.protectedPaths.map((path) => (path as string).trim());
+  }
+  return {
+    ok: true,
+    check: {
+      kind: kind as AcceptanceCheck["kind"],
+      command: value.command.trim(),
+      ...(timeoutMs !== null ? { timeoutMs } : {}),
+      ...(protectedPaths ? { protectedPaths } : {}),
+    },
+  };
 }
 
 export type ManagedTaskResultValidation =

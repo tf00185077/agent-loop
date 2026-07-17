@@ -731,3 +731,57 @@ test("rejects malformed Supervisor spec reviews", () => {
     assert.equal(validateManagedControlEvent({ controlEvent, parentSession: supervisorSession() }).ok, false);
   }
 });
+
+test("accepts acceptance criteria carrying a valid executable check", () => {
+  const result = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_delegation.task_list",
+      tasks: [{
+        id: "task-1",
+        title: "Notes storage",
+        acceptance: [{
+          id: "A1",
+          text: "Storage round-trips notes.",
+          check: {
+            kind: "red_green",
+            command: "  node --test tests/notes.test.js  ",
+            timeoutMs: 60000,
+            protectedPaths: [" tests/notes.test.js "],
+          },
+        }],
+      }],
+    },
+    parentSession: supervisorSession(),
+  });
+  assert.equal(result.ok, true);
+  if (result.ok && result.kind === "task_list") {
+    assert.deepEqual(result.tasks[0]!.acceptance![0]!.check, {
+      kind: "red_green",
+      command: "node --test tests/notes.test.js",
+      timeoutMs: 60000,
+      protectedPaths: ["tests/notes.test.js"],
+    });
+  }
+});
+
+test("rejects malformed executable checks with teaching reasons", () => {
+  const base = (check: Record<string, unknown>) => ({
+    type: "managed_delegation.task_list",
+    tasks: [{
+      id: "task-1", title: "T",
+      acceptance: [{ id: "A1", text: "Cond.", check }],
+    }],
+  });
+  const cases: Array<[Record<string, unknown>, RegExp]> = [
+    [{ kind: "vibes", command: "npm test" }, /kind/i],
+    [{ kind: "red_green", command: "  " }, /command/i],
+    [{ kind: "red_green", command: "npm test", timeoutMs: -5 }, /timeout/i],
+    [{ kind: "red_green", command: "npm test", protectedPaths: [""] }, /protected/i],
+    [{ kind: "red_green", command: "npm test", protectedPaths: "tests" }, /protected/i],
+  ];
+  for (const [check, pattern] of cases) {
+    const result = validateManagedControlEvent({ controlEvent: base(check), parentSession: supervisorSession() });
+    assert.equal(result.ok, false, JSON.stringify(check));
+    assert.match(result.ok ? "" : result.safeReason, pattern, JSON.stringify(check));
+  }
+});

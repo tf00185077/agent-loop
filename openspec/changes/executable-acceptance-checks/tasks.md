@@ -7,10 +7,10 @@ sanitization helpers, durable criterion outcomes.
 
 ## 1. Check contract shape and freezing
 
-- [ ] 1.1 Failing tests: task-list validation accepts a valid check (kind/command/timeout/protectedPaths), rejects malformed ones with teaching reasons
-- [ ] 1.2 Domain type: optional `check` on `TaskAcceptanceCriterion`; control-event validation in `delegation-control-event.ts`
-- [ ] 1.3 Persistence: check definitions stored with frozen criteria; restated checks ignored via the existing mutation-ignored path; restart test
-- [ ] 1.4 Full suite + typecheck green; commit
+- [x] 1.1 Failing tests: task-list validation accepts a valid check (kind/command/timeout/protectedPaths), rejects malformed ones with teaching reasons
+- [x] 1.2 Domain type: optional `check` on `TaskAcceptanceCriterion`; control-event validation in `delegation-control-event.ts`
+- [x] 1.3 Persistence: check definitions stored with frozen criteria; restated checks ignored via the existing mutation-ignored path; restart test
+- [x] 1.4 Full suite + typecheck green; commit
 
 ## 2. Check runner and review-time execution
 

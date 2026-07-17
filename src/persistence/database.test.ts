@@ -64,7 +64,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "substantive_rejection_count", "last_cited_criteria", "last_safe_summary", "created_at", "updated_at",
   ]);
   assert.deepEqual(columnNames(db, "managed_task_criteria"), [
-    "task_id", "criterion_id", "text", "outcome", "created_at", "updated_at",
+    "task_id", "criterion_id", "text", "check_json", "outcome", "created_at", "updated_at",
   ]);
   assert.deepEqual(columnNames(db, "managed_task_criterion_results"), [
     "id", "task_id", "worker_delegation_request_id", "criterion_id", "executor_evidence",
@@ -390,7 +390,7 @@ test("records an initialized clean ledger without changing its authoritative row
     INSERT INTO managed_tasks VALUES (
       'clean-task-db-id', 'clean-goal', 'clean-task', NULL, NULL, 'Clean task', 'registered', 0, 0, '[]', NULL, 't0', 't0'
     );
-    INSERT INTO managed_task_criteria VALUES ('clean-task-db-id', 'C1', 'Remains frozen.', 'UNKNOWN', 't0', 't0');
+    INSERT INTO managed_task_criteria (task_id, criterion_id, text, outcome, created_at, updated_at) VALUES ('clean-task-db-id', 'C1', 'Remains frozen.', 'UNKNOWN', 't0', 't0');
     DELETE FROM schema_migrations WHERE name = 'managed-task-frozen-contract-repair-v1';
   `);
   const before = {
@@ -779,7 +779,7 @@ function createFrozenContractFixture(options: { blocked?: boolean; ambiguous?: b
 
   if (!options.ambiguous) {
     db.exec(`
-      INSERT INTO managed_task_criteria VALUES
+      INSERT INTO managed_task_criteria (task_id, criterion_id, text, outcome, created_at, updated_at) VALUES
         ('repair-task-db-id', 'S1', 'Proposal is complete.', 'PASS', 't2', 't7'),
         ('repair-task-db-id', 'S2', 'Delta specs are complete.', 'PASS', 't2', 't7'),
         ('repair-task-db-id', 'S3', 'Tasks are complete.', 'PASS', 't2', 't7');
@@ -797,7 +797,7 @@ function createFrozenContractFixture(options: { blocked?: boolean; ambiguous?: b
       '{"runtimeEventType":"supervisor.task_list","taskList":[{"id":"${options.ambiguous ? "ordinary-task" : "spec:change-one"}","title":"Restated","acceptance":[{"id":"A1","text":"Guessed criterion one."},{"id":"A2","text":"Guessed criterion two."}]}],"ignoredCriteriaMutations":["${options.ambiguous ? "ordinary-task" : "spec:change-one"}"]}',
       't3'
     );
-    INSERT INTO managed_task_criteria VALUES
+    INSERT INTO managed_task_criteria (task_id, criterion_id, text, outcome, created_at, updated_at) VALUES
       ('repair-task-db-id', 'A1', 'Guessed criterion one.', 'UNKNOWN', 't3', 't3'),
       ('repair-task-db-id', 'A2', 'Guessed criterion two.', 'UNKNOWN', 't3', 't3');
   `);
@@ -849,7 +849,7 @@ function createSplitLineageMigrationFixture(): { path: string } {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?)
   `);
   const insertCriterion = db.prepare(`
-    INSERT INTO managed_task_criteria VALUES (?, ?, ?, 'UNKNOWN', ?, ?)
+    INSERT INTO managed_task_criteria (task_id, criterion_id, text, outcome, created_at, updated_at) VALUES (?, ?, ?, 'UNKNOWN', ?, ?)
   `);
   const scenarios = [
     { goal: "goal-repairable", parent: "parent-repairable", status: "rejected", updated: "t2", child: "child-repairable", childChange: "change-a", childCriteria: 1 },

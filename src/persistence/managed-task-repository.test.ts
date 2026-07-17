@@ -622,7 +622,7 @@ function createLegacyManagedTaskFixture(path: string): void {
       'child', 'legacy-goal', NULL, 'parent', 'Child', 'accepted', 1, 0, '["A1"]', 'Done',
       '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z'
     );
-    INSERT INTO managed_task_criteria VALUES (
+    INSERT INTO managed_task_criteria (task_id, criterion_id, text, outcome, created_at, updated_at) VALUES (
       'child', 'A1', 'Done', 'PASS', '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z'
     );
     INSERT INTO managed_task_criterion_results VALUES (
@@ -712,5 +712,38 @@ test("resetTaskForReDispatch resets to registered without charging the interrupt
   assert.equal(reset.attemptCount, 0);
   assert.equal(reset.substantiveRejectionCount, 0);
   assert.equal(tasks.listCriteria("task-1").length, 1);
+  db.close();
+});
+
+test("persists executable checks with frozen criteria and ignores restated checks", () => {
+  const db = openDatabase({ path: ":memory:" });
+  const goal = createGoalRepository(db).create({ title: "Check freeze", description: "d" });
+  const tasks = createManagedTaskRepository(db);
+  const check = {
+    kind: "red_green" as const,
+    command: "node --test tests/notes.test.js",
+    timeoutMs: 60000,
+    protectedPaths: ["tests/notes.test.js"],
+  };
+  tasks.registerTasks({
+    goalId: goal.id,
+    tasks: [{ id: "task-1", title: "T", acceptance: [{ id: "A1", text: "Works.", check }] }],
+  });
+
+  const criteria = tasks.listCriteria(goal.id, "task-1");
+  assert.deepEqual(criteria[0]!.check, check);
+
+  // Restating the contract with a different check must not mutate it.
+  tasks.registerTasks({
+    goalId: goal.id,
+    tasks: [{ id: "task-1", title: "T", acceptance: [{
+      id: "A1", text: "Works.", check: { kind: "command" as const, command: "exit 0" },
+    }] }],
+  });
+  assert.deepEqual(tasks.listCriteria(goal.id, "task-1")[0]!.check, check);
+
+  // Reopening the database preserves the frozen check.
+  const reopened = createManagedTaskRepository(db);
+  assert.deepEqual(reopened.listCriteria(goal.id, "task-1")[0]!.check, check);
   db.close();
 });
