@@ -907,8 +907,10 @@ async function persistDelegationControlEvent(
       // A completion claim is the moment to close out an archivable tail
       // change (e.g. one whose only task was its spec) before judging it.
       tryArchiveActiveChange(deps, input);
-      if (!completionChangeRegistry.allArchived()) {
-        const completionGaps: ManagedCompletionGap[] = completionChangeRegistry.unarchivedIds().map((changeId) => ({
+      // Blocked changes are terminal dead scope (re-planned via reassessment);
+      // only open changes hold completion back.
+      if (completionChangeRegistry.openChangeIds().length > 0) {
+        const completionGaps: ManagedCompletionGap[] = completionChangeRegistry.openChangeIds().map((changeId) => ({
           type: "unarchived_change",
           changeId,
           safeSummary: `Planned change ${changeId} is not archived.`,
@@ -917,7 +919,7 @@ async function persistDelegationControlEvent(
           deps,
           input,
           { ...data, completionGaps },
-          `Planned changes remain unarchived: ${completionChangeRegistry.unarchivedIds().join(", ")}. ` +
+          `Planned changes remain unarchived: ${completionChangeRegistry.openChangeIds().join(", ")}. ` +
             "Deliver, merge, and archive them before completing the goal.",
           completionGaps,
         );
@@ -949,7 +951,8 @@ async function persistDelegationControlEvent(
     if (deps.database && deps.managedTaskRepo) {
       const evaluated = evaluateManagedCompletion(deps.database, {
         goalId: input.goalId,
-        unarchivedChangeIds: completionChangeRegistry.hasPlan() ? completionChangeRegistry.unarchivedIds() : [],
+        unarchivedChangeIds: completionChangeRegistry.hasPlan() ? completionChangeRegistry.openChangeIds() : [],
+        blockedChangeIds: completionChangeRegistry.hasPlan() ? completionChangeRegistry.blockedIds() : [],
       });
       if (!evaluated.ok) {
         recordCompletionRejection(
@@ -1136,18 +1139,22 @@ async function persistDelegationControlEvent(
     // Close out an archivable tail change before judging the batch (same
     // courtesy as the completion path).
     tryArchiveActiveChange(deps, input);
-    const unarchived = changeRegistry.unarchivedIds();
-    if (unarchived.length > 0) {
+    const openChanges = changeRegistry.openChangeIds();
+    if (openChanges.length > 0) {
       recordControlRejection(
         deps, input, data,
-        `Reassessment requires every change archived first; unarchived: ${unarchived.join(", ")}.`,
+        `Reassessment requires every change archived or blocked first; open: ${openChanges.join(", ")}.`,
       );
       return;
     }
     if (validation.reassessment.goalSatisfied && deps.database && deps.managedTaskRepo) {
       // The durable ledger outranks the supervisor's prose: a satisfied claim
       // must survive the same evidence check completion uses.
-      const evaluated = evaluateManagedCompletion(deps.database, { goalId: input.goalId, unarchivedChangeIds: [] });
+      const evaluated = evaluateManagedCompletion(deps.database, {
+        goalId: input.goalId,
+        unarchivedChangeIds: [],
+        blockedChangeIds: changeRegistry.blockedIds(),
+      });
       if (!evaluated.ok) {
         recordControlRejection(
           deps,
@@ -1348,6 +1355,20 @@ async function persistDelegationControlEvent(
           return;
         }
         if (durableTask.substantiveRejectionCount >= 2 || durableTask.attemptCount >= 3) {
+          if (specChange) {
+            // Spec tasks cannot narrow (frozen S1-S3, change keys on this id):
+            // exhausting the budget blocks the change, never the goal.
+            if (!["accepted", "blocked", "split"].includes(durableTask.status)) {
+              deps.managedTaskRepo.transition(durableTask.id, "blocked", {
+                safeSummary: `Spec authoring for change ${specChange.id} exhausted its retry budget.`,
+                runId: input.runId,
+                citedCriteria: durableTask.lastCitedCriteria,
+                goalId: input.goalId,
+              });
+            }
+            blockChangeForSpecBudget(deps, input, data, specChange.id);
+            return;
+          }
           if (durableTask.status !== "accepted") {
             deps.managedTaskRepo.transition(durableTask.id, "split", {
               safeSummary: `Task ${durableTask.id} exhausted its retry budget and must be narrowed.`,
@@ -1400,8 +1421,9 @@ async function persistDelegationControlEvent(
       if (specChange && registry.getTask(specTaskId(specChange.id))?.status === "split") {
         // Narrowing cannot apply to a backend-registered spec task: its S1-S3
         // contract is frozen and change approval keys on this exact task id.
-        // Exhausting the spec budget blocks the change — and the goal (v1).
-        blockChangeAndGoal(deps, input, specChange.id, "spec authoring exhausted its retry budget");
+        // Exhausting the spec budget blocks the change — the goal survives to
+        // re-plan the blocked scope through the reassessment loop.
+        blockChangeForSpecBudget(deps, input, data, specChange.id);
         return;
       }
       recordControlRejection(deps, input, data, gate.safeReason);
@@ -2816,15 +2838,19 @@ function blockGoalForMacroLoop(
   });
 }
 
-/** v1 rule: a blocked change blocks the goal, durably and visibly. */
-function blockChangeAndGoal(
+/**
+ * Spec-budget exhaustion is change-terminal, never goal-terminal: block the
+ * change durably and hand the supervisor the reassess-and-re-plan route. The
+ * goal only ends through the macro-loop bounds or explicit completion.
+ */
+function blockChangeForSpecBudget(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
+  data: Record<string, unknown>,
   changeId: string,
-  reason: string,
 ): void {
+  const reason = "spec authoring exhausted its retry budget";
   getChangeRegistry(input.state, input.goalId).markBlocked(changeId);
-  const finishedAt = new Date().toISOString();
   deps.eventRepo.create({
     goalId: input.goalId,
     runId: input.runId,
@@ -2839,21 +2865,12 @@ function blockChangeAndGoal(
       safeReason: reason,
     },
   });
-  deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
-  deps.eventRepo.create({
-    goalId: input.goalId,
-    runId: input.runId,
-    type: "goal.blocked",
-    message: `Goal blocked: change ${changeId} ${reason}.`,
-    data: {
-      sessionId: input.sessionId,
-      provider: input.providerId,
-      model: input.modelLabel,
-      runtimeEventType: "goal.blocked",
-      changeId,
-      safeReason: reason,
-    },
-  });
+  recordControlRejection(
+    deps, input, data,
+    `Change ${changeId} is blocked: ${reason}. The goal stays running — when every remaining ` +
+      "change is archived or blocked, emit an unsatisfied managed_goal.reassessment that names the " +
+      "blocked scope in its remaining gaps, then re-plan it in the next epoch under new change ids.",
+  );
 }
 
 function recordControlRejection(

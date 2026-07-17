@@ -27,11 +27,11 @@ first. Commit at the end of every task group.
 
 ## 3. Change-scoped spec budget (REPRO-H5)
 
-- [ ] 3.1 Move REPRO-H5 into the manager test suite as the failing acceptance test
-- [ ] 3.2 Split `blockChangeAndGoal`: spec-budget path blocks only the change (`change.blocked`, goal untouched) and returns the reassess-and-re-plan observation
-- [ ] 3.3 Reassessment timing gate: archived-or-blocked satisfies the gate; unsatisfied reassessment must reference every blocked change in its gaps (depends on 4.2 for structured refs — land the archived-or-blocked half first, the reference check with group 4)
-- [ ] 3.4 End-to-end test: spec budget exhausts → change blocked, goal running → reassessment referencing blocked scope → next-epoch plan admitted
-- [ ] 3.5 Full suite + typecheck green; commit
+- [x] 3.1 Move REPRO-H5 into the manager test suite as the failing acceptance test
+- [x] 3.2 Split `blockChangeAndGoal`: spec-budget path blocks only the change (`change.blocked`, goal untouched) and returns the reassess-and-re-plan observation
+- [x] 3.3 Reassessment timing gate: archived-or-blocked satisfies the gate; unsatisfied reassessment must reference every blocked change in its gaps (depends on 4.2 for structured refs — land the archived-or-blocked half first, the reference check with group 4)
+- [x] 3.4 End-to-end test: spec budget exhausts → change blocked, goal running → reassessment referencing blocked scope → next-epoch plan admitted
+- [x] 3.5 Full suite + typecheck green; commit
 
 ## 4. Structured gap identity for the circuit breaker (REPRO-H6, BREAKING control-block schema)
 

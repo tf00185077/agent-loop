@@ -152,16 +152,16 @@ export class GoalChangeRegistry {
     return { ok: true };
   }
 
-  /** Record a goal-level judgment; gated on a plan with every change archived. */
+  /** Record a goal-level judgment; gated on a plan with every change archived or blocked. */
   recordReassessment(reassessment: GoalReassessment): RegistryGate {
     if (!this.plan) {
       return { ok: false, safeReason: "Goal has no change plan; reassessment applies to planned goals only." };
     }
-    const unarchived = this.unarchivedIds();
-    if (unarchived.length > 0) {
+    const open = this.openChangeIds();
+    if (open.length > 0) {
       return {
         ok: false,
-        safeReason: `Reassessment requires every change archived first; unarchived: ${unarchived.join(", ")}.`,
+        safeReason: `Reassessment requires every change archived or blocked first; open: ${open.join(", ")}.`,
       };
     }
     this.reassessments.push({ ...reassessment, epochSequence: this.epochCount() });
@@ -405,6 +405,17 @@ export class GoalChangeRegistry {
 
   unarchivedIds(): string[] {
     return (this.plan ?? []).filter((change) => change.status !== "archived").map((change) => change.id);
+  }
+
+  /** Changes still requiring work: neither archived nor blocked. */
+  openChangeIds(): string[] {
+    return (this.plan ?? [])
+      .filter((change) => change.status !== "archived" && change.status !== "blocked")
+      .map((change) => change.id);
+  }
+
+  blockedIds(): string[] {
+    return (this.plan ?? []).filter((change) => change.status === "blocked").map((change) => change.id);
   }
 }
 

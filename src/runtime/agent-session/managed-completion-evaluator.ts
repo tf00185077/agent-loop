@@ -5,6 +5,12 @@ import { evaluateDurableManagedTaskLineage } from "./managed-task-lineage.js";
 export interface ManagedCompletionEvaluationInput {
   goalId: string;
   unarchivedChangeIds?: string[];
+  /**
+   * Changes durably blocked (dead scope re-planned through reassessment):
+   * their tasks are excluded from completion gaps — the reassessment gap
+   * references, not the ledger, account for that scope.
+   */
+  blockedChangeIds?: string[];
 }
 
 export interface ManagedCompletionEvaluation {
@@ -16,10 +22,13 @@ export function evaluateManagedCompletion(
   db: AppDatabase,
   input: ManagedCompletionEvaluationInput,
 ): ManagedCompletionEvaluation {
-  const tasks = db.prepare(`
-    SELECT id AS database_id, logical_task_id AS id, title, status
+  const blockedChangeIds = new Set(input.blockedChangeIds ?? []);
+  const tasks = (db.prepare(`
+    SELECT id AS database_id, logical_task_id AS id, title, status, change_id
     FROM managed_tasks WHERE goal_id = ? ORDER BY created_at, rowid
-  `).all(input.goalId) as Array<{ database_id: string; id: string; title: string; status: ManagedTaskStatus }>;
+  `).all(input.goalId) as Array<
+    { database_id: string; id: string; title: string; status: ManagedTaskStatus; change_id: string | null }
+  >).filter((task) => !(task.change_id && blockedChangeIds.has(task.change_id)));
   const lineage = evaluateDurableManagedTaskLineage(db, input.goalId);
   const leafTaskIds = new Set(lineage.leafTaskIds);
   const gaps: ManagedCompletionGap[] = [...lineage.gaps];

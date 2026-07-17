@@ -3339,7 +3339,7 @@ test("does not double-count a backend validation rejection when the supervisor r
   fixture.db.close();
 });
 
-test("blocks the change and goal when spec authoring exhausts its retry budget", async () => {
+test("blocks only the change when spec authoring exhausts its retry budget", async () => {
   const fixture = createManagerFixture("spec budget goal");
   const openSpec = recordingOpenSpecService("cli", {
     validateFailures: [["tasks.md contains no tasks"], ["tasks.md contains no tasks"]],
@@ -3432,14 +3432,17 @@ test("blocks the change and goal when spec authoring exhausts its retry budget",
     modelLabel: "gpt-5-codex",
     adapter,
   });
-  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id)
+    .some((event) => event.data.runtimeEventType === "change.blocked"));
 
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   const blocked = events.find((event) => event.data.runtimeEventType === "change.blocked");
   assert.ok(blocked, "expected a durable change.blocked event");
   assert.equal(blocked.data.changeId, "change-one");
-  assert.ok(events.some((event) => event.type === "goal.blocked"));
-  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "blocked");
+  assert.ok(!events.some((event) => event.type === "goal.blocked"), "the goal must survive the blocked change");
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "running");
+  const rejection = events.filter((event) => event.data.runtimeEventType === "delegation.rejected").at(-1);
+  assert.match(String(rejection?.data.safeReason), /reassessment/i);
 
   fixture.db.close();
 });
@@ -5271,7 +5274,7 @@ test("rejects reassessments for flat goals and while changes remain unarchived",
     .listForGoal(plannedFixture.goal.id)
     .find((event) => event.data.runtimeEventType === "delegation.rejected");
   assert.ok(prematureRejection, "expected the premature reassessment to be rejected");
-  assert.match(String(prematureRejection.data.safeReason), /archived first.*change-one/i);
+  assert.match(String(prematureRejection.data.safeReason), /archived or blocked first.*change-one/i);
   assert.equal(plannedFixture.goalRepo.getById(plannedFixture.goal.id)?.status, "running");
   plannedFixture.db.close();
 });
@@ -6268,5 +6271,190 @@ test("rejects a zero-attestation spec review without advancing the change", asyn
   assert.equal(managedTaskRepo.getTask(fixture.goal.id, "spec:change-one")?.attemptCount, 2);
   const delivery = managedTaskRepo.listDeliveries(fixture.goal.id, "spec:change-one")[0];
   assert.equal(delivery?.status, "rejected");
+  fixture.db.close();
+});
+
+test("REPRO-H5: spec retry-budget exhaustion blocks the change but keeps the goal alive", async () => {
+  const fixture = createManagerFixture("repro spec budget goal survival");
+  const openSpec = recordingOpenSpecService("cli", {
+    validateFailures: [
+      ["Requirement R1 has no WHEN/THEN scenario."],
+      ["Requirement R1 has no WHEN/THEN scenario."],
+    ],
+  });
+  const gates = [0, 1].map(() => {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    return { promise, release };
+  });
+  let sendCount = 0;
+  let supervisorStarted = false;
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Spec worker completed.", occurredAt: "2026-07-17T00:00:02.000Z" },
+        ]);
+      }
+      if (supervisorStarted) return createHandle(input.sessionId, []);
+      supervisorStarted = true;
+      const specDelegation = (at: string): AgentRuntimeEvent => ({
+        type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+        message: "Delegating spec authoring.", occurredAt: at,
+        metadata: { delegationControlEvent: {
+          type: "managed_delegation.request", role: "worker", taskId: "spec:change-one",
+          prompt: "Author change-one specs.", summary: "Author change-one specs.",
+        } },
+      });
+      return {
+        ...createHandle(input.sessionId, []),
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true },
+        async *events() {
+          yield {
+            ...changePlanEvent([{ id: "change-one", title: "Change one", rationale: "Only slice." }]),
+            sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          } satisfies AgentRuntimeEvent;
+          yield specDelegation("2026-07-17T00:00:01.000Z");
+          await gates[0]!.promise;
+          yield specDelegation("2026-07-17T00:00:03.000Z");
+          await gates[1]!.promise;
+          yield specDelegation("2026-07-17T00:00:05.000Z");
+        },
+        async send() {
+          gates[sendCount++]?.release();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id)
+    .some((event) => event.data.runtimeEventType === "change.blocked"));
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  assert.ok(events.some((event) =>
+    event.data.runtimeEventType === "change.blocked" && event.data.changeId === "change-one"));
+  assert.ok(
+    !events.some((event) => event.type === "goal.blocked"),
+    "one change spec-budget exhaustion must not terminally block the whole goal",
+  );
+  assert.equal(
+    fixture.goalRepo.getById(fixture.goal.id)?.status,
+    "running",
+    "the goal must stay alive so the Supervisor can reassess and re-plan the blocked scope",
+  );
+  fixture.db.close();
+});
+
+test("re-plans blocked spec scope through an unsatisfied reassessment and a next epoch", async () => {
+  const fixture = createManagerFixture("blocked scope re-planning");
+  const openSpec = recordingOpenSpecService("cli", {
+    validateFailures: [
+      ["Requirement R1 has no WHEN/THEN scenario."],
+      ["Requirement R1 has no WHEN/THEN scenario."],
+    ],
+  });
+  const gates = [0, 1].map(() => {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    return { promise, release };
+  });
+  let sendCount = 0;
+  let supervisorStarted = false;
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        return createHandle(input.sessionId, [
+          { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Spec worker completed.", occurredAt: "2026-07-17T03:00:02.000Z" },
+        ]);
+      }
+      if (supervisorStarted) return createHandle(input.sessionId, []);
+      supervisorStarted = true;
+      const specDelegation = (at: string): AgentRuntimeEvent => ({
+        type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+        message: "Delegating spec authoring.", occurredAt: at,
+        metadata: { delegationControlEvent: {
+          type: "managed_delegation.request", role: "worker", taskId: "spec:change-one",
+          prompt: "Author change-one specs.", summary: "Author change-one specs.",
+        } },
+      });
+      const control = (block: Record<string, unknown>, at: string): AgentRuntimeEvent => ({
+        type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+        message: "Supervisor control block.", occurredAt: at,
+        metadata: { delegationControlEvent: block },
+      });
+      return {
+        ...createHandle(input.sessionId, []),
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true },
+        async *events() {
+          yield {
+            ...changePlanEvent([{ id: "change-one", title: "Change one", rationale: "Only slice." }]),
+            sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          } satisfies AgentRuntimeEvent;
+          yield specDelegation("2026-07-17T03:00:01.000Z");
+          await gates[0]!.promise;
+          yield specDelegation("2026-07-17T03:00:03.000Z");
+          await gates[1]!.promise;
+          // Third delegation exhausts the budget: change blocked, goal alive.
+          yield specDelegation("2026-07-17T03:00:05.000Z");
+          yield control({
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-one spec authoring failed structurally twice and was blocked."],
+            remainingGaps: ["change-one scope is blocked and must be re-planned."],
+            nextEpochRationale: "Re-slice the blocked scope into an authorable change.",
+          }, "2026-07-17T03:00:06.000Z");
+          yield control({
+            type: "managed_change.plan",
+            changes: [{ id: "change-one-relanded", title: "Re-sliced change one", rationale: "Narrower scope." }],
+          }, "2026-07-17T03:00:07.000Z");
+        },
+        async send() {
+          gates[sendCount++]?.release();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id)
+    .filter((event) => event.data.runtimeEventType === "supervisor.change_plan").length === 2);
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  assert.ok(events.some((event) =>
+    event.data.runtimeEventType === "change.blocked" && event.data.changeId === "change-one"));
+  assert.ok(!events.some((event) => event.type === "goal.blocked"));
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "running");
+  const reassessment = events.find((event) => event.data.runtimeEventType === "supervisor.reassessment");
+  assert.ok(reassessment, "the reassessment must be accepted with the change blocked (not archived)");
+  assert.equal(reassessment.data.goalSatisfied, false);
+  const plans = events.filter((event) => event.data.runtimeEventType === "supervisor.change_plan");
+  assert.deepEqual(plans.map((event) => event.data.epochSequence), [1, 2]);
+  assert.ok(events.some((event) =>
+    event.data.runtimeEventType === "change.activated" && event.data.changeId === "change-one-relanded"));
   fixture.db.close();
 });
