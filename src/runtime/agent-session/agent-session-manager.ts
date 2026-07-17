@@ -2259,8 +2259,8 @@ async function executeAcceptanceChecks(
       runId: input.runId,
       type: "agent.progress",
       message: record.failedToRun
-        ? `Acceptance check ${criterion.criterionId} (${target}) for ${taskId} could not run.`
-        : `Acceptance check ${criterion.criterionId} (${target}) for ${taskId} exited ${record.exitCode}.`,
+        ? `Acceptance check ${criterion.criterionId} [${check.kind}/${target}] for ${taskId} could not run.`
+        : `Acceptance check ${criterion.criterionId} [${check.kind}/${target}] for ${taskId} exited ${record.exitCode} in ${record.durationMs}ms.`,
       data: {
         sessionId: input.sessionId,
         provider: input.providerId,

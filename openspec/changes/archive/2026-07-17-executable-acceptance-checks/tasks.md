@@ -33,7 +33,7 @@ sanitization helpers, durable criterion outcomes.
 
 ## 5. Prompt contract, dashboard, and closeout
 
-- [ ] 5.1 Supervisor prompt: check authoring guidance and examples (informational; note red-green semantics and protected paths)
-- [ ] 5.2 Dashboard timeline renders check executions (kind, exit, duration) on the attempt
-- [ ] 5.3 Live smoke per CLAUDE.md: managed goal whose contract carries a red_green check; observe execution records and one vacuous-check rejection in the durable timeline; record in `verification.md`
-- [ ] 5.4 Sync delta specs and archive the change
+- [x] 5.1 Supervisor prompt: check authoring guidance and examples (informational; note red-green semantics and protected paths)
+- [x] 5.2 Dashboard timeline renders check executions (kind, exit, duration) on the attempt
+- [x] 5.3 Live smoke per CLAUDE.md: managed goal whose contract carries a red_green check; observe execution records and one vacuous-check rejection in the durable timeline; record in `verification.md`
+- [x] 5.4 Sync delta specs and archive the change
