@@ -246,3 +246,131 @@ test("archive fails closed with a structured reason when cache lineage is incons
   assert.equal(gate.ok, false);
   assert.match(gate.ok ? "" : gate.safeReason, /invalid split lineage.*parent_not_split/i);
 });
+
+function registryWithSingleChange() {
+  const registry = new GoalChangeRegistry();
+  assert.equal(
+    registry.registerPlan([{ id: "change-one", title: "One", rationale: "Only slice.", dependsOn: null }]).ok,
+    true,
+  );
+  return registry;
+}
+
+test("spec review decisions bind to the current validated attempt", () => {
+  const registry = registryWithSingleChange();
+  const early = registry.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "approve", summary: "Fine.",
+  });
+  assert.equal(early.ok, false);
+  assert.match(early.ok ? "" : early.safeReason, /current validated spec attempt is none/i);
+
+  registry.markSpecReadyForReview("change-one", "worker-1");
+  const stale = registry.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-0", decision: "approve", summary: "Fine.",
+  });
+  assert.equal(stale.ok, false);
+  assert.match(stale.ok ? "" : stale.safeReason, /stale.*worker-1/i);
+
+  const unknown = registry.recordSpecReview({
+    changeId: "missing", workerDelegationRequestId: "worker-1", decision: "approve", summary: "Fine.",
+  });
+  assert.equal(unknown.ok, false);
+
+  const recorded = registry.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "approve", summary: "Fine.",
+  });
+  assert.deepEqual(recorded, { ok: true, duplicate: false });
+});
+
+test("same-verdict duplicates are idempotent regardless of summary wording", () => {
+  const registry = registryWithSingleChange();
+  registry.markSpecReadyForReview("change-one", "worker-1");
+  assert.equal(registry.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "approve",
+    summary: "The spec is semantically ready.",
+  }).ok, true);
+
+  const reworded = registry.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "approve",
+    summary: "Looks good — semantically sufficient and ready for review-merge.",
+  });
+  assert.deepEqual(reworded, { ok: true, duplicate: true });
+  assert.equal(registry.gateSpecReviewMerge("change-one", "worker-1").ok, true);
+});
+
+test("a conflicting verdict is rejected with the standing decision and next action", () => {
+  const registry = registryWithSingleChange();
+  registry.markSpecReadyForReview("change-one", "worker-1");
+  assert.equal(registry.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "approve", summary: "Ready.",
+  }).ok, true);
+
+  const conflict = registry.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "reject", summary: "Changed my mind.",
+  });
+  assert.equal(conflict.ok, false);
+  assert.match(conflict.ok ? "" : conflict.safeReason, /already approved/i);
+  assert.match(conflict.ok ? "" : conflict.safeReason, /review-merge/i);
+  assert.equal(registry.gateSpecReviewMerge("change-one", "worker-1").ok, true, "standing approval survives");
+
+  const registry2 = registryWithSingleChange();
+  registry2.markSpecReadyForReview("change-one", "worker-1");
+  assert.equal(registry2.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "reject", summary: "Missing rollback.",
+  }).ok, true);
+  const conflict2 = registry2.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "approve", summary: "Actually fine.",
+  });
+  assert.equal(conflict2.ok, false);
+  assert.match(conflict2.ok ? "" : conflict2.safeReason, /already rejected/i);
+  assert.match(conflict2.ok ? "" : conflict2.safeReason, /corrective/i);
+});
+
+test("review-merge gate requires an approved current attempt", () => {
+  const registry = registryWithSingleChange();
+  assert.equal(registry.gateSpecReviewMerge("change-one", "worker-1").ok, false);
+
+  registry.markSpecReadyForReview("change-one", "worker-1");
+  const unapproved = registry.gateSpecReviewMerge("change-one", "worker-1");
+  assert.equal(unapproved.ok, false);
+  assert.match(unapproved.ok ? "" : unapproved.safeReason, /Supervisor approval/i);
+
+  registry.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "approve", summary: "Ready.",
+  });
+  assert.equal(registry.gateSpecReviewMerge("change-one", "worker-1").ok, true);
+  assert.equal(registry.gateSpecReviewMerge("change-one", "worker-0").ok, false, "other attempts stay gated");
+});
+
+test("a new spec attempt invalidates the previous approval", () => {
+  const registry = registryWithSingleChange();
+  registry.markSpecReadyForReview("change-one", "worker-1");
+  registry.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "approve", summary: "Ready.",
+  });
+
+  registry.markSpecAttemptStarted("change-one", "worker-2");
+  assert.equal(registry.gateSpecReviewMerge("change-one", "worker-1").ok, false);
+  assert.deepEqual(registry.getChange("change-one")?.specReview, {
+    validatedWorkerDelegationRequestId: null,
+    reviewedWorkerDelegationRequestId: null,
+    decision: null,
+    summary: null,
+  });
+});
+
+test("a duplicate ready-for-review event preserves the existing attempt decision", () => {
+  const registry = registryWithSingleChange();
+  registry.markSpecReadyForReview("change-one", "worker-1");
+  registry.recordSpecReview({
+    changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "approve", summary: "Ready.",
+  });
+  registry.markSpecReadyForReview("change-one", "worker-1");
+  assert.equal(registry.gateSpecReviewMerge("change-one", "worker-1").ok, true);
+});
+
+test("markSpecMerged moves a specifying change to executing", () => {
+  const registry = registryWithSingleChange();
+  registry.markSpecMerged("change-one");
+  assert.equal(registry.getChange("change-one")?.status, "executing");
+});

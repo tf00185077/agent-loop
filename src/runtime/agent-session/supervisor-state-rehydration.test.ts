@@ -129,3 +129,85 @@ test("rehydrateChangeRegistry replays multiple epochs and reassessments chronolo
   assert.equal(registry.registerNextEpoch([{ id: "c3", title: "C3", rationale: "r", dependsOn: [] }]).ok, false);
   db.close();
 });
+
+function specReviewFixture(name: string) {
+  const db = openDatabase({ path: ":memory:" });
+  const goal = createGoalRepository(db).create({ title: name, description: "d" });
+  const run = createRunRepository(db).create({ goalId: goal.id, provider: "mock", model: "m" });
+  const events = createEventRepository(db);
+  const emit = (data: Record<string, unknown>) =>
+    events.create({ goalId: goal.id, runId: run.id, type: "agent.progress", message: "m", data });
+  emit({
+    runtimeEventType: "supervisor.change_plan",
+    changePlan: [{ id: "c1", title: "C1", rationale: "r", dependsOn: [] }],
+  });
+  const rehydrate = () => {
+    const registry = new GoalChangeRegistry();
+    rehydrateChangeRegistry(registry, createManagedTaskRepository(db), goal.id, events.listForGoal(goal.id));
+    return registry;
+  };
+  return { db, emit, rehydrate };
+}
+
+test("rehydration replays the full spec review chain to identical gate outcomes", () => {
+  const { db, emit, rehydrate } = specReviewFixture("full spec chain");
+  emit({ runtimeEventType: "change.spec_review_requested", changeId: "c1", workerDelegationRequestId: "worker-1" });
+  emit({
+    runtimeEventType: "change.spec_supervisor_approved", changeId: "c1",
+    workerDelegationRequestId: "worker-1", summary: "Approved.",
+  });
+  const beforeMerge = rehydrate();
+  assert.equal(beforeMerge.gateSpecReviewMerge("c1", "worker-1").ok, true);
+  assert.equal(beforeMerge.gateSpecReviewMerge("c1", "worker-0").ok, false);
+
+  emit({ runtimeEventType: "change.spec_merged", changeId: "c1", workerDelegationRequestId: "worker-1" });
+  assert.equal(rehydrate().getChange("c1")?.status, "executing");
+  db.close();
+});
+
+test("rehydration ignores spec merge events without an exact current approval", () => {
+  for (const scenario of [
+    { name: "absent approval", before: [] as Record<string, unknown>[], mergeId: "worker-1" },
+    {
+      name: "missing worker id",
+      before: [
+        { runtimeEventType: "change.spec_review_requested", changeId: "c1", workerDelegationRequestId: "worker-1" },
+        { runtimeEventType: "change.spec_supervisor_approved", changeId: "c1", workerDelegationRequestId: "worker-1", summary: "Approved." },
+      ],
+      mergeId: undefined,
+    },
+    {
+      name: "stale worker id after corrective attempt",
+      before: [
+        { runtimeEventType: "change.spec_review_requested", changeId: "c1", workerDelegationRequestId: "worker-1" },
+        { runtimeEventType: "change.spec_supervisor_approved", changeId: "c1", workerDelegationRequestId: "worker-1", summary: "Approved." },
+        { runtimeEventType: "managed_task.attempt_started", taskId: "spec:c1", workerDelegationRequestId: "worker-2" },
+      ],
+      mergeId: "worker-1",
+    },
+  ]) {
+    const { db, emit, rehydrate } = specReviewFixture(scenario.name);
+    for (const event of scenario.before) emit(event);
+    emit({ runtimeEventType: "change.spec_merged", changeId: "c1", workerDelegationRequestId: scenario.mergeId });
+    assert.equal(rehydrate().getChange("c1")?.status, "specifying", scenario.name);
+    db.close();
+  }
+});
+
+test("rehydration restores a rejected Supervisor decision and its conflict guidance", () => {
+  const { db, emit, rehydrate } = specReviewFixture("rejected decision");
+  emit({ runtimeEventType: "change.spec_review_requested", changeId: "c1", workerDelegationRequestId: "worker-1" });
+  emit({
+    runtimeEventType: "change.spec_supervisor_rejected", changeId: "c1",
+    workerDelegationRequestId: "worker-1", summary: "Missing rollback scenario.",
+  });
+  const registry = rehydrate();
+  assert.equal(registry.gateSpecReviewMerge("c1", "worker-1").ok, false);
+  const conflict = registry.recordSpecReview({
+    changeId: "c1", workerDelegationRequestId: "worker-1", decision: "approve", summary: "Fine now.",
+  });
+  assert.equal(conflict.ok, false);
+  assert.match(conflict.ok ? "" : conflict.safeReason, /already rejected/i);
+  assert.deepEqual(registry.getChange("c1")?.specReview.summary, "Missing rollback scenario.");
+  db.close();
+});

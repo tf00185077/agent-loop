@@ -40,6 +40,7 @@ import {
 } from "./openspec-workspace-service.js";
 import { buildIntegratorContractAppendix, buildSpecWriterAppendix, buildSupervisorPrompt } from "./supervisor-prompt.js";
 import { GoalTaskRegistry } from "./task-registry.js";
+import { buildSpecReviewPacket } from "./spec-review-packet.js";
 import type { ReviewMergeVerificationService } from "./review-merge-verification-service.js";
 import type { ReviewMergeWorkspaceService } from "./review-merge-workspace-service.js";
 import { createGitWorktreeService, type WorktreeAttestor, type WorktreeService } from "./worktree-service.js";
@@ -1225,6 +1226,63 @@ async function persistDelegationControlEvent(
     return;
   }
 
+  if (validation.kind === "spec_review") {
+    const review = validation.review;
+    const changeRegistry = getChangeRegistry(input.state, input.goalId);
+    const taskId = specTaskId(review.changeId);
+    if (review.decision === "reject" && deps.managedTaskRepo) {
+      // Guard before recording anything: the durable ledger may have moved
+      // (recovery, delivery rejection); an illegal transition must surface as
+      // a rejected control block, never as a thrown error.
+      const durableTask = deps.managedTaskRepo.getTask(input.goalId, taskId);
+      if (durableTask && !["awaiting_review", "awaiting_delivery"].includes(durableTask.status)) {
+        recordControlRejection(
+          deps, input, data,
+          `Spec task ${taskId} cannot record a Supervisor rejection from durable status ${durableTask.status}.`,
+        );
+        return;
+      }
+    }
+    const recorded = changeRegistry.recordSpecReview(review);
+    if (!recorded.ok) {
+      recordControlRejection(deps, input, data, recorded.safeReason);
+      return;
+    }
+    if (recorded.duplicate) return;
+
+    if (review.decision === "reject") {
+      if (deps.managedTaskRepo?.getTask(input.goalId, taskId)) {
+        deps.managedTaskRepo.transition(taskId, "rejected", {
+          goalId: input.goalId,
+          runId: input.runId,
+          safeSummary: review.summary,
+        });
+      }
+      getTaskRegistry(input.state, input.goalId).markFailed(taskId);
+    }
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: review.decision === "approve"
+        ? "Supervisor approved the validated spec attempt."
+        : "Supervisor rejected the validated spec attempt.",
+      data: {
+        ...data,
+        delegationControlEvent: undefined,
+        runtimeEventType: review.decision === "approve"
+          ? "change.spec_supervisor_approved"
+          : "change.spec_supervisor_rejected",
+        changeId: review.changeId,
+        taskId,
+        workerDelegationRequestId: review.workerDelegationRequestId,
+        summary: review.summary,
+        safeSummary: review.summary,
+      },
+    });
+    return;
+  }
+
   const changeRegistry = getChangeRegistry(input.state, input.goalId);
   const changeResolution = changeRegistry.resolveChangeId(validation.request.changeId ?? null);
   if (!changeResolution.ok) {
@@ -1354,6 +1412,22 @@ async function persistDelegationControlEvent(
     }
   }
 
+  if (validation.request.role === "review_merge" && validation.request.workerDelegationRequestId) {
+    const worker = findDelegationForGoal(deps, input.goalId, validation.request.workerDelegationRequestId);
+    const workerTaskId = worker?.taskId;
+    const workerChange = workerTaskId ? changeRegistry.findChangeByTask(workerTaskId) : undefined;
+    if (workerChange && workerTaskId === specTaskId(workerChange.id)) {
+      const gate = changeRegistry.gateSpecReviewMerge(
+        workerChange.id,
+        validation.request.workerDelegationRequestId,
+      );
+      if (!gate.ok) {
+        recordControlRejection(deps, input, data, gate.safeReason);
+        return;
+      }
+    }
+  }
+
   const childAgent = await resolveChildAgent(deps, input, validation.request.role);
 
   try {
@@ -1373,14 +1447,23 @@ async function persistDelegationControlEvent(
             title: specChange.title,
             rationale: specChange.rationale,
             dependsOn: specChange.dependsOn,
+            supervisorFeedback: specChange.specReview.decision === "reject"
+              ? specChange.specReview.summary
+              : null,
           })
         : null,
       workerDelegationRequestId: validation.request.workerDelegationRequestId,
       adapter: childAgent.adapter,
       eventData: { ...data, ...(uncontracted ? { uncontracted: true } : {}) },
+      onAccepted: specChange
+        ? (delegationRequestId) => changeRegistry.markSpecAttemptStarted(specChange.id, delegationRequestId)
+        : undefined,
       onChildOutcome: async (outcome) => {
         const backendRejection = await recordChildOutcomeInRegistry(deps, input, outcome);
         if (backendRejection === CONDITIONAL_RECOVERY_DEFERRED) return;
+        const specReviewAppendix = backendRejection
+          ? null
+          : recordSpecReviewRequested(deps, input, outcome);
         // Fresh continuations are new sessions with no memory of delegation
         // ids; the observation must carry the id a later review-merge request
         // will reference.
@@ -1390,7 +1473,9 @@ async function persistDelegationControlEvent(
             : outcome.observation;
         const observation = backendRejection
           ? `${taggedObservation}\n\nBackend validation rejected this result. Failing checks: ${backendRejection}`
-          : taggedObservation;
+          : specReviewAppendix
+            ? `${taggedObservation}\n\n${specReviewAppendix}`
+            : taggedObservation;
         await continueSupervisorAfterChild(deps, input, observation, {
           delegationRequestId: outcome.delegationRequestId,
           childSessionId: outcome.childSessionId,
@@ -1509,7 +1594,9 @@ async function recordChildOutcomeInRegistry(
     if (outcome.reviewMergeOutcome === "merged") {
       const change = changeRegistry.findChangeByTask(outcome.workerTaskId);
       if (change) changeRegistry.recordMerged(change.id);
-      const specMerge = approveSpecChangeAfterMerge(deps, input, outcome.workerTaskId, changeRegistry);
+      const specMerge = completeSpecMergeAfterValidation(
+        deps, input, outcome.workerTaskId, outcome.workerDelegationRequestId ?? null, changeRegistry,
+      );
       if (!specMerge) {
         // A spec merge only just unlocked the change for implementation
         // tasks; archiving there would close it before any were announced.
@@ -1622,6 +1709,28 @@ async function recordDurableChildOutcome(
     return null;
   }
 
+  {
+    // A spec attempt that changed nothing has nothing to merge: the scaffold
+    // alone must never advance the change (zero-attestation gate).
+    const changeRegistry = getChangeRegistry(input.state, input.goalId);
+    const change = changeRegistry.findChangeByTask(outcome.workerTaskId);
+    if (change && specTaskId(change.id) === outcome.workerTaskId && attestedFiles.length === 0) {
+      const safeReason =
+        `Spec worker attempt ${outcome.workerDelegationRequestId} has no attested changes to deliver. ` +
+        `Create a corrective ${outcome.workerTaskId} attempt that writes the approved artifacts.`;
+      tasks.recordDelivery({
+        goalId: input.goalId,
+        taskId: outcome.workerTaskId,
+        workerDelegationRequestId: outcome.workerDelegationRequestId,
+        status: "rejected",
+        safeSummary: safeReason,
+        runId: input.runId,
+      });
+      getTaskRegistry(input.state, input.goalId).markFailed(outcome.workerTaskId);
+      return safeReason;
+    }
+  }
+
   if (attestedFiles.length > 0) {
     if (!outcome.worktreePath) {
       tasks.recordDelivery({
@@ -1690,7 +1799,9 @@ async function recordDurableChildOutcome(
   const changeRegistry = getChangeRegistry(input.state, input.goalId);
   const change = changeRegistry.findChangeByTask(outcome.workerTaskId);
   if (change) changeRegistry.recordMerged(change.id);
-  const specMerge = approveSpecChangeAfterMerge(deps, input, outcome.workerTaskId, changeRegistry);
+  const specMerge = completeSpecMergeAfterValidation(
+    deps, input, outcome.workerTaskId, outcome.workerDelegationRequestId, changeRegistry,
+  );
   if (!specMerge) tryArchiveActiveChange(deps, input);
   return null;
 }
@@ -1936,7 +2047,9 @@ async function startConditionalIntegrationRecovery(
             const changeRegistry = getChangeRegistry(input.state, input.goalId);
             const change = changeRegistry.findChangeByTask(taskId);
             if (change) changeRegistry.recordMerged(change.id);
-            const specMerge = approveSpecChangeAfterMerge(deps, input, taskId, changeRegistry);
+            const specMerge = completeSpecMergeAfterValidation(
+              deps, input, taskId, workerDelegationRequestId, changeRegistry,
+            );
             if (!specMerge) tryArchiveActiveChange(deps, input);
             await continueAfterRecovery(rejudgeOutcome, `Resolved candidate committed: ${delivered.safeSummary}`);
           }),
@@ -1972,6 +2085,59 @@ function findDelegationForGoal(
  * citing the frozen S1–S3 criteria. Returns the failure summary when the
  * result was rejected, null otherwise.
  */
+/**
+ * After a structurally valid spec worker result: durably request the
+ * Supervisor's semantic review and return the continuation appendix carrying
+ * the bounded artifact packet. Returns null for non-spec outcomes.
+ */
+function recordSpecReviewRequested(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  outcome: SupervisorContinuationInput,
+): string | null {
+  if (outcome.role !== "worker" || !outcome.taskId || outcome.resultSummary.kind !== "success") {
+    return null;
+  }
+  const changeRegistry = getChangeRegistry(input.state, input.goalId);
+  const change = changeRegistry.findChangeByTask(outcome.taskId);
+  if (!change || specTaskId(change.id) !== outcome.taskId) return null;
+
+  // The packet must show the worker's authored artifacts; substituting any
+  // other workspace's content would have the Supervisor review the scaffold.
+  const packet = outcome.worktreePath
+    ? buildSpecReviewPacket({ cwd: outcome.worktreePath, changeId: change.id })
+    : null;
+  changeRegistry.markSpecReadyForReview(change.id, outcome.delegationRequestId);
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "agent.progress",
+    message: "Validated spec artifacts are ready for Supervisor review.",
+    data: {
+      sessionId: input.sessionId,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType: "change.spec_review_requested",
+      changeId: change.id,
+      taskId: outcome.taskId,
+      workerDelegationRequestId: outcome.delegationRequestId,
+    },
+  });
+  return [
+    "## Supervisor spec review request",
+    "",
+    `Change ID: ${change.id}`,
+    `Worker delegation request ID: ${outcome.delegationRequestId}`,
+    "Structural validation result: S1, S2, and S3 passed.",
+    "",
+    "## Bounded spec review packet",
+    "",
+    packet === null
+      ? "(The worker worktree is unavailable; the authored artifacts could not be read.)"
+      : packet || "(No projected spec markdown was found.)",
+  ].join("\n");
+}
+
 function rejectInvalidSpecResult(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
@@ -2017,14 +2183,18 @@ function rejectInvalidSpecResult(
 }
 
 /**
- * Post-merge gate: a change leaves `specifying` only after its spec-writer
- * result was review-merged and the merged artifacts validate in the goal
- * workspace. Returns true when the merge was for a spec task (handled here).
+ * Post-merge gate: a change leaves `specifying` only after its Supervisor-
+ * approved spec attempt was review-merged and the merged artifacts validate
+ * in the goal workspace. Returns true when the merge was for a spec task
+ * (handled here). Validation failure durably reopens the accepted task so a
+ * corrective attempt stays dispatchable; a gate mismatch after the merge is
+ * recorded durably, never swallowed.
  */
-function approveSpecChangeAfterMerge(
+function completeSpecMergeAfterValidation(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
   workerTaskId: string,
+  workerDelegationRequestId: string | null,
   changeRegistry: GoalChangeRegistry,
 ): boolean {
   const change = changeRegistry.findChangeByTask(workerTaskId);
@@ -2034,11 +2204,41 @@ function approveSpecChangeAfterMerge(
   if (change.status !== "specifying") {
     return true;
   }
+  if (!workerDelegationRequestId ||
+      !changeRegistry.gateSpecReviewMerge(change.id, workerDelegationRequestId).ok) {
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: `Merged spec artifacts for ${change.id} no longer match an approved attempt; change stays in specifying.`,
+      data: {
+        sessionId: input.sessionId,
+        provider: input.providerId,
+        model: input.modelLabel,
+        runtimeEventType: "change.spec_merge_ungated",
+        changeId: change.id,
+        taskId: workerTaskId,
+        workerDelegationRequestId,
+      },
+    });
+    return true;
+  }
   const validated = input.state.openSpec.validateChange({
     cwd: input.state.supervisorCwd,
     changeId: change.id,
   });
   if (!validated.ok) {
+    const safeReason = specValidationVerdict(validated.failures);
+    const durableTask = deps.managedTaskRepo?.getTask(input.goalId, workerTaskId);
+    if (durableTask?.status === "accepted") {
+      deps.managedTaskRepo!.rejectAfterPostMergeValidation(
+        workerTaskId,
+        safeReason,
+        input.runId,
+        input.goalId,
+      );
+    }
+    getTaskRegistry(input.state, input.goalId).markFailed(workerTaskId);
     deps.eventRepo.create({
       goalId: input.goalId,
       runId: input.runId,
@@ -2050,23 +2250,27 @@ function approveSpecChangeAfterMerge(
         model: input.modelLabel,
         runtimeEventType: "change.spec_validation_failed",
         changeId: change.id,
+        taskId: workerTaskId,
+        workerDelegationRequestId,
         failures: validated.failures,
+        safeReason,
       },
     });
     return true;
   }
-  changeRegistry.markSpecApproved(change.id);
+  changeRegistry.markSpecMerged(change.id);
   deps.eventRepo.create({
     goalId: input.goalId,
     runId: input.runId,
     type: "agent.progress",
-    message: `Spec artifacts for ${change.id} approved; change is executing.`,
+    message: `Spec artifacts for ${change.id} merged and validated; change is executing.`,
     data: {
       sessionId: input.sessionId,
       provider: input.providerId,
       model: input.modelLabel,
-      runtimeEventType: "change.spec_approved",
+      runtimeEventType: "change.spec_merged",
       changeId: change.id,
+      workerDelegationRequestId,
     },
   });
   return true;

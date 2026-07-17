@@ -348,6 +348,7 @@ export const managedControlEventTypes = [
   "managed_review.decision",
   "managed_integration.result",
   "managed_change.plan",
+  "managed_change.spec_review",
   "managed_goal.reassessment",
 ] as const;
 
@@ -414,6 +415,19 @@ export interface ManagedChangePlanControlEvent {
 }
 
 /**
+ * Supervisor's semantic verdict on the current validated spec attempt of a
+ * change. One decision per attempt; approval unlocks review-merge for exactly
+ * that worker attempt.
+ */
+export interface ManagedSpecReviewControlEvent {
+  type: "managed_change.spec_review";
+  changeId: string;
+  workerDelegationRequestId: string;
+  decision: "approve" | "reject";
+  summary: string;
+}
+
+/**
  * Supervisor's structured goal-level judgment after a planning epoch's
  * changes are all archived. Unsatisfied judgments arm the next-epoch gate;
  * satisfied judgments unlock the completion gate.
@@ -475,6 +489,7 @@ export type ManagedControlEvent =
   | ManagedReviewDecisionControlEvent
   | ManagedIntegrationResultControlEvent
   | ManagedChangePlanControlEvent
+  | ManagedSpecReviewControlEvent
   | ManagedGoalReassessmentControlEvent;
 
 export interface AgentRuntimeDelegationRequest {

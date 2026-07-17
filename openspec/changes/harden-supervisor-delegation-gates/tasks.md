@@ -15,15 +15,15 @@ first. Commit at the end of every task group.
 
 ## 2. Supervisor spec approval gate (REPRO-H4, new capability supervisor-spec-approval)
 
-- [ ] 2.1 Move REPRO-H4 into the manager test suite as the failing acceptance test
-- [ ] 2.2 Change-registry spec-review state machine: validated-attempt tracking, one decision per attempt, idempotent same-verdict duplicates (summary excluded from identity), conflicting-verdict rejection with next-action guidance, attempt-started invalidation
-- [ ] 2.3 Control-event validation for `managed_change.spec_review` (change id, worker delegation request id, approve/reject, non-empty summary)
-- [ ] 2.4 Manager routing: backend-initiated `change.spec_review_requested` + bounded packet (path-hardened reads, truncation marker, visible missing-worktree message); approval-gated review-merge dispatch; guarded durable transition on reject (illegal status → durable rejection, never throw); verbatim rejection feedback in corrective prompt appendix
-- [ ] 2.5 Zero-attestation spec deliveries rejected durably (scenario in goal-scale-decomposition delta)
-- [ ] 2.6 Post-merge gate re-check records a durable event on failure (no silent `return`); rename `change.spec_approved` → `change.spec_merged`
-- [ ] 2.7 Rehydration replays review-requested / decision / attempt-started / spec-merged events to identical gate outcomes; restart test
-- [ ] 2.8 Supervisor prompt contract: spec_review control block + flow steps (informational)
-- [ ] 2.9 Full suite + typecheck green; commit
+- [x] 2.1 Move REPRO-H4 into the manager test suite as the failing acceptance test
+- [x] 2.2 Change-registry spec-review state machine: validated-attempt tracking, one decision per attempt, idempotent same-verdict duplicates (summary excluded from identity), conflicting-verdict rejection with next-action guidance, attempt-started invalidation
+- [x] 2.3 Control-event validation for `managed_change.spec_review` (change id, worker delegation request id, approve/reject, non-empty summary)
+- [x] 2.4 Manager routing: backend-initiated `change.spec_review_requested` + bounded packet (path-hardened reads, truncation marker, visible missing-worktree message); approval-gated review-merge dispatch; guarded durable transition on reject (illegal status → durable rejection, never throw); verbatim rejection feedback in corrective prompt appendix
+- [x] 2.5 Zero-attestation spec deliveries rejected durably (scenario in goal-scale-decomposition delta)
+- [x] 2.6 Post-merge gate re-check records a durable event on failure (no silent `return`); rename `change.spec_approved` → `change.spec_merged`
+- [x] 2.7 Rehydration replays review-requested / decision / attempt-started / spec-merged events to identical gate outcomes; restart test
+- [x] 2.8 Supervisor prompt contract: spec_review control block + flow steps (informational)
+- [x] 2.9 Full suite + typecheck green; commit
 
 ## 3. Change-scoped spec budget (REPRO-H5)
 

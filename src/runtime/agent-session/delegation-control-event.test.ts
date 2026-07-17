@@ -697,3 +697,37 @@ function supervisorSession(overrides: Partial<AgentRuntimeSession> = {}): AgentR
     ...overrides,
   };
 }
+
+test("validates a Supervisor spec review control event", () => {
+  assert.deepEqual(validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_change.spec_review",
+      changeId: "change-one",
+      workerDelegationRequestId: "worker-1",
+      decision: "approve",
+      summary: "The spec is semantically sufficient.",
+    },
+    parentSession: supervisorSession(),
+  }), {
+    ok: true,
+    kind: "spec_review",
+    review: {
+      type: "managed_change.spec_review",
+      changeId: "change-one",
+      workerDelegationRequestId: "worker-1",
+      decision: "approve",
+      summary: "The spec is semantically sufficient.",
+    },
+  });
+});
+
+test("rejects malformed Supervisor spec reviews", () => {
+  for (const controlEvent of [
+    { type: "managed_change.spec_review", changeId: "", workerDelegationRequestId: "worker-1", decision: "approve", summary: "ok" },
+    { type: "managed_change.spec_review", changeId: "change-one", workerDelegationRequestId: "", decision: "approve", summary: "ok" },
+    { type: "managed_change.spec_review", changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "maybe", summary: "ok" },
+    { type: "managed_change.spec_review", changeId: "change-one", workerDelegationRequestId: "worker-1", decision: "reject", summary: "" },
+  ]) {
+    assert.equal(validateManagedControlEvent({ controlEvent, parentSession: supervisorSession() }).ok, false);
+  }
+});

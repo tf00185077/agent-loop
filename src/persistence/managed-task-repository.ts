@@ -135,6 +135,12 @@ export interface ManagedTaskRepository {
   beginAttempt(taskId: string, workerDelegationRequestId: string, runId?: string | null, goalId?: string): number;
   transition(taskId: string, status: ManagedTaskStatus, options: ManagedTaskTransitionOptions): ManagedTaskRecord;
   resetTaskForReDispatch(taskId: string, runId?: string | null, goalId?: string): ManagedTaskRecord;
+  rejectAfterPostMergeValidation(
+    taskId: string,
+    safeSummary: string,
+    runId?: string | null,
+    goalId?: string,
+  ): ManagedTaskRecord;
   recordExecutorEvidence(input: RecordExecutorEvidenceInput): ManagedTaskRecord;
   listCriterionResults(workerDelegationRequestId: string): ManagedCriterionResultRecord[];
   beginReview(input: {
@@ -401,6 +407,28 @@ export function createManagedTaskRepository(
           message: "Task reset for re-dispatch after restart recovery.",
           runtimeEventType: "managed_task.reset_for_redispatch",
           data: { taskId }, now,
+        });
+        return toManagedTask(requireTask(db, task.goalId, taskId));
+      })();
+    },
+    rejectAfterPostMergeValidation(taskId, safeSummary, runId = null, goalId) {
+      return db.transaction(() => {
+        const task = requireTask(db, goalId, taskId);
+        // `accepted` is otherwise terminal; this is the sole, audited exit for
+        // a merged spec whose goal-workspace validation failed after the fact.
+        if (task.status !== "accepted") {
+          throw new Error(`Cannot reject post-merge validation from managed task status ${task.status}.`);
+        }
+        const now = clock();
+        db.prepare("UPDATE managed_tasks SET status = 'rejected', last_safe_summary = ?, updated_at = ? WHERE id = ?")
+          .run(safeSummary, now, task.databaseId);
+        insertAuditEvent(db, {
+          goalId: task.goalId,
+          runId,
+          message: safeSummary,
+          runtimeEventType: "managed_task.post_merge_validation_rejected",
+          data: { taskId },
+          now,
         });
         return toManagedTask(requireTask(db, task.goalId, taskId));
       })();

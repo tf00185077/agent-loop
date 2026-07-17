@@ -238,6 +238,12 @@ const changeHistoryFixture: ChangeRecord[] = [
     taskIds: ["spec:change-one", "task-1"],
     hasUnmergedAttestedChanges: false,
     epochSequence: 1,
+    specReview: {
+      validatedWorkerDelegationRequestId: null,
+      reviewedWorkerDelegationRequestId: null,
+      decision: null,
+      summary: null,
+    },
   },
   {
     id: "change-two",
@@ -248,6 +254,12 @@ const changeHistoryFixture: ChangeRecord[] = [
     taskIds: ["spec:change-two"],
     hasUnmergedAttestedChanges: false,
     epochSequence: 1,
+    specReview: {
+      validatedWorkerDelegationRequestId: null,
+      reviewedWorkerDelegationRequestId: null,
+      decision: null,
+      summary: null,
+    },
   },
   {
     id: "change-three",
@@ -258,6 +270,12 @@ const changeHistoryFixture: ChangeRecord[] = [
     taskIds: ["spec:change-three"],
     hasUnmergedAttestedChanges: false,
     epochSequence: 2,
+    specReview: {
+      validatedWorkerDelegationRequestId: null,
+      reviewedWorkerDelegationRequestId: null,
+      decision: null,
+      summary: null,
+    },
   },
 ];
 

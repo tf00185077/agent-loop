@@ -7,6 +7,13 @@ import type {
 import type { GoalTaskRegistry } from "./task-registry.js";
 import { evaluateTaskSnapshotLineage } from "./managed-task-lineage.js";
 
+export interface SpecReviewState {
+  validatedWorkerDelegationRequestId: string | null;
+  reviewedWorkerDelegationRequestId: string | null;
+  decision: "approve" | "reject" | null;
+  summary: string | null;
+}
+
 export interface ChangeRecord {
   id: string;
   title: string;
@@ -19,7 +26,16 @@ export interface ChangeRecord {
   hasUnmergedAttestedChanges: boolean;
   /** Planning epoch this change belongs to (1-based). */
   epochSequence: number;
+  /** Supervisor semantic-review state for the current validated spec attempt. */
+  specReview: SpecReviewState;
 }
+
+const emptySpecReview = (): SpecReviewState => ({
+  validatedWorkerDelegationRequestId: null,
+  reviewedWorkerDelegationRequestId: null,
+  decision: null,
+  summary: null,
+});
 
 export interface EpochRecord {
   sequence: number;
@@ -180,6 +196,7 @@ export class GoalChangeRegistry {
       taskIds: [specTaskId(change.id)],
       hasUnmergedAttestedChanges: false,
       epochSequence,
+      specReview: emptySpecReview(),
     }));
   }
 
@@ -227,7 +244,95 @@ export class GoalChangeRegistry {
     }
   }
 
-  markSpecApproved(changeId: string): void {
+  /** A newly dispatched spec attempt supersedes any prior validated attempt and its decision. */
+  markSpecAttemptStarted(changeId: string, workerDelegationRequestId: string): void {
+    const change = this.getChange(changeId);
+    if (!change || change !== this.activeChange() || change.status !== "specifying" ||
+        workerDelegationRequestId.trim().length === 0) return;
+    change.specReview = emptySpecReview();
+  }
+
+  markSpecReadyForReview(changeId: string, workerDelegationRequestId: string): void {
+    const change = this.getChange(changeId);
+    if (!change || change !== this.activeChange() || change.status !== "specifying") return;
+    if (change.specReview.validatedWorkerDelegationRequestId === workerDelegationRequestId) return;
+    change.specReview = {
+      ...emptySpecReview(),
+      validatedWorkerDelegationRequestId: workerDelegationRequestId,
+    };
+  }
+
+  recordSpecReview(input: {
+    changeId: string;
+    workerDelegationRequestId: string;
+    decision: "approve" | "reject";
+    summary: string;
+  }): RegistryGate & { duplicate?: boolean } {
+    const summary = input.summary.trim();
+    if (summary.length === 0) {
+      return { ok: false, safeReason: "Spec review summary must be a non-empty string." };
+    }
+    const change = this.getChange(input.changeId);
+    if (!change) {
+      return { ok: false, safeReason: `Unknown change: ${input.changeId}` };
+    }
+    if (change !== this.activeChange() || change.status !== "specifying") {
+      return { ok: false, safeReason: `Change ${input.changeId} is not active for spec review.` };
+    }
+    const review = change.specReview;
+    if (review.validatedWorkerDelegationRequestId !== input.workerDelegationRequestId) {
+      const current = review.validatedWorkerDelegationRequestId ?? "none";
+      return {
+        ok: false,
+        safeReason: `Spec review attempt ${input.workerDelegationRequestId} is stale; current validated spec attempt is ${current}.`,
+      };
+    }
+    if (review.reviewedWorkerDelegationRequestId === input.workerDelegationRequestId) {
+      // Decision identity is (attempt, verdict); summaries are prose and never compared.
+      if (review.decision === input.decision) {
+        return { ok: true, duplicate: true };
+      }
+      const guidance = review.decision === "approve"
+        ? `request review-merge for attempt ${input.workerDelegationRequestId}`
+        : "dispatch a corrective spec attempt";
+      return {
+        ok: false,
+        safeReason:
+          `Spec attempt ${input.workerDelegationRequestId} is already ` +
+          `${review.decision === "approve" ? "approved" : "rejected"}; ${guidance}.`,
+      };
+    }
+    review.reviewedWorkerDelegationRequestId = input.workerDelegationRequestId;
+    review.decision = input.decision;
+    review.summary = summary;
+    return { ok: true, duplicate: false };
+  }
+
+  gateSpecReviewMerge(changeId: string, workerDelegationRequestId: string): RegistryGate {
+    const change = this.getChange(changeId);
+    if (!change) {
+      return { ok: false, safeReason: `Unknown change: ${changeId}` };
+    }
+    if (change !== this.activeChange() || change.status !== "specifying") {
+      return { ok: false, safeReason: `Change ${changeId} is not active for spec review.` };
+    }
+    const review = change.specReview;
+    if (
+      review.validatedWorkerDelegationRequestId === workerDelegationRequestId &&
+      review.reviewedWorkerDelegationRequestId === workerDelegationRequestId &&
+      review.decision === "approve"
+    ) {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      safeReason:
+        `Spec task ${specTaskId(changeId)} attempt ${workerDelegationRequestId} requires ` +
+        "Supervisor approval before review-merge.",
+    };
+  }
+
+  markSpecMerged(changeId: string): void {
     const change = this.getChange(changeId);
     if (change && change.status === "specifying") {
       change.status = "executing";

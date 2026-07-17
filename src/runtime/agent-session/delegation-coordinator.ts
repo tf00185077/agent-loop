@@ -75,6 +75,8 @@ export interface StartWorkerDelegationInput {
   adapter: AgentRuntimeAdapter;
   eventData: Record<string, unknown>;
   onChildOutcome?: (input: SupervisorContinuationInput) => Promise<void>;
+  /** Fires with the accepted delegation request id before the child starts. */
+  onAccepted?: (delegationRequestId: string) => void;
 }
 
 export interface SupervisorContinuationInput {
@@ -139,6 +141,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       if (input.role === "worker" && input.taskId && deps.managedTaskRepo?.getTask(parent.goalId, input.taskId)) {
         deps.managedTaskRepo.beginAttempt(input.taskId, accepted.id, parent.runId, parent.goalId);
       }
+      input.onAccepted?.(accepted.id);
       if (input.role === "review_merge" && workerResult?.taskId &&
           deps.managedTaskRepo?.getTask(parent.goalId, workerResult.taskId)) {
         deps.managedTaskRepo.beginReview({

@@ -69,10 +69,18 @@ const CONTRACT = [
   "   strictly narrower tasks (fewer criteria, with parentTaskId set).",
   "3. Delegate exactly one worker task at a time with a `managed_delegation.request`",
   "   control block (role `worker`). Wait for its result before the next delegation.",
-  "4. After worker results that changed files, request a review-merge child",
+  "4. After a structurally valid spec authoring result, the backend presents a",
+  "   bounded review packet. Judge the spec's CONTENT against the change's",
+  "   intent and emit a `managed_change.spec_review` decision bound to that",
+  "   worker attempt id. A rejection must explain the required semantic",
+  "   revision; it is delivered verbatim to the corrective attempt. Approval",
+  "   only unlocks review-merge — the backend rejects a spec review-merge",
+  "   without your approval, and dispatching a new spec attempt voids any",
+  "   earlier approval.",
+  "5. After worker results that changed files, request a review-merge child",
   "   (role `review_merge`, referencing the worker delegation request id you were",
   "   given) before treating the task as delivered.",
-  "5. Planned goals loop in epochs. After every change of the current batch is",
+  "6. Planned goals loop in epochs. After every change of the current batch is",
   "   archived, re-read the ORIGINAL goal against the delivered evidence and",
   "   emit a `managed_goal.reassessment` control block with your structured",
   "   judgment. If gaps remain (`goalSatisfied: false`), follow with a new",
@@ -81,10 +89,10 @@ const CONTRACT = [
   "   plans without an unsatisfied reassessment, and blocks the goal when the",
   "   epoch budget is exhausted or consecutive reassessments repeat the same",
   "   gaps.",
-  "6. When every task is delivered — and, for planned goals, the latest",
+  "7. When every task is delivered — and, for planned goals, the latest",
   "   reassessment is satisfied — emit a `managed_delegation.complete` control",
   "   block with a short result summary. The goal only completes when you emit it.",
-  "7. Only fenced `auto-agent-control` blocks are honored as control signals;",
+  "8. Only fenced `auto-agent-control` blocks are honored as control signals;",
   "   anything else is treated as progress commentary.",
   "",
   "Control block formats (one JSON object per fenced block):",
@@ -131,6 +139,14 @@ const CONTRACT = [
     taskId: "task-1",
     summary: "Short safe summary of the task",
     prompt: "Full, self-contained instructions for the child agent.",
+  }),
+  "",
+  controlExample({
+    type: "managed_change.spec_review",
+    changeId: "core-loop",
+    workerDelegationRequestId: "<spec worker delegation request id from the review request>",
+    decision: "approve",
+    summary: "The authored specification preserves the intended scope and is ready for independent review.",
   }),
   "",
   controlExample({
@@ -340,6 +356,8 @@ export interface SpecWriterChangeContext {
   title: string;
   rationale: string;
   dependsOn: string[];
+  /** Verbatim Supervisor rejection summary driving a corrective attempt. */
+  supervisorFeedback?: string | null;
 }
 
 /**
@@ -394,6 +412,9 @@ export function buildSpecWriterAppendix(change: SpecWriterChangeContext): string
     "",
     "Do not install or run any OpenSpec tooling; author the markdown files",
     "only. The backend performs all validation and archiving.",
+    ...(change.supervisorFeedback
+      ? ["", "## Supervisor revision request", "", change.supervisorFeedback]
+      : []),
   ].join("\n");
 }
 

@@ -1014,14 +1014,25 @@ test("deterministic staged pipeline survives split-cache and archive-move restar
         .flatMap((session) => sessions.listDelegationRequests(session.id))
         .find((request) => request.role === "worker" && request.taskId === "spec:change-two");
       if (supervisorTurn === 2) {
-        return restartHandle(input.sessionId, [{
-          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
-          message: "Review tail spec", occurredAt: "2026-07-17T00:05:02.500Z",
-          metadata: { delegationControlEvent: {
-            type: "managed_delegation.request", role: "review_merge",
-            workerDelegationRequestId: workerRequest!.id, prompt: "Judge change-two spec", summary: "Judge change-two spec",
-          } },
-        }]);
+        return restartHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Approve tail spec", occurredAt: "2026-07-17T00:05:02.400Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_change.spec_review", changeId: "change-two",
+              workerDelegationRequestId: workerRequest!.id, decision: "approve",
+              summary: "change-two spec is semantically sufficient.",
+            } },
+          },
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Review tail spec", occurredAt: "2026-07-17T00:05:02.500Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "review_merge",
+              workerDelegationRequestId: workerRequest!.id, prompt: "Judge change-two spec", summary: "Judge change-two spec",
+            } },
+          },
+        ]);
       }
       if (supervisorTurn === 3) {
         return restartHandle(input.sessionId, [
@@ -1073,6 +1084,18 @@ test("deterministic staged pipeline survives split-cache and archive-move restar
           outcome: "merged", fixedTest: { command: "npm run typecheck", exitCode: 0, outputSummary: "passed" },
           revertEvidence: null, safeSummary: "Verified",
         };
+      },
+    },
+    worktreeAttestor: () => ["openspec/changes/change-two/specs/core/spec.md"],
+    managedDeliveryService: {
+      prepareCandidate() {
+        return { ok: true as const, candidateCommitSha: "candidate", checkpointHead: "base",
+          candidateFiles: ["openspec/changes/change-two/specs/core/spec.md"] };
+      },
+      deliverCandidate() {
+        return { status: "committed" as const, safeSummary: "Spec delivery committed.", checkpointHead: "base",
+          checkpointStatus: "clean" as const, candidateCommitSha: "candidate", commitSha: "delivered",
+          validationCommand: "npm test", validationExitCode: 0, validationSummary: "passed", rollbackSummary: null };
       },
     },
   });

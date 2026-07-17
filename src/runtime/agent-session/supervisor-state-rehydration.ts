@@ -1,6 +1,6 @@
 import type { Event, ManagedChangePlanEntry, ManagedTaskStatus } from "../../domain/index.js";
 import type { ManagedTaskRepository } from "../../persistence/managed-task-repository.js";
-import { GoalChangeRegistry } from "./change-registry.js";
+import { GoalChangeRegistry, specTaskId } from "./change-registry.js";
 import { GoalTaskRegistry, type CriterionOutcome, type TaskRecord, type TaskStatus } from "./task-registry.js";
 
 /**
@@ -63,10 +63,52 @@ export function rehydrateChangeRegistry(
       });
       continue;
     }
-    const changeId = event.data.changeId;
-    if (typeof changeId !== "string") continue;
-    if (type === "change.spec_approved") changeRegistry.markSpecApproved(changeId);
-    else if (type === "change.archived") changeRegistry.markArchived(changeId);
+    const eventTaskId = event.data.taskId;
+    const changeId = typeof event.data.changeId === "string"
+      ? event.data.changeId
+      : type === "managed_task.attempt_started" && typeof eventTaskId === "string" && eventTaskId.startsWith("spec:")
+        ? eventTaskId.slice("spec:".length)
+        : undefined;
+    if (typeof changeId !== "string" || changeId.length === 0) continue;
+    const workerDelegationRequestId = event.data.workerDelegationRequestId;
+    const summary = event.data.summary;
+    if (
+      type === "managed_task.attempt_started" &&
+      eventTaskId === specTaskId(changeId) &&
+      typeof workerDelegationRequestId === "string" &&
+      workerDelegationRequestId.trim().length > 0
+    ) {
+      changeRegistry.markSpecAttemptStarted(changeId, workerDelegationRequestId);
+    } else if (
+      type === "change.spec_review_requested" &&
+      typeof workerDelegationRequestId === "string" &&
+      workerDelegationRequestId.length > 0
+    ) {
+      changeRegistry.markSpecReadyForReview(changeId, workerDelegationRequestId);
+    } else if (
+      (type === "change.spec_supervisor_approved" || type === "change.spec_supervisor_rejected") &&
+      typeof workerDelegationRequestId === "string" &&
+      workerDelegationRequestId.length > 0 &&
+      typeof summary === "string" &&
+      summary.trim().length > 0
+    ) {
+      changeRegistry.recordSpecReview({
+        changeId,
+        workerDelegationRequestId,
+        decision: type === "change.spec_supervisor_approved" ? "approve" : "reject",
+        summary,
+      });
+    } else if (
+      type === "change.spec_merged" &&
+      typeof workerDelegationRequestId === "string" &&
+      workerDelegationRequestId.trim().length > 0 &&
+      changeRegistry.gateSpecReviewMerge(changeId, workerDelegationRequestId).ok
+    ) {
+      changeRegistry.markSpecMerged(changeId);
+    } else if (type === "change.spec_approved") {
+      // Legacy pre-gate event name: replayed ungated as a historical fact.
+      changeRegistry.markSpecMerged(changeId);
+    } else if (type === "change.archived") changeRegistry.markArchived(changeId);
     else if (type === "change.blocked") changeRegistry.markBlocked(changeId);
   }
   if (!changeRegistry.hasPlan()) return;

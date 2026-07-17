@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -1839,6 +1839,11 @@ test("direct narrowing advances archive, next change, reassessment, and completi
           }, "2026-07-17T00:00:01.000Z");
           await gates[0]!.promise;
           yield control(input, {
+            type: "managed_change.spec_review", changeId: "change-one",
+            workerDelegationRequestId: latestWorkerId(), decision: "approve",
+            summary: "change-one spec is semantically sufficient.",
+          }, "2026-07-17T00:00:01.500Z");
+          yield control(input, {
             type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: latestWorkerId(),
             prompt: "Judge and review merge change-one specs.", summary: "Review change-one specs.",
           }, "2026-07-17T00:00:02.000Z");
@@ -1882,6 +1887,11 @@ test("direct narrowing advances archive, next change, reassessment, and completi
             prompt: "Author change-two specs.", summary: "Author change-two specs.",
           }, "2026-07-17T00:00:11.000Z");
           await gates[8]!.promise;
+          yield control(input, {
+            type: "managed_change.spec_review", changeId: "change-two",
+            workerDelegationRequestId: latestWorkerId(), decision: "approve",
+            summary: "change-two spec is semantically sufficient.",
+          }, "2026-07-17T00:00:11.500Z");
           yield control(input, {
             type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: latestWorkerId(),
             prompt: "Judge and review merge change-two specs.", summary: "Review change-two specs.",
@@ -3524,6 +3534,23 @@ test("approves the spec change only after a merged review validates the goal wor
             sessionId: input.sessionId,
             goalId: input.goalId,
             runId: input.runId,
+            message: "Approving the validated spec attempt.",
+            occurredAt: "2026-07-13T00:00:03.500Z",
+            metadata: {
+              delegationControlEvent: {
+                type: "managed_change.spec_review",
+                changeId: "change-one",
+                workerDelegationRequestId: workerRequest?.id ?? "missing",
+                decision: "approve",
+                summary: "change-one spec is semantically sufficient.",
+              },
+            },
+          } satisfies AgentRuntimeEvent;
+          yield {
+            type: "progress",
+            sessionId: input.sessionId,
+            goalId: input.goalId,
+            runId: input.runId,
             message: "Requesting spec review merge.",
             occurredAt: "2026-07-13T00:00:04.000Z",
             metadata: {
@@ -3558,11 +3585,11 @@ test("approves the spec change only after a merged review validates the goal wor
   await waitFor(() =>
     fixture.eventRepo
       .listForGoal(fixture.goal.id)
-      .some((event) => event.data.runtimeEventType === "change.spec_approved"),
+      .some((event) => event.data.runtimeEventType === "change.spec_merged"),
   );
 
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
-  const approved = events.find((event) => event.data.runtimeEventType === "change.spec_approved");
+  const approved = events.find((event) => event.data.runtimeEventType === "change.spec_merged");
   assert.ok(approved);
   assert.equal(approved.data.changeId, "change-one");
   // Pre-merge validation ran in the worker worktree; post-merge in the goal workspace.
@@ -3573,9 +3600,9 @@ test("approves the spec change only after a merged review validates the goal wor
     openSpec.validated.map((call) => call.changeId),
     ["change-one", "change-one"],
   );
-  // Approval only lands after the merged review outcome.
+  // The merged transition only lands after the merged review outcome.
   const mergedIndex = events.findIndex((event) => event.data.runtimeEventType === "review_merge.apply_outcome");
-  const approvedIndex = events.findIndex((event) => event.data.runtimeEventType === "change.spec_approved");
+  const approvedIndex = events.findIndex((event) => event.data.runtimeEventType === "change.spec_merged");
   assert.ok(mergedIndex >= 0 && approvedIndex > mergedIndex);
 
   fixture.db.close();
@@ -3798,6 +3825,17 @@ test("gates change archives on merged evidence and goal completion on all change
           yield controlEvent(
             input,
             {
+              type: "managed_change.spec_review",
+              changeId: "change-one",
+              workerDelegationRequestId: latestWorkerRequestId(input.sessionId),
+              decision: "approve",
+              summary: "change-one spec is semantically sufficient.",
+            },
+            "2026-07-13T00:00:04.500Z",
+          );
+          yield controlEvent(
+            input,
+            {
               type: "managed_delegation.request",
               role: "review_merge",
               workerDelegationRequestId: latestWorkerRequestId(input.sessionId),
@@ -3863,6 +3901,17 @@ test("gates change archives on merged evidence and goal completion on all change
             "2026-07-13T00:00:10.000Z",
           );
           await gates[4]!.promise;
+          yield controlEvent(
+            input,
+            {
+              type: "managed_change.spec_review",
+              changeId: "change-two",
+              workerDelegationRequestId: latestWorkerRequestId(input.sessionId),
+              decision: "approve",
+              summary: "change-two spec is semantically sufficient.",
+            },
+            "2026-07-13T00:00:10.500Z",
+          );
           yield controlEvent(
             input,
             {
@@ -3971,7 +4020,9 @@ test("gates change archives on merged evidence and goal completion on all change
   const changeLifecycleTypes = new Set([
     "supervisor.change_plan",
     "change.activated",
-    "change.spec_approved",
+    "change.spec_review_requested",
+    "change.spec_supervisor_approved",
+    "change.spec_merged",
     "change.archive_blocked",
     "change.archived",
     "delegation.rejected",
@@ -3984,12 +4035,16 @@ test("gates change archives on merged evidence and goal completion on all change
   assert.deepEqual(lifecycle, [
     ["supervisor.change_plan", null],
     ["change.activated", "change-one"],
-    ["change.spec_approved", "change-one"],
+    ["change.spec_review_requested", "change-one"],
+    ["change.spec_supervisor_approved", "change-one"],
+    ["change.spec_merged", "change-one"],
     ["change.archive_blocked", "change-one"],
     ["change.archived", "change-one"],
     ["change.activated", "change-two"],
     ["delegation.rejected", null],
-    ["change.spec_approved", "change-two"],
+    ["change.spec_review_requested", "change-two"],
+    ["change.spec_supervisor_approved", "change-two"],
+    ["change.spec_merged", "change-two"],
     ["change.archived", "change-two"],
     ["delegation.rejected", null],
     ["supervisor.reassessment", null],
@@ -4094,14 +4149,25 @@ test("writes a durable archive intent before workspace mutation and finalizes on
       }
       const workerId = allRequests().find((request) => request.role === "worker")!.id;
       if (supervisorTurn === 2) {
-        return createHandle(input.sessionId, [{
-          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
-          message: "Review spec.", occurredAt: "2026-07-17T00:00:03.500Z",
-          metadata: { delegationControlEvent: {
-            type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: workerId,
-            prompt: "Judge spec.", summary: "Judge spec.",
-          } },
-        }]);
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Approve spec.", occurredAt: "2026-07-17T00:00:03.400Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_change.spec_review", changeId: "change-one",
+              workerDelegationRequestId: workerId, decision: "approve",
+              summary: "change-one spec is semantically sufficient.",
+            } },
+          },
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Review spec.", occurredAt: "2026-07-17T00:00:03.500Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: workerId,
+              prompt: "Judge spec.", summary: "Judge spec.",
+            } },
+          },
+        ]);
       }
       return createHandle(input.sessionId, [
         {
@@ -4124,6 +4190,18 @@ test("writes a durable archive intent before workspace mutation and finalizes on
   const manager = createAgentSessionManager({
     ...fixture, database: fixture.db, managedTaskRepo, openSpecWorkspaceService: openSpec,
     supervisorCwd: "C:\\goal-workspace",
+    worktreeAttestor: () => ["openspec/changes/change-one/proposal.md"],
+    managedDeliveryService: {
+      prepareCandidate() {
+        return { ok: true as const, candidateCommitSha: "candidate", checkpointHead: "base",
+          candidateFiles: ["openspec/changes/change-one/proposal.md"] };
+      },
+      deliverCandidate() {
+        return { status: "committed" as const, safeSummary: "Spec delivery committed.", checkpointHead: "base",
+          checkpointStatus: "clean" as const, candidateCommitSha: "candidate", commitSha: "delivered",
+          validationCommand: "npm test", validationExitCode: 0, validationSummary: "passed", rollbackSummary: null };
+      },
+    },
   });
 
   await manager.startManagedSession({
@@ -4690,14 +4768,25 @@ test("ambiguous archive topology is durably blocked with a sanitized reason", as
         .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id))
         .find((request) => request.role === "worker")!.id;
       if (supervisorTurn === 2) {
-        return createHandle(input.sessionId, [{
-          type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
-          message: "Review", occurredAt: "2026-07-17T00:00:03.000Z",
-          metadata: { delegationControlEvent: {
-            type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: workerId,
-            prompt: "Judge spec", summary: "Judge spec",
-          } },
-        }]);
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Approve", occurredAt: "2026-07-17T00:00:02.900Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_change.spec_review", changeId: "change-one",
+              workerDelegationRequestId: workerId, decision: "approve",
+              summary: "change-one spec is semantically sufficient.",
+            } },
+          },
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Review", occurredAt: "2026-07-17T00:00:03.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: workerId,
+              prompt: "Judge spec", summary: "Judge spec",
+            } },
+          },
+        ]);
       }
       return createHandle(input.sessionId, [{
         type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
@@ -4709,6 +4798,18 @@ test("ambiguous archive topology is durably blocked with a sanitized reason", as
   const manager = createAgentSessionManager({
     ...fixture, database: fixture.db, managedTaskRepo: tasks,
     openSpecWorkspaceService: openSpec, supervisorCwd: "C:\\goal-workspace", maxSupervisorContinuations: 0,
+    worktreeAttestor: () => ["openspec/changes/change-one/proposal.md"],
+    managedDeliveryService: {
+      prepareCandidate() {
+        return { ok: true as const, candidateCommitSha: "candidate", checkpointHead: "base",
+          candidateFiles: ["openspec/changes/change-one/proposal.md"] };
+      },
+      deliverCandidate() {
+        return { status: "committed" as const, safeSummary: "Spec delivery committed.", checkpointHead: "base",
+          checkpointStatus: "clean" as const, candidateCommitSha: "candidate", commitSha: "delivered",
+          validationCommand: "npm test", validationExitCode: 0, validationSummary: "passed", rollbackSummary: null };
+      },
+    },
   });
 
   await manager.startManagedSession({
@@ -4835,6 +4936,18 @@ function* specFlow(
     at(0),
   );
   yield tools.gates[firstGate]!.promise;
+  // The Supervisor approval gate: review-merge for a spec attempt is rejected
+  // until the validated attempt carries an approve decision.
+  yield tools.controlEvent(
+    {
+      type: "managed_change.spec_review",
+      changeId,
+      workerDelegationRequestId: tools.latestWorkerRequestId(),
+      decision: "approve",
+      summary: `Spec for ${changeId} is semantically sufficient.`,
+    },
+    at(1),
+  );
   yield tools.controlEvent(
     {
       type: "managed_delegation.request",
@@ -5850,5 +5963,310 @@ test("contains control-path faults durably instead of killing the event pump", a
     fixture.agentSessionRepo.getSession(result.session.id)?.lifecycleState,
     "failed",
   );
+  fixture.db.close();
+});
+
+test("REPRO-H4: a validated spec result requires a Supervisor review gate before review-merge", async () => {
+  const fixture = createManagerFixture("repro semantic spec review gate");
+  const openSpec = recordingOpenSpecService("cli");
+  const adapter = scriptedEpochAdapter(fixture, 2, (_input, tools) =>
+    runScript(
+      (function* () {
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-one", title: "Change one", rationale: "Only slice." }],
+          },
+          "2026-07-13T00:00:01.000Z",
+        );
+        // Deliberately no managed_change.spec_review: the review-merge request
+        // below must be rejected by the approval gate.
+        yield tools.controlEvent(
+          {
+            type: "managed_delegation.request",
+            role: "worker",
+            taskId: "spec:change-one",
+            prompt: "Author change-one specs.",
+            summary: "Author change-one specs.",
+          },
+          "2026-07-13T00:00:02.000Z",
+        );
+        yield tools.gates[0]!.promise;
+        yield tools.controlEvent(
+          {
+            type: "managed_delegation.request",
+            role: "review_merge",
+            workerDelegationRequestId: tools.latestWorkerRequestId(),
+            prompt: "Merge change-one specs.",
+            summary: "Merge change-one specs.",
+          },
+          "2026-07-13T00:00:03.000Z",
+        );
+        // A rejected control block does not resume the session; the script
+        // ends here and the rejection is observed durably.
+      })(),
+    ),
+  );
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id).some((event) =>
+    event.data.runtimeEventType === "change.spec_approved" ||
+    (event.data.runtimeEventType === "delegation.rejected" &&
+      /approv/i.test(String(event.data.safeReason)))));
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  assert.ok(
+    events.some((event) => event.data.runtimeEventType === "change.spec_review_requested"),
+    "backend must request a Supervisor semantic review after a structurally valid spec result",
+  );
+  assert.ok(
+    events.some((event) =>
+      event.data.runtimeEventType === "delegation.rejected" &&
+      /approv/i.test(String(event.data.safeReason))),
+    "review-merge without a Supervisor spec approval must be rejected",
+  );
+  fixture.db.close();
+});
+
+function createSpecReviewWorktree(changeId: string): string {
+  const cwd = mkdtempSync(join(tmpdir(), "auto-agent-spec-review-"));
+  const root = join(cwd, "openspec", "changes", changeId);
+  mkdirSync(join(root, "specs", "capability"), { recursive: true });
+  writeFileSync(join(root, "proposal.md"), "# Proposal\n\nBounded review packet content.\n");
+  writeFileSync(join(root, "specs", "capability", "spec.md"), [
+    "## ADDED Requirements", "", "### Requirement: Reviewable specs", "",
+    "#### Scenario: Supervisor reviews", "- **WHEN** validation passes", "- **THEN** review is requested", "",
+  ].join("\n"));
+  writeFileSync(join(root, "tasks.md"), "- [ ] 1.1 Implement review\n  - Acceptance: focused tests pass.\n");
+  return cwd;
+}
+
+function specWorkerDelegationEvent(
+  input: { sessionId: string; goalId: string; runId: string },
+  occurredAt: string,
+): AgentRuntimeEvent {
+  return {
+    type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+    message: "Delegating spec authoring.", occurredAt,
+    metadata: { delegationControlEvent: {
+      type: "managed_delegation.request", role: "worker", taskId: "spec:change-one",
+      prompt: "Author change-one specs.", summary: "Author change-one specs.",
+    } },
+  };
+}
+
+function specReviewControlEvent(
+  input: { sessionId: string; goalId: string; runId: string },
+  controlEvent: Record<string, unknown>,
+  occurredAt: string,
+): AgentRuntimeEvent {
+  return {
+    type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+    message: "Supervisor spec review.", occurredAt, metadata: { delegationControlEvent: controlEvent },
+  };
+}
+
+test("records a Supervisor spec rejection and gives the exact feedback to the corrective worker", async () => {
+  const fixture = createManagerFixture("stateful spec rejection");
+  const worktreePath = createSpecReviewWorktree("change-one");
+  const openSpec = recordingOpenSpecService("cli");
+  const childPrompts: string[] = [];
+  const supervisorFeedback = "Add an explicit rollback scenario before approval.";
+  let supervisorStarted = false;
+  let continuationCount = 0;
+  let releaseFirst!: () => void;
+  const firstContinuation = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        childPrompts.push(input.prompt);
+        return createHandle(input.sessionId, [{
+          type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "Spec artifacts authored.", occurredAt: "2026-07-16T00:00:03.000Z",
+        }]);
+      }
+      if (supervisorStarted) return createHandle(input.sessionId, []);
+      supervisorStarted = true;
+      return {
+        ...createHandle(input.sessionId, []),
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: true, childSessions: true },
+        async *events() {
+          yield { ...changePlanEvent([
+            { id: "change-one", title: "Change one", rationale: "First slice." },
+            { id: "change-two", title: "Change two", rationale: "Second slice." },
+          ]), sessionId: input.sessionId, goalId: input.goalId, runId: input.runId } satisfies AgentRuntimeEvent;
+          yield specWorkerDelegationEvent(input, "2026-07-16T00:00:02.000Z");
+          await firstContinuation;
+          const workerId = fixture.agentSessionRepo.listDelegationRequests(input.sessionId)
+            .find((request) => request.taskId === "spec:change-one")!.id;
+          yield specReviewControlEvent(input, {
+            type: "managed_change.spec_review", changeId: "change-one",
+            workerDelegationRequestId: workerId, decision: "reject", summary: supervisorFeedback,
+          }, "2026-07-16T00:00:04.000Z");
+          yield specWorkerDelegationEvent(input, "2026-07-16T00:00:05.000Z");
+        },
+        async send() {
+          continuationCount += 1;
+          if (continuationCount === 1) releaseFirst();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+    worktreeService: {
+      async createChildWorktree() { return { path: worktreePath, label: "spec-review" }; },
+      async removeWorktree() {},
+    },
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => childPrompts.length === 2);
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const rejected = events.find((event) => event.data.runtimeEventType === "change.spec_supervisor_rejected");
+  assert.ok(rejected, "expected a durable Supervisor rejection event");
+  assert.equal(rejected.data.summary, supervisorFeedback);
+  assert.match(childPrompts[1]!, /## Supervisor revision request/);
+  assert.ok(childPrompts[1]!.includes(supervisorFeedback), "corrective prompt must carry the exact rejected summary");
+  assert.ok(events.some((event) => event.data.runtimeEventType === "change.spec_review_requested"));
+  fixture.db.close();
+});
+
+test("rejects a zero-attestation spec review without advancing the change", async () => {
+  const fixture = createManagerFixture("durable zero-attestation spec");
+  const managedTaskRepo = createManagedTaskRepository(fixture.db);
+  const openSpec = recordingOpenSpecService("cli");
+  const worktreePath = createSpecReviewWorktree("change-one");
+  let supervisorTurn = 0;
+  let specWorkerStarts = 0;
+  let judgeStarts = 0;
+  let statusBeforeCorrective: string | null = null;
+  const allDelegations = () => fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id)
+    .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id));
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        if (input.prompt.includes("Independent Judge contract")) {
+          judgeStarts += 1;
+          const workerId = allDelegations().find((request) => request.taskId === "spec:change-one")!.id;
+          return createHandle(input.sessionId, [
+            {
+              type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Spec judged.", occurredAt: "2026-07-17T01:00:04.000Z",
+              metadata: { delegationControlEvent: {
+                type: "managed_review.decision", workerDelegationRequestId: workerId, verdict: "accepted",
+                decisions: [
+                  { criterionId: "S1", outcome: "PASS", safeSummary: "OpenSpec validation passed." },
+                  { criterionId: "S2", outcome: "PASS", safeSummary: "Scenarios are complete." },
+                  { criterionId: "S3", outcome: "PASS", safeSummary: "Tasks have acceptance criteria." },
+                ],
+                safeSummary: "Spec content is acceptable.", deferredFindings: [],
+              } },
+            },
+            { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Judge completed.", occurredAt: "2026-07-17T01:00:05.000Z" },
+          ]);
+        }
+        specWorkerStarts += 1;
+        return createHandle(input.sessionId, [
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Spec evidence.", occurredAt: "2026-07-17T01:00:02.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_task.result", taskId: "spec:change-one",
+              criterionEvidence: [
+                { criterionId: "S1", evidence: "OpenSpec validation passed." },
+                { criterionId: "S2", evidence: "Each requirement has a scenario." },
+                { criterionId: "S3", evidence: "Each task has acceptance criteria." },
+              ],
+              tests: [], claimedFiles: [],
+            } },
+          },
+          { type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Spec worker completed without file changes.", occurredAt: "2026-07-17T01:00:03.000Z" },
+        ]);
+      }
+      supervisorTurn += 1;
+      if (supervisorTurn === 1) {
+        return createHandle(input.sessionId, [
+          { ...changePlanEvent([
+            { id: "change-one", title: "Change one", rationale: "First slice." },
+            { id: "change-two", title: "Change two", rationale: "Second slice." },
+          ]), sessionId: input.sessionId, goalId: input.goalId, runId: input.runId } satisfies AgentRuntimeEvent,
+          specWorkerDelegationEvent(input, "2026-07-17T01:00:01.000Z"),
+        ]);
+      }
+      if (supervisorTurn === 2) {
+        const workerId = allDelegations().find((request) => request.taskId === "spec:change-one")!.id;
+        return createHandle(input.sessionId, [
+          specReviewControlEvent(input, {
+            type: "managed_change.spec_review", changeId: "change-one", workerDelegationRequestId: workerId,
+            decision: "approve", summary: "The latest spec attempt is ready to merge.",
+          }, "2026-07-17T01:00:03.100Z"),
+          {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Requesting spec review.", occurredAt: "2026-07-17T01:00:03.200Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "review_merge", workerDelegationRequestId: workerId,
+              prompt: "Judge the approved spec attempt.", summary: "Judge approved spec attempt.",
+            } },
+          },
+        ]);
+      }
+      if (supervisorTurn === 3) {
+        statusBeforeCorrective = managedTaskRepo.getTask(input.goalId, "spec:change-one")?.status ?? null;
+        return createHandle(input.sessionId, [
+          specWorkerDelegationEvent(input, "2026-07-17T01:00:06.000Z"),
+        ]);
+      }
+      return createHandle(input.sessionId, []);
+    },
+  };
+  const manager = createAgentSessionManager({
+    ...fixture,
+    database: fixture.db,
+    managedTaskRepo,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+    worktreeService: {
+      async createChildWorktree() { return { path: worktreePath, label: "zero-attestation-spec" }; },
+      async removeWorktree() {},
+    },
+    worktreeAttestor: () => [],
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => specWorkerStarts === 2);
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  assert.equal(specWorkerStarts, 2, "the safe rejection must permit a corrective spec attempt");
+  assert.equal(judgeStarts, 1);
+  assert.ok(!events.some((event) => event.data.runtimeEventType === "change.spec_merged"));
+  assert.equal(statusBeforeCorrective, "rejected");
+  assert.equal(managedTaskRepo.getTask(fixture.goal.id, "spec:change-one")?.attemptCount, 2);
+  const delivery = managedTaskRepo.listDeliveries(fixture.goal.id, "spec:change-one")[0];
+  assert.equal(delivery?.status, "rejected");
   fixture.db.close();
 });

@@ -82,6 +82,7 @@ export type {
   ManagedControlEvent,
   ManagedControlEventType,
   ManagedGoalReassessmentControlEvent,
+  ManagedSpecReviewControlEvent,
   ManagedDelegationCompleteControlEvent,
   ManagedDelegationRequestControlEvent,
   ManagedTaskListControlEvent,

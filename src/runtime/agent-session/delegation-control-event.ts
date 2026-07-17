@@ -5,6 +5,7 @@ import type {
   ManagedChangePlanEntry,
   ManagedTaskListEntry,
   ManagedReviewDecisionControlEvent,
+  ManagedSpecReviewControlEvent,
   ManagedIntegrationResultControlEvent,
   TaskAcceptanceCriterion,
   TaskCriterionEvidence,
@@ -247,6 +248,7 @@ export type ManagedControlEventValidationResult =
   | { ok: true; kind: "task_list"; tasks: ManagedTaskListEntry[]; changeId: string | null }
   | { ok: true; kind: "task_result"; result: ManagedTaskResult }
   | { ok: true; kind: "change_plan"; plan: ManagedChangePlan }
+  | { ok: true; kind: "spec_review"; review: ManagedSpecReviewControlEvent }
   | { ok: true; kind: "reassessment"; reassessment: GoalReassessment }
   | { ok: false; safeReason: string };
 
@@ -284,6 +286,10 @@ export function validateManagedControlEvent(
     return validateChangePlan(input.controlEvent.changes);
   }
 
+  if (input.controlEvent.type === "managed_change.spec_review") {
+    return validateSpecReview(input.controlEvent);
+  }
+
   if (input.controlEvent.type === "managed_goal.reassessment") {
     return validateGoalReassessment(input.controlEvent);
   }
@@ -291,6 +297,41 @@ export function validateManagedControlEvent(
   return {
     ok: false,
     safeReason: `Unsupported control event type: ${String(input.controlEvent.type)}.`,
+  };
+}
+
+function validateSpecReview(
+  controlEvent: Record<string, unknown>,
+): ManagedControlEventValidationResult {
+  if (typeof controlEvent.changeId !== "string" || controlEvent.changeId.trim().length === 0) {
+    return { ok: false, safeReason: "Spec review change id must be a non-empty string." };
+  }
+  if (
+    typeof controlEvent.workerDelegationRequestId !== "string" ||
+    controlEvent.workerDelegationRequestId.trim().length === 0
+  ) {
+    return {
+      ok: false,
+      safeReason: "Spec review worker delegation request id must be a non-empty string.",
+    };
+  }
+  const decision = typeof controlEvent.decision === "string" ? controlEvent.decision.trim() : "";
+  if (decision !== "approve" && decision !== "reject") {
+    return { ok: false, safeReason: "Spec review decision must be approve or reject." };
+  }
+  if (typeof controlEvent.summary !== "string" || controlEvent.summary.trim().length === 0) {
+    return { ok: false, safeReason: "Spec review summary must be a non-empty string." };
+  }
+  return {
+    ok: true,
+    kind: "spec_review",
+    review: {
+      type: "managed_change.spec_review",
+      changeId: controlEvent.changeId.trim(),
+      workerDelegationRequestId: controlEvent.workerDelegationRequestId.trim(),
+      decision,
+      summary: controlEvent.summary.trim(),
+    },
   };
 }
 
