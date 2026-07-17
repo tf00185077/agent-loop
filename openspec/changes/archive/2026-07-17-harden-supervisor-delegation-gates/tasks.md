@@ -44,6 +44,6 @@ first. Commit at the end of every task group.
 
 ## 5. Verification and closeout
 
-- [ ] 5.1 Reset dev SQLite state (documented; schema/event changes are not migrated for in-flight dev goals)
-- [ ] 5.2 Live smoke per CLAUDE.md: start API, create+start a planned goal, drive spec review → approval → merge, force one spec-budget block and one reworded-gap breaker trip; record timeline evidence in `verification.md`
-- [ ] 5.3 Delete `repro/` (tests now live in the suite), sync delta specs, archive the change
+- [x] 5.1 Reset dev SQLite state (documented; schema/event changes are not migrated for in-flight dev goals)
+- [x] 5.2 Live smoke per CLAUDE.md: start API, create+start a planned goal, drive spec review → approval → merge, force one spec-budget block and one reworded-gap breaker trip; record timeline evidence in `verification.md`
+- [x] 5.3 Delete `repro/` (tests now live in the suite), sync delta specs, archive the change

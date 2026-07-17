@@ -21,6 +21,8 @@ The system SHALL register one synthetic spec-writing task per planned change wit
 - **WHEN** an accepted spec attempt carries no attested file changes
 - **THEN** the backend rejects the delivery durably and the change remains in specifying with a corrective attempt required
 
+## ADDED Requirements
+
 ### Requirement: Spec budget exhaustion blocks the change, not the goal
 When a change's spec-authoring task exhausts its retry budget, the system SHALL durably block that change (`change.blocked` with the exhausted-budget reason), SHALL leave the goal status unchanged, and SHALL return a rejection observation that names reassessment and next-epoch re-planning as the recovery route. The goal SHALL transition to a terminal state only through the macro-loop bounds (epoch budget, repeated-gap circuit breaker) or explicit completion.
 
