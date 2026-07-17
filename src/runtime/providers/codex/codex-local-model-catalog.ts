@@ -5,6 +5,7 @@ import type {
   CodexModelCatalogResult,
   CodexModelCatalogSource,
 } from "../../../domain/index.js";
+import { killProcessTree } from "../process-tree.js";
 
 /**
  * Visibility values that mark a catalog entry as selectable in a list. Any
@@ -191,7 +192,7 @@ function runCodexCatalogCommand(request: CodexModelCatalogCommandRequest): Promi
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill();
+      killProcessTree(child);
       reject(new Error("Codex CLI model catalog command timed out"));
     }, request.timeoutMs);
 

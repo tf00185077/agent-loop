@@ -6636,3 +6636,86 @@ test("distinct gap refs admit the next epoch; unknown refs are rejected with the
   assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "running");
   fixture.db.close();
 });
+
+test("cancelling a supervisor session cancels its in-flight child sessions first", async () => {
+  const fixture = createManagerFixture("cascade cancel goal");
+  const controls: string[] = [];
+  let supervisorSessionId = "";
+  let childStarted = false;
+  let releaseSupervisor!: () => void;
+  const supervisorGate = new Promise<void>((resolve) => { releaseSupervisor = resolve; });
+  let releaseChild!: () => void;
+  const childGate = new Promise<void>((resolve) => { releaseChild = resolve; });
+  const adapter: AgentRuntimeAdapter = {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      if (input.parent?.sessionId) {
+        childStarted = true;
+        return {
+          sessionId: input.sessionId,
+          capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: false },
+          async *events() {
+            await childGate;
+            yield {
+              type: "session.cancelled", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+              message: "Child cancelled", occurredAt: "2026-07-17T00:00:03.000Z",
+            } satisfies AgentRuntimeEvent;
+          },
+          async send() {},
+          async approve() {},
+          async reject() {},
+          async cancel() {
+            controls.push("child-cancelled");
+            releaseChild();
+          },
+        };
+      }
+      supervisorSessionId = input.sessionId;
+      return {
+        sessionId: input.sessionId,
+        capabilities: { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true },
+        async *events() {
+          yield {
+            type: "progress", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Delegating.", occurredAt: "2026-07-17T00:00:01.000Z",
+            metadata: { delegationControlEvent: {
+              type: "managed_delegation.request", role: "worker",
+              prompt: "Do the work.", summary: "Do the work.",
+            } },
+          } satisfies AgentRuntimeEvent;
+          await supervisorGate;
+          yield {
+            type: "session.cancelled", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+            message: "Supervisor cancelled", occurredAt: "2026-07-17T00:00:04.000Z",
+          } satisfies AgentRuntimeEvent;
+        },
+        async send() {},
+        async approve() {},
+        async reject() {},
+        async cancel() {
+          controls.push("supervisor-cancelled");
+          releaseSupervisor();
+        },
+      };
+    },
+  };
+  const manager = createAgentSessionManager({ ...fixture, supervisorCwd: "C:\\goal-workspace" });
+
+  const running = manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => childStarted);
+
+  assert.equal(await manager.cancel(supervisorSessionId, "operator stop"), true);
+  await running;
+
+  assert.deepEqual(
+    controls,
+    ["child-cancelled", "supervisor-cancelled"],
+    "the in-flight child must be cancelled before (and along with) its supervisor",
+  );
+  fixture.db.close();
+});

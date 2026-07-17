@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { describeCodexModelLabel, resolveCodexModelArgument } from "../../../domain/index.js";
 import type { ModelProvider, ModelProviderInput, ModelProviderOutput } from "../model-provider.js";
 import { createCodexJsonlParser, type CodexJsonlParsedResult } from "./codex-jsonl-parser.js";
+import { killProcessTree } from "../process-tree.js";
 
 export interface CodexCliProviderConfig {
   /** Resolved Codex CLI command path (absolute) used to spawn Codex directly. */
@@ -239,7 +240,7 @@ function spawnCodex(
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill();
+      killProcessTree(child);
       reject(new CodexCliProviderError(formatTimeoutMessage(timeoutMs, diagnostics, stderr)));
     }, timeoutMs);
 

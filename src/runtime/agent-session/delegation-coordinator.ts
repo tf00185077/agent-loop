@@ -2,6 +2,7 @@ import type {
   AgentRuntimeAdapter,
   AgentRuntimeDelegationRole,
   AgentRuntimeDelegationSummary,
+  AgentSessionHandle,
   AgentRuntimeEvent,
   AgentRuntimeReviewMergeApplyOutcome,
   AgentRuntimeReviewMergeCheckpoint,
@@ -45,6 +46,12 @@ export interface DelegationCoordinatorDeps {
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;
   managedTaskRepo?: ManagedTaskRepository;
+  /**
+   * Live session handles keyed by session id. When provided, child handles
+   * are registered for their lifetime so a supervisor cancel can cascade to
+   * in-flight children (otherwise their provider processes keep running).
+   */
+  activeHandles?: Map<string, AgentSessionHandle>;
 }
 
 export interface StartWorkerDelegationInput {
@@ -270,6 +277,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
         },
       });
 
+      deps.activeHandles?.set(childSession.id, handle);
       // Fire-and-forget child consumption; any otherwise-unhandled rejection is
       // routed into the durable safety net so a failing child loop can never be
       // an unobserved promise rejection.
@@ -304,6 +312,8 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
             error: err,
           },
         );
+      }).finally(() => {
+        deps.activeHandles?.delete(childSession.id);
       });
     },
   };

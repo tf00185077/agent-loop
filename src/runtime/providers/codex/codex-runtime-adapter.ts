@@ -12,6 +12,7 @@ import { resolveCodexModelArgument } from "../../../domain/index.js";
 import type { AgentObservation } from "../../../domain/index.js";
 import { extractControlBlocks } from "../../agent-session/control-block.js";
 import { createCodexJsonlParser, type CodexJsonlParsedResult } from "./codex-jsonl-parser.js";
+import { killProcessTree } from "../process-tree.js";
 
 export interface CodexRuntimeAdapterOptions {
   commandPath: string;
@@ -183,7 +184,7 @@ async function* runCodexJsonlSession(input: CodexRuntimeSessionRunnerInput): Asy
     });
     child.on("close", (code) => resolve({ code }));
   });
-  input.signal.addEventListener("abort", () => child.kill(), { once: true });
+  input.signal.addEventListener("abort", () => killProcessTree(child), { once: true });
 
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {

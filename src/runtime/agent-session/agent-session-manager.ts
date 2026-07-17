@@ -355,12 +355,41 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
       );
     },
 
-    cancel(sessionId, reason) {
+    async cancel(sessionId, reason) {
+      // Cancel in-flight descendants first: an orphaned child session keeps
+      // its provider process running (and consuming quota) otherwise.
+      for (const childSessionId of listActiveDescendantSessionIds(deps, activeHandles, sessionId)) {
+        await deliverControl(activeHandles, deliveredControls, childSessionId, "cancel", (handle) =>
+          handle.cancel(reason),
+        );
+      }
       return deliverControl(activeHandles, deliveredControls, sessionId, "cancel", (handle) => handle.cancel(reason));
     },
   };
 
   return manager;
+}
+
+/**
+ * Depth-first list of a session's descendant session ids that still hold a
+ * live handle, deepest first so leaves cancel before their parents.
+ */
+function listActiveDescendantSessionIds(
+  deps: AgentSessionManagerDeps,
+  activeHandles: Map<string, AgentSessionHandle>,
+  sessionId: string,
+  seen: Set<string> = new Set(),
+): string[] {
+  if (seen.has(sessionId)) return [];
+  seen.add(sessionId);
+  const descendants: string[] = [];
+  for (const request of deps.agentSessionRepo.listDelegationRequests(sessionId)) {
+    const childSessionId = request.childSessionId;
+    if (!childSessionId || seen.has(childSessionId)) continue;
+    descendants.push(...listActiveDescendantSessionIds(deps, activeHandles, childSessionId, seen));
+    if (activeHandles.has(childSessionId)) descendants.push(childSessionId);
+  }
+  return descendants;
 }
 
 async function deliverControl(
@@ -1463,7 +1492,7 @@ async function persistDelegationControlEvent(
   const childAgent = await resolveChildAgent(deps, input, validation.request.role);
 
   try {
-    await createDelegationCoordinator(deps).acceptAndStartWorker({
+    await createDelegationCoordinator({ ...deps, activeHandles: input.activeHandles }).acceptAndStartWorker({
       parentSessionId: input.sessionId,
       providerId: childAgent.providerId,
       modelLabel: childAgent.modelLabel,
@@ -1926,7 +1955,7 @@ async function startConditionalIntegrationRecovery(
 
   const integratorAgent = await resolveChildAgent(deps, input, "integrator");
   try {
-    await createDelegationCoordinator(deps).acceptAndStartWorker({
+    await createDelegationCoordinator({ ...deps, activeHandles: input.activeHandles }).acceptAndStartWorker({
       parentSessionId: judgeOutcome.parentSessionId,
       providerId: integratorAgent.providerId,
       modelLabel: integratorAgent.modelLabel,
@@ -1977,7 +2006,7 @@ async function startConditionalIntegrationRecovery(
         });
 
         const judgeAgent = await resolveChildAgent(deps, input, "review_merge");
-        await createDelegationCoordinator(deps).acceptAndStartWorker({
+        await createDelegationCoordinator({ ...deps, activeHandles: input.activeHandles }).acceptAndStartWorker({
           parentSessionId: judgeOutcome.parentSessionId,
           providerId: judgeAgent.providerId,
           modelLabel: judgeAgent.modelLabel,

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 
 import type { ModelProvider, ModelProviderInput, ModelProviderOutput } from "../model-provider.js";
+import { killProcessTree } from "../process-tree.js";
 
 export interface ClaudeCliProviderConfig {
   /** Resolved Claude CLI command path (absolute) used to spawn Claude directly. */
@@ -86,7 +87,7 @@ function runClaudePrint(
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill();
+      killProcessTree(child);
       reject(new ClaudeCliProviderError("Claude CLI command timed out"));
     }, config.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 

@@ -8,6 +8,7 @@ import type {
   AgentSessionStartInput,
 } from "../../../domain/index.js";
 import { extractControlBlocks } from "../../agent-session/control-block.js";
+import { killProcessTree } from "../process-tree.js";
 
 export interface ClaudeRuntimeAdapterOptions {
   commandPath: string;
@@ -158,7 +159,7 @@ function runClaudePrintSession(input: ClaudeRuntimeSessionRunnerInput): Promise<
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill();
+      killProcessTree(child);
       reject(new Error("Claude managed session timed out"));
     }, input.timeoutMs);
 
@@ -168,7 +169,7 @@ function runClaudePrintSession(input: ClaudeRuntimeSessionRunnerInput): Promise<
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        child.kill();
+        killProcessTree(child);
         reject(new Error("Claude managed session cancelled"));
       },
       { once: true },
