@@ -1492,7 +1492,12 @@ async function persistDelegationControlEvent(
       }
     }
     if (worker) {
-      checkAppendix = await executeAcceptanceChecks(deps, input, worker);
+      const checks = await executeAcceptanceChecks(deps, input, worker);
+      if (checks.rejectReason) {
+        recordControlRejection(deps, input, data, checks.rejectReason);
+        return;
+      }
+      checkAppendix = checks.appendix;
     }
   }
 
@@ -2155,97 +2160,170 @@ function findDelegationForGoal(
  */
 /**
  * Backend-executed acceptance checks for a reviewed worker attempt: run each
- * checked criterion's command in the worker's worktree, persist one durable
- * execution record per criterion, and return the judge-packet appendix.
- * A check that cannot run records a visible failed execution (fail closed).
- * Returns null when the task has no checked criteria.
+ * checked criterion's command under backend authority and persist one durable
+ * execution record per run. `red_green` checks execute against the baseline
+ * first — a check that already passes there does not discriminate the change
+ * and rejects the attempt; `regression` checks require a green baseline
+ * (otherwise a contract-authoring error that charges nobody). A check that
+ * cannot run fails closed. Returns the judge-packet appendix, or a rejection
+ * reason that aborts the review dispatch.
  */
 async function executeAcceptanceChecks(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
   worker: { id: string; taskId?: string | null; childSessionId?: string | null },
-): Promise<string | null> {
-  if (!deps.managedTaskRepo || !worker.taskId) return null;
+): Promise<{ appendix: string | null; rejectReason: string | null }> {
+  if (!deps.managedTaskRepo || !worker.taskId) return { appendix: null, rejectReason: null };
+  const taskId = worker.taskId;
   const checked = deps.managedTaskRepo
-    .listCriteria(input.goalId, worker.taskId)
+    .listCriteria(input.goalId, taskId)
     .filter((criterion) => criterion.check);
-  if (checked.length === 0) return null;
+  if (checked.length === 0) return { appendix: null, rejectReason: null };
 
-  const worktreePath = worker.childSessionId
+  const candidatePath = worker.childSessionId
     ? deps.agentSessionRepo.getSession(worker.childSessionId)?.worktree?.path ?? null
     : null;
   const runner = deps.checkRunner ?? createShellCheckRunner();
+
+  // One ephemeral baseline worktree per review, at the base the worker
+  // branched from (the supervisor's current HEAD).
+  const needsBaseline = checked.some((criterion) => criterion.check!.kind !== "command");
+  const worktreeService = deps.worktreeService ?? createGitWorktreeService();
+  let baselinePath: string | null = null;
+  if (needsBaseline) {
+    try {
+      const baseline = await worktreeService.createChildWorktree({
+        parentCwd: input.state.supervisorCwd,
+        childSessionId: `check-baseline-${worker.id}`,
+      });
+      baselinePath = baseline.path;
+    } catch {
+      baselinePath = null;
+    }
+  }
+
+  const runAndRecord = async (
+    criterion: (typeof checked)[number],
+    target: "candidate" | "baseline",
+    cwd: string | null,
+  ) => {
+    const check = criterion.check!;
+    const result = cwd
+      ? await runner.run({ cwd, command: check.command, timeoutMs: check.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS })
+      : { exitCode: null, durationMs: 0, outputSummary: `${target} worktree unavailable; check could not run.`, failedToRun: true };
+    const record = deps.managedTaskRepo!.recordCheckExecution({
+      goalId: input.goalId,
+      taskId,
+      workerDelegationRequestId: worker.id,
+      criterionId: criterion.criterionId,
+      target,
+      kind: check.kind,
+      command: check.command,
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+      outputSummary: sanitizeArchiveReason(result.outputSummary || "(no output)", input.state.supervisorCwd).slice(0, 2000),
+      failedToRun: result.failedToRun,
+    });
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "agent.progress",
+      message: record.failedToRun
+        ? `Acceptance check ${criterion.criterionId} (${target}) for ${taskId} could not run.`
+        : `Acceptance check ${criterion.criterionId} (${target}) for ${taskId} exited ${record.exitCode}.`,
+      data: {
+        sessionId: input.sessionId,
+        provider: input.providerId,
+        model: input.modelLabel,
+        runtimeEventType: record.failedToRun ? "check.execution_failed" : "check.executed",
+        taskId,
+        workerDelegationRequestId: worker.id,
+        criterionId: criterion.criterionId,
+        checkKind: check.kind,
+        target,
+        exitCode: record.exitCode,
+        durationMs: record.durationMs,
+        safeReason: record.outputSummary.slice(0, 500),
+      },
+    });
+    return record;
+  };
+
   const lines = [
     "## Executed acceptance checks",
     "",
     "Backend-executed results for checked criteria (authoritative; your prose cannot override them):",
     "",
   ];
-  for (const criterion of checked) {
-    const check = criterion.check!;
-    const base = {
-      goalId: input.goalId,
-      taskId: worker.taskId,
-      workerDelegationRequestId: worker.id,
-      criterionId: criterion.criterionId,
-      target: "candidate" as const,
-      kind: check.kind,
-      command: check.command,
-    };
-    const record = worktreePath
-      ? await (async () => {
-          const result = await runner.run({
-            cwd: worktreePath,
-            command: check.command,
-            timeoutMs: check.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS,
-          });
-          return deps.managedTaskRepo!.recordCheckExecution({
-            ...base,
-            exitCode: result.exitCode,
-            durationMs: result.durationMs,
-            outputSummary: sanitizeArchiveReason(
-              result.outputSummary || "(no output)",
-              input.state.supervisorCwd,
-            ).slice(0, 2000),
-            failedToRun: result.failedToRun,
-          });
-        })()
-      : deps.managedTaskRepo.recordCheckExecution({
-          ...base,
-          exitCode: null,
-          durationMs: 0,
-          outputSummary: "Worker worktree unavailable; check could not run.",
-          failedToRun: true,
-        });
-    deps.eventRepo.create({
-      goalId: input.goalId,
-      runId: input.runId,
-      type: "agent.progress",
-      message: record.failedToRun
-        ? `Acceptance check ${criterion.criterionId} for ${worker.taskId} could not run.`
-        : `Acceptance check ${criterion.criterionId} for ${worker.taskId} exited ${record.exitCode}.`,
-      data: {
-        sessionId: input.sessionId,
-        provider: input.providerId,
-        model: input.modelLabel,
-        runtimeEventType: record.failedToRun ? "check.execution_failed" : "check.executed",
-        taskId: worker.taskId,
-        workerDelegationRequestId: worker.id,
-        criterionId: criterion.criterionId,
-        checkKind: check.kind,
-        target: record.target,
-        exitCode: record.exitCode,
-        durationMs: record.durationMs,
-        safeReason: record.outputSummary.slice(0, 500),
-      },
-    });
+  const appendLine = (criterionId: string, kind: string, target: string, record: { failedToRun: boolean; exitCode: number | null; durationMs: number; outputSummary: string }) =>
     lines.push(
-      `- ${criterion.criterionId} [${check.kind}] ` +
+      `- ${criterionId} [${kind}/${target}] ` +
         `${record.failedToRun ? "FAILED TO RUN" : `exit ${record.exitCode}`} ` +
         `(${record.durationMs}ms): ${record.outputSummary.slice(0, 300)}`,
     );
+
+  let rejectReason: string | null = null;
+  try {
+    for (const criterion of checked) {
+      const check = criterion.check!;
+      if (check.kind === "red_green" || check.kind === "regression") {
+        const baseline = await runAndRecord(criterion, "baseline", baselinePath);
+        appendLine(criterion.criterionId, check.kind, "baseline", baseline);
+        if (check.kind === "red_green") {
+          if (baseline.failedToRun) {
+            rejectReason =
+              `Acceptance check ${criterion.criterionId} (red_green) could not run on the baseline, so its ` +
+              "discrimination cannot be verified. Fix the check environment before requesting review-merge.";
+            break;
+          }
+          if (baseline.exitCode === 0) {
+            reopenTaskForVacuousCheck(deps, input, taskId,
+              `Acceptance check ${criterion.criterionId} passed on the baseline (exit 0), so it does not ` +
+              "discriminate this change.");
+            rejectReason =
+              `Acceptance check ${criterion.criterionId} (red_green) already passes on the baseline, so it does not ` +
+              "discriminate this change — the test is vacuous or unrelated. The attempt is rejected; dispatch a " +
+              `corrective ${taskId} attempt whose check fails before the change and passes after it.`;
+            break;
+          }
+        } else if (baseline.failedToRun || baseline.exitCode !== 0) {
+          rejectReason =
+            `Acceptance check ${criterion.criterionId} (regression) fails on the baseline, which is a ` +
+            "contract-authoring error: a regression check must be green before the change. The worker attempt is " +
+            "untouched and its budget is not charged; split the task to author a correct contract.";
+          break;
+        }
+      }
+      const candidate = await runAndRecord(criterion, "candidate", candidatePath);
+      appendLine(criterion.criterionId, check.kind, "candidate", candidate);
+    }
+  } finally {
+    if (baselinePath) {
+      void worktreeService
+        .removeWorktree({ parentCwd: input.state.supervisorCwd, path: baselinePath })
+        .catch(() => undefined);
+    }
   }
-  return lines.join("\n");
+  if (rejectReason) return { appendix: null, rejectReason };
+  return { appendix: lines.join("\n"), rejectReason: null };
+}
+
+/** A vacuous red_green check reopens the attempt so a corrective one can dispatch. */
+function reopenTaskForVacuousCheck(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  taskId: string,
+  safeSummary: string,
+): void {
+  const durableTask = deps.managedTaskRepo?.getTask(input.goalId, taskId);
+  if (durableTask && ["awaiting_review", "awaiting_delivery"].includes(durableTask.status)) {
+    deps.managedTaskRepo!.transition(taskId, "rejected", {
+      goalId: input.goalId,
+      runId: input.runId,
+      safeSummary,
+    });
+  }
+  getTaskRegistry(input.state, input.goalId).markFailed(taskId);
 }
 
 /**

@@ -46,6 +46,11 @@ export function createShellCheckRunner(): CheckRunner {
         }
         const timeout = setTimeout(() => {
           killProcessTree(child);
+          // Destroy the pipes explicitly: if tree teardown is blocked (e.g. a
+          // sandbox denying taskkill), an orphaned descendant holding stdout
+          // must not keep this process's event loop alive forever.
+          child.stdout?.destroy();
+          child.stderr?.destroy();
           settle({
             exitCode: null,
             outputSummary: truncate(`${output}\n[check timed out after ${input.timeoutMs}ms]`),

@@ -1,0 +1,12 @@
+✔ rejects a red_green check that also passes on the baseline and reopens the task (157.501ms)
+✔ accepts a genuine red-green transition and records both executions (168.2128ms)
+✔ rejects a regression check whose baseline fails as a contract error without charging the worker (111.5578ms)
+✔ accepts a regression check that stays green on baseline and candidate (150.8989ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 838.1516

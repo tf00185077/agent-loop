@@ -17,13 +17,13 @@ sanitization helpers, durable criterion outcomes.
 - [x] 2.1 Failing test: a checked criterion's command executes in the worker worktree at review dispatch; exit 0 stamps PASS, nonzero stamps FAIL, output sanitized and truncated in a durable execution record
 - [x] 2.2 Check-runner service (spawn with timeout via killProcessTree; per-attempt execution records in managed-task-repository)
 - [x] 2.3 Wire into the review-merge dispatch path before the judge starts; judge packet includes the execution table; unrunnable/timeout checks record `check.execution_failed` and fail closed
-- [ ] 2.4 Full suite + typecheck green; commit
+- [x] 2.4 Full suite + typecheck green; commit
 
 ## 3. Baseline discrimination (red-green / regression)
 
-- [ ] 3.1 Failing tests: red_green passing on baseline is rejected with a teaching reason; genuine red→green passes; regression requires baseline-green and candidate-green; failing regression baseline is a contract error that does not charge the retry budget
-- [ ] 3.2 Baseline execution via an ephemeral worktree at the worker's branch base; reclaimed by the existing orphan-reclaim path
-- [ ] 3.3 Full suite + typecheck green; commit
+- [x] 3.1 Failing tests: red_green passing on baseline is rejected with a teaching reason; genuine red→green passes; regression requires baseline-green and candidate-green; failing regression baseline is a contract error that does not charge the retry budget
+- [x] 3.2 Baseline execution via an ephemeral worktree at the worker's branch base; reclaimed by the existing orphan-reclaim path
+- [x] 3.3 Full suite + typecheck green; commit
 
 ## 4. Protected paths and judge precedence
 
