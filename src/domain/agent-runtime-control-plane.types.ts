@@ -428,14 +428,26 @@ export interface ManagedSpecReviewControlEvent {
 }
 
 /**
+ * One remaining gap in an unsatisfied reassessment. `refs` carry the gap's
+ * deterministic identity: each entry resolves to a durable artifact of the
+ * goal (a change id, a task id, an `openspec/specs` capability name) or
+ * declares new scope as `new:<kebab-case>`. Prose summaries are for humans
+ * and never participate in enforcement.
+ */
+export interface ReassessmentGap {
+  refs: string[];
+  summary: string;
+}
+
+/**
  * Supervisor's structured goal-level judgment after a planning epoch's
- * changes are all archived. Unsatisfied judgments arm the next-epoch gate;
- * satisfied judgments unlock the completion gate.
+ * changes are all archived or blocked. Unsatisfied judgments arm the
+ * next-epoch gate; satisfied judgments unlock the completion gate.
  */
 export interface GoalReassessment {
   goalSatisfied: boolean;
   evidence: string[];
-  remainingGaps: string[];
+  remainingGaps: ReassessmentGap[];
   nextEpochRationale: string | null;
 }
 

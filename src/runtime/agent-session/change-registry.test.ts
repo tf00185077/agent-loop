@@ -112,7 +112,7 @@ test("recordReassessment gates on plan existence and all changes archived", () =
   const premature = registry.recordReassessment({
     goalSatisfied: false,
     evidence: ["e"],
-    remainingGaps: ["gap"],
+    remainingGaps: [{ refs: ["new:gap"], summary: "gap" }],
     nextEpochRationale: "r",
   });
   assert.equal(premature.ok, false);
@@ -123,7 +123,7 @@ test("recordReassessment gates on plan existence and all changes archived", () =
   const recorded = registry.recordReassessment({
     goalSatisfied: false,
     evidence: ["core delivered"],
-    remainingGaps: ["missing multiplayer"],
+    remainingGaps: [{ refs: ["new:multiplayer"], summary: "missing multiplayer" }],
     nextEpochRationale: "integration surfaced multiplayer gap",
   });
   assert.deepEqual(recorded, { ok: true });
@@ -143,7 +143,7 @@ test("registerNextEpoch requires a pending unsatisfied reassessment and unique c
   registry.recordReassessment({
     goalSatisfied: false,
     evidence: ["e"],
-    remainingGaps: ["gap"],
+    remainingGaps: [{ refs: ["new:gap"], summary: "gap" }],
     nextEpochRationale: "found gap",
   });
 

@@ -7,6 +7,7 @@ import type {
   ManagedReviewDecisionControlEvent,
   ManagedSpecReviewControlEvent,
   ManagedIntegrationResultControlEvent,
+  ReassessmentGap,
   TaskAcceptanceCriterion,
   TaskCriterionEvidence,
   TaskTestEvidence,
@@ -346,15 +347,21 @@ function validateGoalReassessment(controlEvent: Record<string, unknown>): Manage
   if (!evidence || evidence.length === 0) {
     return { ok: false, safeReason: "Reassessment requires at least one non-empty evidence string." };
   }
-  const remainingGaps = controlEvent.remainingGaps === undefined ? [] : normalizeStringList(controlEvent.remainingGaps);
+  const remainingGaps = controlEvent.remainingGaps === undefined ? [] : normalizeGapList(controlEvent.remainingGaps);
   if (!remainingGaps) {
-    return { ok: false, safeReason: "Reassessment remaining gaps must be a list of non-empty strings." };
+    return {
+      ok: false,
+      safeReason:
+        "Reassessment remaining gaps must be objects of the form " +
+        '{ "refs": ["<change id | task id | openspec/specs capability | new:<kebab-case>>"], "summary": "<prose>" } ' +
+        "with at least one non-empty ref and a non-empty summary each; plain strings are not accepted.",
+    };
   }
   if (controlEvent.goalSatisfied && remainingGaps.length > 0) {
     return { ok: false, safeReason: "A satisfied reassessment must not list remaining gaps." };
   }
   if (!controlEvent.goalSatisfied && remainingGaps.length === 0) {
-    return { ok: false, safeReason: "An unsatisfied reassessment requires at least one non-empty remaining gap." };
+    return { ok: false, safeReason: "An unsatisfied reassessment requires at least one structured remaining gap." };
   }
   const nextEpochRationale =
     typeof controlEvent.nextEpochRationale === "string" && controlEvent.nextEpochRationale.trim().length > 0
@@ -373,6 +380,25 @@ function validateGoalReassessment(controlEvent: Record<string, unknown>): Manage
       nextEpochRationale: controlEvent.goalSatisfied ? null : nextEpochRationale,
     },
   };
+}
+
+/** Structured gap shape check; ref resolution stays in the manager. */
+function normalizeGapList(value: unknown): ReassessmentGap[] | null {
+  if (!Array.isArray(value) || value.length > MAX_REASSESSMENT_ITEMS) return null;
+  const gaps: ReassessmentGap[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) return null;
+    const summary = typeof entry.summary === "string" ? entry.summary.trim().slice(0, MAX_REASSESSMENT_STRING) : "";
+    if (summary.length === 0) return null;
+    if (!Array.isArray(entry.refs) || entry.refs.length === 0 || entry.refs.length > MAX_REASSESSMENT_ITEMS) return null;
+    const refs: string[] = [];
+    for (const ref of entry.refs) {
+      if (typeof ref !== "string" || ref.trim().length === 0) return null;
+      refs.push(ref.trim().slice(0, MAX_REASSESSMENT_STRING));
+    }
+    gaps.push({ refs, summary });
+  }
+  return gaps;
 }
 
 /** Trimmed, capped copy of a string list; null when the shape is invalid. */

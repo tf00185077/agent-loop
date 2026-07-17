@@ -76,6 +76,7 @@ export type {
   AgentSessionLifecycleState,
   AgentSessionStartInput,
   GoalReassessment,
+  ReassessmentGap,
   ManagedChangePlanControlEvent,
   ManagedChangePlanEntry,
   ManagedChangeStatus,

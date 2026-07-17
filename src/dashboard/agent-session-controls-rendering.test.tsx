@@ -52,7 +52,7 @@ test("goal detail renders the planning epoch board with statuses, rationale, and
             reassessment: {
               goalSatisfied: false,
               evidence: ["core delivered"],
-              remainingGaps: ["verification missing"],
+              remainingGaps: [{ refs: ["new:verification"], summary: "verification missing" }],
               nextEpochRationale: "integration surfaced a gap",
             },
           },

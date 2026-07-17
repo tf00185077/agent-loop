@@ -4992,7 +4992,7 @@ test("admits a next epoch after an unsatisfied reassessment and completes after 
             type: "managed_goal.reassessment",
             goalSatisfied: false,
             evidence: ["change-one delivered and archived."],
-            remainingGaps: ["End-to-end verification is missing."],
+            remainingGaps: [{ refs: ["new:e2e-verification"], summary: "End-to-end verification is missing." }],
             nextEpochRationale: "Integration revealed a verification gap.",
           },
           "2026-07-13T00:00:04.000Z",
@@ -5054,7 +5054,7 @@ test("admits a next epoch after an unsatisfied reassessment and completes after 
       [true, 2],
     ],
   );
-  assert.deepEqual(reassessments[0]!.data.remainingGaps, ["End-to-end verification is missing."]);
+  assert.deepEqual(reassessments[0]!.data.remainingGaps, [{ refs: ["new:e2e-verification"], summary: "End-to-end verification is missing." }]);
 
   assert.deepEqual(
     eventOfType("change.archived").map((event) => event.data.changeId),
@@ -5092,7 +5092,7 @@ test("blocks the goal when consecutive reassessments repeat the same gaps", asyn
             type: "managed_goal.reassessment",
             goalSatisfied: false,
             evidence: ["change-one archived."],
-            remainingGaps: ["The same gap remains."],
+            remainingGaps: [{ refs: ["new:same-gap"], summary: "The same gap remains." }],
             nextEpochRationale: "Retry the gap.",
           },
           "2026-07-13T00:00:04.000Z",
@@ -5111,7 +5111,7 @@ test("blocks the goal when consecutive reassessments repeat the same gaps", asyn
             type: "managed_goal.reassessment",
             goalSatisfied: false,
             evidence: ["change-two archived."],
-            remainingGaps: ["  The SAME   gap remains. "],
+            remainingGaps: [{ refs: ["new:same-gap"], summary: "The same gap is still unresolved." }],
             nextEpochRationale: "Try once more.",
           },
           "2026-07-13T00:00:08.000Z",
@@ -5140,7 +5140,7 @@ test("blocks the goal when consecutive reassessments repeat the same gaps", asyn
   assert.ok(breaker, "expected a durable circuit-breaker event");
   assert.equal(breaker.type, "goal.blocked");
   assert.match(String(breaker.data.safeReason), /same remaining gaps/i);
-  assert.deepEqual(breaker.data.remainingGaps, ["The SAME   gap remains."]);
+  assert.deepEqual(breaker.data.remainingGaps, [{ refs: ["new:same-gap"], summary: "The same gap is still unresolved." }]);
   // Only the two consumed plans exist; no third epoch was admitted.
   assert.equal(
     events.filter((event) => event.data.runtimeEventType === "supervisor.change_plan").length,
@@ -5169,7 +5169,7 @@ test("blocks the goal when the planning-epoch budget is exhausted with gaps rema
             type: "managed_goal.reassessment",
             goalSatisfied: false,
             evidence: ["change-one archived."],
-            remainingGaps: ["More work is needed."],
+            remainingGaps: [{ refs: ["new:more-work"], summary: "More work is needed." }],
             nextEpochRationale: "Open another epoch.",
           },
           "2026-07-13T00:00:04.000Z",
@@ -5263,7 +5263,7 @@ test("rejects reassessments for flat goals and while changes remain unarchived",
             type: "managed_goal.reassessment",
             goalSatisfied: false,
             evidence: ["Nothing archived yet."],
-            remainingGaps: ["Everything."],
+            remainingGaps: [{ refs: ["new:everything"], summary: "Everything." }],
             nextEpochRationale: "Way too early.",
           },
         },
@@ -6414,11 +6414,19 @@ test("re-plans blocked spec scope through an unsatisfied reassessment and a next
           await gates[1]!.promise;
           // Third delegation exhausts the budget: change blocked, goal alive.
           yield specDelegation("2026-07-17T03:00:05.000Z");
+          // Forgetting the blocked scope is rejected naming the change.
           yield control({
             type: "managed_goal.reassessment",
             goalSatisfied: false,
             evidence: ["change-one spec authoring failed structurally twice and was blocked."],
-            remainingGaps: ["change-one scope is blocked and must be re-planned."],
+            remainingGaps: [{ refs: ["new:unrelated"], summary: "Some other gap." }],
+            nextEpochRationale: "Re-plan.",
+          }, "2026-07-17T03:00:05.500Z");
+          yield control({
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-one spec authoring failed structurally twice and was blocked."],
+            remainingGaps: [{ refs: ["change-one"], summary: "change-one scope is blocked and must be re-planned." }],
             nextEpochRationale: "Re-slice the blocked scope into an authorable change.",
           }, "2026-07-17T03:00:06.000Z");
           yield control({
@@ -6449,6 +6457,11 @@ test("re-plans blocked spec scope through an unsatisfied reassessment and a next
     event.data.runtimeEventType === "change.blocked" && event.data.changeId === "change-one"));
   assert.ok(!events.some((event) => event.type === "goal.blocked"));
   assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "running");
+  const unaccounted = events.find((event) =>
+    event.data.runtimeEventType === "delegation.rejected" &&
+    /unaccounted/i.test(String(event.data.safeReason)));
+  assert.ok(unaccounted, "a reassessment omitting the blocked change must be rejected");
+  assert.match(String(unaccounted.data.safeReason), /change-one/);
   const reassessment = events.find((event) => event.data.runtimeEventType === "supervisor.reassessment");
   assert.ok(reassessment, "the reassessment must be accepted with the change blocked (not archived)");
   assert.equal(reassessment.data.goalSatisfied, false);
@@ -6456,5 +6469,170 @@ test("re-plans blocked spec scope through an unsatisfied reassessment and a next
   assert.deepEqual(plans.map((event) => event.data.epochSequence), [1, 2]);
   assert.ok(events.some((event) =>
     event.data.runtimeEventType === "change.activated" && event.data.changeId === "change-one-relanded"));
+  fixture.db.close();
+});
+
+test("REPRO-H6: reworded gaps with identical refs still trip the circuit breaker", async () => {
+  const fixture = createManagerFixture("repro reworded gaps goal");
+  const openSpec = recordingOpenSpecService("cli");
+  const adapter = scriptedEpochAdapter(fixture, 4, (_input, tools) =>
+    runScript(
+      (function* () {
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-one", title: "Change one", rationale: "First batch." }],
+          },
+          "2026-07-13T00:00:01.000Z",
+        );
+        yield* specFlow(tools, "change-one", 0, (offset) => `2026-07-13T00:00:0${2 + offset}.000Z`);
+        yield tools.controlEvent(
+          {
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-one archived."],
+            remainingGaps: [
+              { refs: ["new:e2e-verification"], summary: "End-to-end verification is missing." },
+            ],
+            nextEpochRationale: "Close the verification gap.",
+          },
+          "2026-07-13T00:00:04.000Z",
+        );
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-two", title: "Retry", rationale: "Close the gap again." }],
+          },
+          "2026-07-13T00:00:05.000Z",
+        );
+        yield* specFlow(tools, "change-two", 2, (offset) => `2026-07-13T00:00:0${6 + offset}.000Z`);
+        // Same refs, reworded prose: identity is the ref-set, so the breaker
+        // must fire regardless of the LLM's paraphrasing.
+        yield tools.controlEvent(
+          {
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-two archived."],
+            remainingGaps: [
+              { refs: ["new:e2e-verification"], summary: "There is still no end-to-end verification coverage." },
+            ],
+            nextEpochRationale: "Try once more.",
+          },
+          "2026-07-13T00:00:08.000Z",
+        );
+      })(),
+    ),
+  );
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => {
+    const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+    return (
+      events.some((event) => event.data.runtimeEventType === "supervisor.reassessment_circuit_breaker") ||
+      events.filter((event) => event.data.runtimeEventType === "supervisor.reassessment").length === 2
+    );
+  });
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const breaker = events.find(
+    (event) => event.data.runtimeEventType === "supervisor.reassessment_circuit_breaker",
+  );
+  assert.ok(breaker, "identical ref-sets must trip the breaker even when the prose is reworded");
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "blocked");
+  fixture.db.close();
+});
+
+test("distinct gap refs admit the next epoch; unknown refs are rejected with the valid kinds", async () => {
+  const fixture = createManagerFixture("distinct refs goal");
+  const openSpec = recordingOpenSpecService("cli");
+  const adapter = scriptedEpochAdapter(fixture, 4, (_input, tools) =>
+    runScript(
+      (function* () {
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-one", title: "Change one", rationale: "First batch." }],
+          },
+          "2026-07-13T00:00:01.000Z",
+        );
+        yield* specFlow(tools, "change-one", 0, (offset) => `2026-07-13T00:00:0${2 + offset}.000Z`);
+        // Unknown ref: rejected with a teaching reason, state unchanged.
+        yield tools.controlEvent(
+          {
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-one archived."],
+            remainingGaps: [{ refs: ["totally-unknown-artifact"], summary: "Something is missing." }],
+            nextEpochRationale: "Close the gap.",
+          },
+          "2026-07-13T00:00:04.000Z",
+        );
+        yield tools.controlEvent(
+          {
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-one archived."],
+            remainingGaps: [{ refs: ["new:first-gap"], summary: "First distinct gap." }],
+            nextEpochRationale: "Close the first gap.",
+          },
+          "2026-07-13T00:00:05.000Z",
+        );
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-two", title: "Second", rationale: "Close the first gap." }],
+          },
+          "2026-07-13T00:00:06.000Z",
+        );
+        yield* specFlow(tools, "change-two", 2, (offset) => `2026-07-13T00:00:0${7 + offset}.000Z`);
+        // Different ref-set: no breaker, third epoch admissible.
+        yield tools.controlEvent(
+          {
+            type: "managed_goal.reassessment",
+            goalSatisfied: false,
+            evidence: ["change-two archived."],
+            remainingGaps: [{ refs: ["new:second-gap"], summary: "A different gap emerged." }],
+            nextEpochRationale: "Close the second gap.",
+          },
+          "2026-07-13T00:00:09.000Z",
+        );
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-three", title: "Third", rationale: "Close the second gap." }],
+          },
+          "2026-07-13T00:00:10.000Z",
+        );
+      })(),
+    ),
+  );
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id)
+    .filter((event) => event.data.runtimeEventType === "supervisor.change_plan").length === 3);
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const unknownRef = events.find((event) =>
+    event.data.runtimeEventType === "delegation.rejected" &&
+    /totally-unknown-artifact/.test(String(event.data.safeReason)));
+  assert.ok(unknownRef, "unknown ref must be rejected naming the ref");
+  assert.match(String(unknownRef.data.safeReason), /change id.*task id.*capability.*new:/is);
+  assert.ok(!events.some((event) =>
+    event.data.runtimeEventType === "supervisor.reassessment_circuit_breaker"));
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "running");
   fixture.db.close();
 });

@@ -340,7 +340,10 @@ function PlanningEpochBoard({ epochs }: { epochs: PlanningEpochReadModel[] }) {
               {epoch.reassessment.remainingGaps.length > 0 && (
                 <ul style={{ margin: "4px 0 0 18px" }}>
                   {epoch.reassessment.remainingGaps.map((gap) => (
-                    <li key={gap}>{gap}</li>
+                    <li key={`${gap.refs.join("|")}:${gap.summary}`}>
+                      {gap.summary}
+                      {gap.refs.length > 0 ? ` (${gap.refs.join(", ")})` : ""}
+                    </li>
                   ))}
                 </ul>
               )}

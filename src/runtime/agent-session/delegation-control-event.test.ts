@@ -408,7 +408,7 @@ test("validates goal reassessment control events", () => {
       type: "managed_goal.reassessment",
       goalSatisfied: false,
       evidence: [" Change core-loop delivered and archived. "],
-      remainingGaps: ["Multiplayer mode is still missing."],
+      remainingGaps: [{ refs: ["new:multiplayer-modes"], summary: " Multiplayer mode is still missing. " }],
       nextEpochRationale: " Integration surfaced the missing multiplayer surface. ",
     },
     parentSession: supervisorSession(),
@@ -427,7 +427,7 @@ test("validates goal reassessment control events", () => {
   if (unsatisfied.ok && unsatisfied.kind === "reassessment") {
     assert.equal(unsatisfied.reassessment.goalSatisfied, false);
     assert.deepEqual(unsatisfied.reassessment.evidence, ["Change core-loop delivered and archived."]);
-    assert.deepEqual(unsatisfied.reassessment.remainingGaps, ["Multiplayer mode is still missing."]);
+    assert.deepEqual(unsatisfied.reassessment.remainingGaps, [{ refs: ["new:multiplayer-modes"], summary: "Multiplayer mode is still missing." }]);
     assert.equal(
       unsatisfied.reassessment.nextEpochRationale,
       "Integration surfaced the missing multiplayer surface.",
@@ -465,7 +465,7 @@ test("rejects malformed goal reassessment control events", () => {
       type: "managed_goal.reassessment",
       goalSatisfied: false,
       evidence: ["e"],
-      remainingGaps: ["gap"],
+      remainingGaps: [{ refs: ["new:gap"], summary: "gap" }],
     },
     parentSession: supervisorSession(),
   });
@@ -474,7 +474,7 @@ test("rejects malformed goal reassessment control events", () => {
       type: "managed_goal.reassessment",
       goalSatisfied: true,
       evidence: ["e"],
-      remainingGaps: ["gap"],
+      remainingGaps: [{ refs: ["new:gap"], summary: "gap" }],
     },
     parentSession: supervisorSession(),
   });
@@ -493,7 +493,7 @@ test("rejects malformed goal reassessment control events", () => {
   });
   assert.deepEqual(unsatisfiedWithoutGaps, {
     ok: false,
-    safeReason: "An unsatisfied reassessment requires at least one non-empty remaining gap.",
+    safeReason: "An unsatisfied reassessment requires at least one structured remaining gap.",
   });
   assert.deepEqual(unsatisfiedWithoutRationale, {
     ok: false,

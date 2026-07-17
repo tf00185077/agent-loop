@@ -1,4 +1,4 @@
-import type { Event, ManagedChangePlanEntry, ManagedTaskStatus } from "../../domain/index.js";
+import type { Event, ManagedChangePlanEntry, ManagedTaskStatus, ReassessmentGap } from "../../domain/index.js";
 import type { ManagedTaskRepository } from "../../persistence/managed-task-repository.js";
 import { GoalChangeRegistry, specTaskId } from "./change-registry.js";
 import { GoalTaskRegistry, type CriterionOutcome, type TaskRecord, type TaskStatus } from "./task-registry.js";
@@ -57,7 +57,7 @@ export function rehydrateChangeRegistry(
       changeRegistry.recordReassessment({
         goalSatisfied: event.data.goalSatisfied === true,
         evidence: replayedStringList(event.data.evidence),
-        remainingGaps: replayedStringList(event.data.remainingGaps),
+        remainingGaps: replayedGapList(event.data.remainingGaps),
         nextEpochRationale:
           typeof event.data.nextEpochRationale === "string" ? event.data.nextEpochRationale : null,
       });
@@ -121,6 +121,27 @@ export function rehydrateChangeRegistry(
 
 function replayedStringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+/** Legacy prose gaps replay with empty refs; the breaker ignores empty signatures. */
+function replayedGapList(value: unknown): ReassessmentGap[] {
+  if (!Array.isArray(value)) return [];
+  const gaps: ReassessmentGap[] = [];
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      gaps.push({ refs: [], summary: entry });
+    } else if (
+      entry && typeof entry === "object" && !Array.isArray(entry) &&
+      typeof (entry as Record<string, unknown>).summary === "string"
+    ) {
+      const record = entry as Record<string, unknown>;
+      gaps.push({
+        refs: replayedStringList(record.refs),
+        summary: record.summary as string,
+      });
+    }
+  }
+  return gaps;
 }
 
 function toTaskStatus(status: ManagedTaskStatus): TaskStatus {

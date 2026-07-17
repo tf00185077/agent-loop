@@ -35,12 +35,12 @@ first. Commit at the end of every task group.
 
 ## 4. Structured gap identity for the circuit breaker (REPRO-H6, BREAKING control-block schema)
 
-- [ ] 4.1 Adapt REPRO-H6 to structured gaps (same refs, different summaries) and add it failing
-- [ ] 4.2 Control-event validation: `remainingGaps` as `{refs[], summary}`; refs resolve to change ids / task ids / `openspec/specs` capabilities or `new:<kebab-case>`; teaching safe reasons for plain strings, empty refs, unknown refs
-- [ ] 4.3 Breaker signature = sorted deduplicated ref-set union; prose excluded; distinct-refs admission test
-- [ ] 4.4 Durable reassessment events carry structured gaps; rehydration + dashboard timeline rendering of gap refs
-- [ ] 4.5 Supervisor prompt contract: structured gap format with example (informational)
-- [ ] 4.6 Full suite + typecheck green; commit
+- [x] 4.1 Adapt REPRO-H6 to structured gaps (same refs, different summaries) and add it failing
+- [x] 4.2 Control-event validation: `remainingGaps` as `{refs[], summary}`; refs resolve to change ids / task ids / `openspec/specs` capabilities or `new:<kebab-case>`; teaching safe reasons for plain strings, empty refs, unknown refs
+- [x] 4.3 Breaker signature = sorted deduplicated ref-set union; prose excluded; distinct-refs admission test
+- [x] 4.4 Durable reassessment events carry structured gaps; rehydration + dashboard timeline rendering of gap refs
+- [x] 4.5 Supervisor prompt contract: structured gap format with example (informational)
+- [x] 4.6 Full suite + typecheck green; commit
 
 ## 5. Verification and closeout
 

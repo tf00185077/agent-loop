@@ -1667,7 +1667,7 @@ describe("Backend API", () => {
           epochSequence: 1,
           goalSatisfied: false,
           evidence: ["core archived"],
-          remainingGaps: ["verification missing"],
+          remainingGaps: [{ refs: ["new:verification"], summary: "verification missing" }],
           nextEpochRationale: "integration surfaced a gap",
         });
         emit({
@@ -1687,7 +1687,7 @@ describe("Backend API", () => {
         assert.equal(epochs[0]!.status, "gaps_found");
         assert.deepEqual(
           (epochs[0]!.reassessment as Record<string, unknown>).remainingGaps,
-          ["verification missing"],
+          [{ refs: ["new:verification"], summary: "verification missing" }],
         );
         assert.equal(epochs[1]!.sequence, 2);
         assert.equal(epochs[1]!.rationale, "integration surfaced a gap");

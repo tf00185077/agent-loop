@@ -43,7 +43,7 @@ test("projects epochs, change statuses, and reassessments from durable events", 
       epochSequence: 1,
       goalSatisfied: false,
       evidence: ["core delivered"],
-      remainingGaps: ["verification missing"],
+      remainingGaps: [{ refs: ["new:verification"], summary: "verification missing" }],
       nextEpochRationale: "integration surfaced a gap",
     }),
     event({
@@ -70,7 +70,7 @@ test("projects epochs, change statuses, and reassessments from durable events", 
   assert.deepEqual(first!.reassessment, {
     goalSatisfied: false,
     evidence: ["core delivered"],
-    remainingGaps: ["verification missing"],
+    remainingGaps: [{ refs: ["new:verification"], summary: "verification missing" }],
     nextEpochRationale: "integration surfaced a gap",
   });
 

@@ -1,4 +1,4 @@
-import type { Event, ManagedChangeStatus } from "../../domain/index.js";
+import type { Event, ManagedChangeStatus, ReassessmentGap } from "../../domain/index.js";
 
 export interface PlanningEpochChangeProjection {
   id: string;
@@ -9,7 +9,7 @@ export interface PlanningEpochChangeProjection {
 export interface PlanningEpochReassessmentProjection {
   goalSatisfied: boolean;
   evidence: string[];
-  remainingGaps: string[];
+  remainingGaps: ReassessmentGap[];
   nextEpochRationale: string | null;
 }
 
@@ -68,7 +68,7 @@ export function projectPlanningEpochs(events: Event[]): PlanningEpochProjection[
         epoch.reassessment = {
           goalSatisfied: event.data.goalSatisfied === true,
           evidence: stringList(event.data.evidence),
-          remainingGaps: stringList(event.data.remainingGaps),
+          remainingGaps: gapList(event.data.remainingGaps),
           nextEpochRationale:
             typeof event.data.nextEpochRationale === "string" ? event.data.nextEpochRationale : null,
         };
@@ -80,7 +80,7 @@ export function projectPlanningEpochs(events: Event[]): PlanningEpochProjection[
     const change = changes.get(changeId);
     if (!change) continue;
     if (type === "change.activated") change.status = "specifying";
-    else if (type === "change.spec_approved") change.status = "executing";
+    else if (type === "change.spec_merged" || type === "change.spec_approved") change.status = "executing";
     else if (type === "change.archived") change.status = "archived";
     else if (type === "change.blocked") change.status = "blocked";
   }
@@ -104,12 +104,30 @@ function deriveEpochStatus(
   changes: PlanningEpochChangeProjection[],
   reassessment: PlanningEpochReassessmentProjection | null,
 ): PlanningEpochStatus {
-  if (changes.some((change) => change.status === "blocked")) return "blocked";
+  // A recorded reassessment closed the epoch even over blocked scope: the
+  // verdict (and its gap refs) supersedes the blocked marker.
   if (reassessment) return reassessment.goalSatisfied ? "completed" : "gaps_found";
+  if (changes.some((change) => change.status === "blocked")) return "blocked";
   if (changes.every((change) => change.status === "archived")) return "reassessing";
   return "executing";
 }
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+/** Structured gaps with legacy prose tolerance (refs empty). */
+function gapList(value: unknown): ReassessmentGap[] {
+  if (!Array.isArray(value)) return [];
+  const gaps: ReassessmentGap[] = [];
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      gaps.push({ refs: [], summary: entry });
+    } else if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      const record = entry as Record<string, unknown>;
+      if (typeof record.summary !== "string") continue;
+      gaps.push({ refs: stringList(record.refs), summary: record.summary });
+    }
+  }
+  return gaps;
 }

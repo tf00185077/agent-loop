@@ -1,10 +1,14 @@
+import { existsSync, readdirSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import type {
   AgentAssignableRole,
   AgentRuntimeAdapter,
   AgentRuntimeEvent,
   AgentRuntimeSession,
   AgentSessionHandle,
+  GoalReassessment,
   ManagedCompletionGap,
+  ReassessmentGap,
 } from "../../domain/index.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type { AppDatabase } from "../../persistence/database.js";
@@ -1167,9 +1171,15 @@ async function persistDelegationControlEvent(
       }
     }
     if (!validation.reassessment.goalSatisfied) {
+      const refRejection = resolveReassessmentGapRefs(input, validation.reassessment, changeRegistry);
+      if (refRejection) {
+        recordControlRejection(deps, input, data, refRejection);
+        return;
+      }
       const previous = changeRegistry.latestReassessment();
       const signature = reassessmentGapSignature(validation.reassessment.remainingGaps);
-      if (previous && !previous.goalSatisfied && reassessmentGapSignature(previous.remainingGaps) === signature) {
+      if (previous && !previous.goalSatisfied && signature.length > 0 &&
+          reassessmentGapSignature(previous.remainingGaps) === signature) {
         blockGoalForMacroLoop(
           deps, input,
           "supervisor.reassessment_circuit_breaker",
@@ -2794,15 +2804,62 @@ function safeErrorMessage(error: unknown): string {
 }
 
 /**
- * Normalized remaining-gap signature for the repeated-gap circuit breaker:
- * two consecutive unsatisfied reassessments with the same signature mean the
- * macro loop is not converging.
+ * Deterministic gap identity for the repeated-gap circuit breaker: the
+ * sorted, deduplicated union of the gaps' validated refs. Prose summaries
+ * never participate, so paraphrasing cannot evade the breaker. An empty
+ * signature (legacy replayed gaps) never trips it.
  */
-function reassessmentGapSignature(remainingGaps: string[]): string {
-  return remainingGaps
-    .map((gap) => gap.trim().toLowerCase().replace(/\s+/g, " "))
-    .sort()
-    .join("|");
+function reassessmentGapSignature(remainingGaps: ReassessmentGap[]): string {
+  return [...new Set(remainingGaps.flatMap((gap) => gap.refs))].sort().join("|");
+}
+
+const NEW_SCOPE_REF = /^new:[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Resolve every gap ref against the goal's durable artifacts: change ids
+ * (any epoch), registered task ids, `openspec/specs` capability names, or a
+ * `new:<kebab-case>` declaration. Unsatisfied reassessments must also
+ * reference every blocked change — that scope has to be re-planned, not
+ * forgotten. Returns a teaching rejection reason, or null when valid.
+ */
+function resolveReassessmentGapRefs(
+  input: PersistRuntimeEventInput,
+  reassessment: GoalReassessment,
+  changeRegistry: GoalChangeRegistry,
+): string | null {
+  const changeIds = new Set(changeRegistry.listChanges().map((change) => change.id));
+  const taskIds = new Set([
+    ...getTaskRegistry(input.state, input.goalId).listTasks().map((task) => task.id),
+    ...changeRegistry.listChanges().flatMap((change) => change.taskIds),
+  ]);
+  const specsRoot = resolvePath(input.state.supervisorCwd, "openspec", "specs");
+  const capabilities = new Set(
+    existsSync(specsRoot)
+      ? readdirSync(specsRoot, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name)
+      : [],
+  );
+  for (const gap of reassessment.remainingGaps) {
+    for (const ref of gap.refs) {
+      if (changeIds.has(ref) || taskIds.has(ref) || capabilities.has(ref) || NEW_SCOPE_REF.test(ref)) continue;
+      return (
+        `Reassessment gap ref "${ref}" resolves to nothing durable. Valid refs: a change id from this ` +
+        "goal's plan, a registered task id, a capability name under openspec/specs, or new:<kebab-case> " +
+        "for genuinely new scope."
+      );
+    }
+  }
+  const referenced = new Set(reassessment.remainingGaps.flatMap((gap) => gap.refs));
+  for (const blockedId of changeRegistry.blockedIds()) {
+    if (!referenced.has(blockedId)) {
+      return (
+        `Blocked change ${blockedId} is unaccounted for: an unsatisfied reassessment must reference every ` +
+        "blocked change in its remaining gaps so the scope is re-planned, not forgotten."
+      );
+    }
+  }
+  return null;
 }
 
 /**
@@ -2815,7 +2872,7 @@ function blockGoalForMacroLoop(
   input: PersistRuntimeEventInput,
   runtimeEventType: "supervisor.epoch_budget_exhausted" | "supervisor.reassessment_circuit_breaker",
   reason: string,
-  reassessment: { goalSatisfied: boolean; evidence: string[]; remainingGaps: string[]; nextEpochRationale: string | null },
+  reassessment: GoalReassessment,
 ): void {
   const finishedAt = new Date().toISOString();
   deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });

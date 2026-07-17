@@ -52,7 +52,7 @@ export interface PlanningEpochReadModel {
   reassessment: {
     goalSatisfied: boolean;
     evidence: string[];
-    remainingGaps: string[];
+    remainingGaps: Array<{ refs: string[]; summary: string }>;
     nextEpochRationale: string | null;
   } | null;
 }
