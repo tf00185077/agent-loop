@@ -20,6 +20,7 @@ import {
   sanitizeControlPlaneText,
 } from "../../runtime/safety/agent-runtime-control-plane-sanitizer.js";
 import { projectManagedTaskContext } from "../../runtime/agent-session/managed-context-projection.js";
+import { projectPlanningEpochs } from "../../runtime/agent-session/planning-epoch-projection.js";
 import { projectAgentLiveStatus } from "../../runtime/agent-session/agent-live-status.js";
 import { recordUnhandledRuntimeFailure } from "../../runtime/agent-session/unhandled-failure.js";
 
@@ -169,6 +170,7 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
         delegationRequests,
         mergeOutcomes,
         managedTasks,
+        planningEpochs: projectPlanningEpochs(events),
         liveStatus: projectAgentLiveStatus({
           goal,
           sessions: sanitizedSessions,

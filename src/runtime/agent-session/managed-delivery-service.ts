@@ -7,6 +7,8 @@ export interface ManagedDeliveryInput {
   supervisorCwd: string;
   attestedFiles: string[];
   safeSummary: string;
+  /** Active OpenSpec change whose artifacts may be edited but not deleted by a provider candidate. */
+  activeChangeId?: string | null;
 }
 
 export interface ManagedCandidateDeliveryInput {
@@ -96,6 +98,13 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
     if (expected.length === 0) {
       return { ok: false, result: outcome("rejected", "Delivery requested without attested workspace changes.") };
     }
+    const reserved = reservedCandidateMutation(currentFiles.entries, expected, input.activeChangeId ?? null);
+    if (reserved) {
+      return {
+        ok: false,
+        result: outcome("verification_failed", `Candidate changed a reserved backend-owned path: ${reserved}`),
+      };
+    }
 
     const supervisorStatus = runGit({ cwd: input.supervisorCwd, args: ["status", "--porcelain", "-uall"] });
     if (supervisorStatus.status !== 0) {
@@ -134,6 +143,10 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
   function reconcilePendingDelivery(input: ReconcilePendingDeliveryInput): ReconcilePendingDeliveryResult {
     const head = runGit({ cwd: input.supervisorCwd, args: ["rev-parse", "HEAD"] });
     const status = runGit({ cwd: input.supervisorCwd, args: ["status", "--porcelain", "-uall"] });
+    const ignored = verifyIgnoredWorkspaceArtifacts(runGit, input.supervisorCwd);
+    if (!ignored.ok) {
+      return { status: "reset_failed", reset: false, safeSummary: ignored.summary };
+    }
     if (
       head.status === 0 && safe(head.stdout) === input.checkpointHead &&
       status.status === 0 && safe(status.stdout).length === 0
@@ -233,17 +246,38 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
   return { deliver, prepareCandidate, deliverCandidate, reconcilePendingDelivery };
 }
 
-function changedFiles(runGit: GitRunner, cwd: string): { ok: true; files: string[] } | { ok: false } {
+function changedFiles(
+  runGit: GitRunner,
+  cwd: string,
+): { ok: true; files: string[]; entries: Array<{ status: string; path: string }> } | { ok: false } {
   const result = runGit({ cwd, args: ["status", "--porcelain", "-uall"] });
   if (result.status !== 0) return { ok: false };
-  return {
-    ok: true,
-    files: String(result.stdout ?? "")
+  const entries = String(result.stdout ?? "")
       .split(/\r?\n/)
       .filter((line) => line.length >= 4)
-      .map((line) => line.slice(3).trim().replace(/^"|"$/g, ""))
-      .sort(),
-  };
+      .map((line) => ({
+        status: line.slice(0, 2),
+        path: line.slice(3).trim().replace(/^"|"$/g, "").replace(/\\/g, "/"),
+      }));
+  return { ok: true, files: entries.map((entry) => entry.path).sort(), entries };
+}
+
+function reservedCandidateMutation(
+  entries: Array<{ status: string; path: string }>,
+  expected: string[],
+  activeChangeId: string | null,
+): string | null {
+  const normalized = expected.map((path) => path.replace(/\\/g, "/").replace(/^\.\//, ""));
+  const archivePath = normalized.find((path) => path.startsWith("openspec/changes/archive/"));
+  if (archivePath) return archivePath;
+  const mainSpecPath = normalized.find((path) => path.startsWith("openspec/specs/"));
+  if (mainSpecPath) return mainSpecPath;
+  if (!activeChangeId) return null;
+  const activePrefix = `openspec/changes/${activeChangeId}/`;
+  const deleted = entries.find((entry) =>
+    entry.path.startsWith(activePrefix) && entry.status.includes("D")
+  );
+  return deleted?.path ?? null;
 }
 
 function restoreCheckpoint(runGit: GitRunner, cwd: string, checkpoint: string, abortCherryPick: boolean): { ok: boolean; summary: string } {
@@ -252,13 +286,42 @@ function restoreCheckpoint(runGit: GitRunner, cwd: string, checkpoint: string, a
   const clean = runGit({ cwd, args: ["clean", "-fd"] });
   const head = runGit({ cwd, args: ["rev-parse", "HEAD"] });
   const status = runGit({ cwd, args: ["status", "--porcelain", "-uall"] });
+  const ignored = verifyIgnoredWorkspaceArtifacts(runGit, cwd);
   const ok = reset.status === 0 && clean.status === 0 && head.status === 0 && status.status === 0 &&
-    safe(head.stdout) === checkpoint && safe(status.stdout).length === 0;
+    safe(head.stdout) === checkpoint && safe(status.stdout).length === 0 && ignored.ok;
   return {
     ok,
     summary: ok ? "Supervisor workspace restored to its clean checkpoint." :
-      `Rollback verification failed: ${safe(`${reset.stderr ?? ""} ${clean.stderr ?? ""} ${head.stderr ?? ""} ${status.stderr ?? ""}`)}`,
+      ignored.ok
+        ? `Rollback verification failed: ${safe(`${reset.stderr ?? ""} ${clean.stderr ?? ""} ${head.stderr ?? ""} ${status.stderr ?? ""}`)}`
+        : ignored.summary,
   };
+}
+
+const PROTECTED_SUPERVISOR_IGNORED_PATHS = [".env", ".worktrees", "node_modules", "package-lock.json"];
+
+function verifyIgnoredWorkspaceArtifacts(
+  runGit: GitRunner,
+  cwd: string,
+): { ok: true } | { ok: false; summary: string } {
+  const result = runGit({ cwd, args: ["status", "--porcelain=v1", "--ignored=matching", "-uall"] });
+  if (result.status !== 0) {
+    return { ok: false, summary: "Unable to verify ignored workspace artifacts during checkpoint reconciliation." };
+  }
+  const uncontrolled = String(result.stdout ?? "").split(/\r?\n/).flatMap((line) => {
+    if (!line.startsWith("!! ")) return [];
+    const path = line.slice(3).trim().replace(/^"|"$/g, "").replace(/\\/g, "/").replace(/\/$/, "");
+    const protectedInput = PROTECTED_SUPERVISOR_IGNORED_PATHS.some((root) =>
+      path === root || path.startsWith(`${root}/`)
+    );
+    return protectedInput ? [] : [path];
+  }).sort().slice(0, 20);
+  return uncontrolled.length === 0
+    ? { ok: true }
+    : {
+        ok: false,
+        summary: `Ignored workspace artifacts prevent exact checkpoint reconciliation: ${uncontrolled.join(", ")}`.slice(0, 500),
+      };
 }
 
 function outcome(status: ManagedDeliveryOutcome, safeSummary: string): ManagedDeliveryResult {

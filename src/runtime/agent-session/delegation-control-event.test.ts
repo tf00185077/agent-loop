@@ -311,10 +311,17 @@ test("validates change plans with budgets and acyclic dependencies", () => {
     },
     parentSession: supervisorSession(),
   });
-  const tooFew = validateManagedControlEvent({
+  const single = validateManagedControlEvent({
     controlEvent: {
       type: "managed_change.plan",
       changes: [{ id: "only", title: "One", rationale: "r" }],
+    },
+    parentSession: supervisorSession(),
+  });
+  const empty = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_change.plan",
+      changes: [],
     },
     parentSession: supervisorSession(),
   });
@@ -355,9 +362,10 @@ test("validates change plans with budgets and acyclic dependencies", () => {
     valid.ok && valid.kind === "change_plan" ? valid.plan.changes[1]?.dependsOn : null,
     ["change-core"],
   );
-  assert.deepEqual(tooFew, {
+  assert.equal(single.ok, true);
+  assert.deepEqual(empty, {
     ok: false,
-    safeReason: "Change plans must contain between 2 and 8 changes.",
+    safeReason: "Change plans must contain between 1 and 8 changes.",
   });
   assert.deepEqual(duplicate, { ok: false, safeReason: "Change ids must be unique within a plan." });
   assert.deepEqual(unknownDep, {
@@ -392,6 +400,113 @@ test("accepts changeId on task lists and delegation requests", () => {
     request.ok && request.kind === "delegation" ? request.request.changeId : null,
     "change-core",
   );
+});
+
+test("validates goal reassessment control events", () => {
+  const unsatisfied = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_goal.reassessment",
+      goalSatisfied: false,
+      evidence: [" Change core-loop delivered and archived. "],
+      remainingGaps: ["Multiplayer mode is still missing."],
+      nextEpochRationale: " Integration surfaced the missing multiplayer surface. ",
+    },
+    parentSession: supervisorSession(),
+  });
+  const satisfied = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_goal.reassessment",
+      goalSatisfied: true,
+      evidence: ["All acceptance criteria pass against the original goal."],
+    },
+    parentSession: supervisorSession(),
+  });
+
+  assert.equal(unsatisfied.ok, true);
+  assert.equal(unsatisfied.ok ? unsatisfied.kind : null, "reassessment");
+  if (unsatisfied.ok && unsatisfied.kind === "reassessment") {
+    assert.equal(unsatisfied.reassessment.goalSatisfied, false);
+    assert.deepEqual(unsatisfied.reassessment.evidence, ["Change core-loop delivered and archived."]);
+    assert.deepEqual(unsatisfied.reassessment.remainingGaps, ["Multiplayer mode is still missing."]);
+    assert.equal(
+      unsatisfied.reassessment.nextEpochRationale,
+      "Integration surfaced the missing multiplayer surface.",
+    );
+  }
+  assert.equal(satisfied.ok, true);
+  if (satisfied.ok && satisfied.kind === "reassessment") {
+    assert.equal(satisfied.reassessment.goalSatisfied, true);
+    assert.deepEqual(satisfied.reassessment.remainingGaps, []);
+    assert.equal(satisfied.reassessment.nextEpochRationale, null);
+  }
+});
+
+test("rejects malformed goal reassessment control events", () => {
+  const missingEvidence = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_goal.reassessment",
+      goalSatisfied: true,
+      evidence: [],
+    },
+    parentSession: supervisorSession(),
+  });
+  const unsatisfiedWithoutGaps = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_goal.reassessment",
+      goalSatisfied: false,
+      evidence: ["e"],
+      remainingGaps: [],
+      nextEpochRationale: "r",
+    },
+    parentSession: supervisorSession(),
+  });
+  const unsatisfiedWithoutRationale = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_goal.reassessment",
+      goalSatisfied: false,
+      evidence: ["e"],
+      remainingGaps: ["gap"],
+    },
+    parentSession: supervisorSession(),
+  });
+  const satisfiedWithGaps = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_goal.reassessment",
+      goalSatisfied: true,
+      evidence: ["e"],
+      remainingGaps: ["gap"],
+    },
+    parentSession: supervisorSession(),
+  });
+  const nonBoolean = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_goal.reassessment",
+      goalSatisfied: "yes",
+      evidence: ["e"],
+    },
+    parentSession: supervisorSession(),
+  });
+
+  assert.deepEqual(missingEvidence, {
+    ok: false,
+    safeReason: "Reassessment requires at least one non-empty evidence string.",
+  });
+  assert.deepEqual(unsatisfiedWithoutGaps, {
+    ok: false,
+    safeReason: "An unsatisfied reassessment requires at least one non-empty remaining gap.",
+  });
+  assert.deepEqual(unsatisfiedWithoutRationale, {
+    ok: false,
+    safeReason: "An unsatisfied reassessment requires a non-empty nextEpochRationale.",
+  });
+  assert.deepEqual(satisfiedWithGaps, {
+    ok: false,
+    safeReason: "A satisfied reassessment must not list remaining gaps.",
+  });
+  assert.deepEqual(nonBoolean, {
+    ok: false,
+    safeReason: "Reassessment goalSatisfied must be a boolean.",
+  });
 });
 
 test("rejects unknown managed control event types with a safe reason", () => {

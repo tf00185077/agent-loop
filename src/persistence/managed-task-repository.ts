@@ -14,6 +14,10 @@ import type {
   TaskCriterionEvidence,
 } from "../domain/index.js";
 import type { AppDatabase } from "./database.js";
+import {
+  planNarrowingRegistration,
+  type NarrowingTaskSnapshot,
+} from "../runtime/agent-session/managed-task-lineage.js";
 
 export interface ManagedTaskRepositoryOptions {
   now?: () => string;
@@ -200,6 +204,35 @@ export function createManagedTaskRepository(
 
   const register = db.transaction((input: RegisterManagedTasksInput): ManagedTaskRecord[] => {
     const now = clock();
+    const existingTasks = listStoredTasksForGoal(db, input.goalId);
+    const narrowingPlan = planNarrowingRegistration({
+      existing: existingTasks.map((task): NarrowingTaskSnapshot => ({
+        id: task.id,
+        goalId: task.goalId,
+        changeId: task.changeId,
+        parentTaskId: task.parentTaskId,
+        status: task.status,
+        attemptCount: task.attemptCount,
+        substantiveRejectionCount: task.substantiveRejectionCount,
+        acceptance: listCriteriaForTask(db, task).map((criterion) => ({
+          id: criterion.criterionId,
+          text: criterion.text,
+        })),
+        pipelineActive: hasActiveTaskPipeline(db, task),
+      })),
+      entries: input.tasks,
+      goalId: input.goalId,
+      changeId: input.changeId ?? null,
+    });
+    const idempotentTasks = new Set(narrowingPlan.idempotentTaskIds);
+    for (const parentId of narrowingPlan.splitParentIds) {
+      const parent = requireTask(db, input.goalId, parentId);
+      db.prepare(`
+        UPDATE managed_tasks
+        SET status = 'split', last_safe_summary = ?, updated_at = ?
+        WHERE id = ?
+      `).run(`Task ${parentId} atomically split into narrower children.`, now, parent.databaseId);
+    }
     const output: ManagedTaskRecord[] = [];
     let inserted = 0;
     for (const entry of input.tasks) {
@@ -207,6 +240,9 @@ export function createManagedTaskRepository(
       if (existing) {
         output.push(toManagedTask(existing));
         continue;
+      }
+      if (idempotentTasks.has(entry.id)) {
+        throw new Error(`Idempotent managed child disappeared during registration: ${entry.id}`);
       }
       let parentDatabaseId: string | null = null;
       if (entry.parentTaskId) {
@@ -232,13 +268,31 @@ export function createManagedTaskRepository(
       inserted += 1;
       output.push(toManagedTask(getStoredTask(db, input.goalId, entry.id)!));
     }
+    for (const parentId of narrowingPlan.splitParentIds) {
+      const childIds = input.tasks
+        .filter((entry) => entry.parentTaskId === parentId)
+        .map((entry) => entry.id)
+        .sort();
+      insertAuditEvent(db, {
+        goalId: input.goalId,
+        runId: input.runId ?? null,
+        message: `Managed task ${parentId} split into ${childIds.length} narrower task${childIds.length === 1 ? "" : "s"}.`,
+        runtimeEventType: "managed_task.lineage_split",
+        data: {
+          parentTaskId: parentId,
+          taskIds: childIds,
+          reasonCode: "retry_threshold_reached",
+        },
+        now,
+      });
+    }
     if (inserted > 0) {
       insertAuditEvent(db, {
         goalId: input.goalId,
         runId: input.runId ?? null,
         message: `Registered ${inserted} managed task${inserted === 1 ? "" : "s"}.`,
         runtimeEventType: "managed_tasks.registered",
-        data: { taskIds: output.map((task) => task.id) },
+        data: { taskIds: output.filter((task) => !idempotentTasks.has(task.id)).map((task) => task.id) },
         now,
       });
     }
@@ -810,6 +864,31 @@ function listCriteriaForTask(db: AppDatabase, task: StoredManagedTask): ManagedT
   return db.prepare("SELECT * FROM managed_task_criteria WHERE task_id = ? ORDER BY rowid")
     .all(task.databaseId)
     .map((row) => mapCriterion(row, task.id));
+}
+
+function hasActiveTaskPipeline(db: AppDatabase, task: StoredManagedTask): boolean {
+  const activeAttempt = db.prepare(`
+    SELECT 1
+    FROM agent_delegation_requests d
+    JOIN agent_sessions s ON s.id = d.parent_session_id
+    WHERE s.goal_id = ? AND d.task_id = ? AND d.role = 'worker'
+      AND d.status IN ('requested', 'accepted', 'running')
+    LIMIT 1
+  `).get(task.goalId, task.id);
+  if (activeAttempt) return true;
+  const pendingReview = db.prepare(`
+    SELECT 1 FROM managed_task_reviews WHERE task_id = ? AND status = 'pending' LIMIT 1
+  `).get(task.databaseId);
+  if (pendingReview) return true;
+  const pendingDelivery = db.prepare(`
+    SELECT 1 FROM managed_task_deliveries WHERE task_id = ? AND status = 'pending' LIMIT 1
+  `).get(task.databaseId);
+  if (pendingDelivery) return true;
+  return Boolean(db.prepare(`
+    SELECT 1 FROM managed_task_integrations
+    WHERE task_id = ? AND status NOT IN ('committed', 'rejected', 'blocked', 'resolution_failed', 'interrupted')
+    LIMIT 1
+  `).get(task.databaseId));
 }
 
 function mapStoredTask(row: unknown): StoredManagedTask {

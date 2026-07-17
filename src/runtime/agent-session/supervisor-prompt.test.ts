@@ -200,11 +200,32 @@ test("bootstrap prompt documents goal scale assessment and the change plan forma
 
   assert.ok(/scale/i.test(prompt), "bootstrap must document scale assessment");
   assert.ok(prompt.includes("managed_change.plan"));
-  assert.ok(/2–8|2-8|between 2 and 8/i.test(prompt), "bootstrap must state the plan budget");
+  assert.ok(/1–8|1-8|between 1 and 8/i.test(prompt), "bootstrap must state the plan budget");
   assert.ok(/dependsOn/.test(prompt), "plan example must show dependencies");
   assert.ok(/"rationale"/.test(prompt), "plan example must show a rationale");
   assert.ok(/small goals?/i.test(prompt), "bootstrap must keep small goals on the flat flow");
   assert.ok(/spec:/.test(prompt), "bootstrap must explain the backend-registered spec tasks");
+  assert.match(prompt, /already registered/i);
+  assert.match(prompt, /backend-authored frozen/i);
+  assert.match(prompt, /implementation tasks only/i);
+  assert.match(prompt, /do not re-announce.*spec:/i);
+});
+
+test("contract documents the goal reassessment loop and its control block", () => {
+  const prompt = buildSupervisorPrompt({ goal, phase: { kind: "bootstrap" } });
+
+  assert.ok(prompt.includes("managed_goal.reassessment"), "contract must document the reassessment block");
+  assert.ok(prompt.includes('"goalSatisfied"'), "reassessment example must show goalSatisfied");
+  assert.ok(prompt.includes('"remainingGaps"'), "reassessment example must show remainingGaps");
+  assert.ok(prompt.includes('"nextEpochRationale"'), "reassessment example must show nextEpochRationale");
+  assert.ok(
+    /original goal/i.test(prompt),
+    "contract must tell the supervisor to re-read the original goal after each batch",
+  );
+  assert.ok(
+    /next (batch|epoch)/i.test(prompt),
+    "contract must explain that gaps admit the next epoch's change plan",
+  );
 });
 
 const changeHistoryFixture: ChangeRecord[] = [
@@ -216,6 +237,7 @@ const changeHistoryFixture: ChangeRecord[] = [
     status: "archived",
     taskIds: ["spec:change-one", "task-1"],
     hasUnmergedAttestedChanges: false,
+    epochSequence: 1,
   },
   {
     id: "change-two",
@@ -225,6 +247,7 @@ const changeHistoryFixture: ChangeRecord[] = [
     status: "executing",
     taskIds: ["spec:change-two"],
     hasUnmergedAttestedChanges: false,
+    epochSequence: 1,
   },
   {
     id: "change-three",
@@ -234,6 +257,7 @@ const changeHistoryFixture: ChangeRecord[] = [
     status: "planned",
     taskIds: ["spec:change-three"],
     hasUnmergedAttestedChanges: false,
+    epochSequence: 2,
   },
 ];
 
@@ -248,6 +272,22 @@ test("change history renders plan statuses and marks the active change", () => {
   assert.doesNotMatch(history, /change-three "Change three" \[planned\].*\(active/);
 });
 
+test("change history groups changes by planning epoch and renders rationales", () => {
+  const history = renderChangeHistory(changeHistoryFixture, [
+    { sequence: 1, rationale: null, changeIds: ["change-one", "change-two"] },
+    { sequence: 2, rationale: "Integration surfaced a missing surface.", changeIds: ["change-three"] },
+  ]);
+
+  assert.match(history, /Epoch 1/);
+  assert.match(history, /Epoch 2/);
+  assert.ok(history.includes("Integration surfaced a missing surface."));
+  const epoch1Index = history.indexOf("Epoch 1");
+  const changeOneIndex = history.indexOf("change-one");
+  const epoch2Index = history.indexOf("Epoch 2");
+  const changeThreeIndex = history.indexOf("change-three");
+  assert.ok(epoch1Index < changeOneIndex && changeOneIndex < epoch2Index && epoch2Index < changeThreeIndex);
+});
+
 test("continuation and nudge prompts carry the change history when a plan exists", () => {
   const continuation = buildSupervisorPrompt({
     goal,
@@ -259,6 +299,9 @@ test("continuation and nudge prompts carry the change history when a plan exists
   assert.ok(continuation.includes("## Change plan"));
   assert.ok(nudge.includes("## Change plan"));
   assert.ok(continuation.includes("change-two"));
+  assert.match(continuation, /synthetic.*already registered/i);
+  assert.match(continuation, /implementation tasks only/i);
+  assert.match(nudge, /do not re-announce.*spec:/i);
 });
 
 test("plan-less goals render without a change plan section", () => {

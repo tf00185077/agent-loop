@@ -115,6 +115,151 @@ test("accepts narrower split tasks with lineage to the failed parent", () => {
   assert.match(parentGate.ok ? "" : parentGate.safeReason, /narrower tasks/i);
 });
 
+test("registering the first child set atomically splits an eligible parent", () => {
+  const registry = registryWithTask();
+  const parent = registry.getTask("task-1")!;
+  parent.status = "failed";
+  parent.attemptCount = 2;
+  parent.substantiveRejections = 2;
+  parent.lastCitedCriteria = ["A1"];
+
+  const result = registry.registerTaskList([
+    {
+      id: "task-1a",
+      title: "Second player join only",
+      acceptance: [{ id: "A1", text: "Two players can join the same lobby." }],
+      parentTaskId: "task-1",
+    },
+    {
+      id: "task-1b",
+      title: "Third player rejection only",
+      acceptance: [{ id: "A2", text: "Lobby rejects a third player." }],
+      parentTaskId: "task-1",
+    },
+  ]);
+
+  assert.equal(registry.getTask("task-1")?.status, "split");
+  assert.deepEqual(result.tasks.map((task) => task.parentTaskId), ["task-1", "task-1"]);
+});
+
+test("direct narrowing follows two substantive review rejections without a redundant parent delegation", () => {
+  const registry = registryWithTask();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    assert.equal(registry.gateWorkerDelegation("task-1", null).ok, true);
+    registry.recordOutcome("task-1", { kind: "success", safeSummary: "Worker claim" });
+    registry.classifyVerdict("task-1", `Review ${attempt + 1}: A1 still fails.`);
+  }
+
+  registry.registerTaskList([{
+    id: "task-1a",
+    title: "Second player join only",
+    acceptance: [criteria[0]!],
+    parentTaskId: "task-1",
+  }]);
+
+  assert.equal(registry.getTask("task-1")?.status, "split");
+  assert.equal(registry.getTask("task-1a")?.parentTaskId, "task-1");
+});
+
+test("invalid child registration leaves the entire in-memory graph unchanged", () => {
+  const registry = registryWithTask();
+  const parent = registry.getTask("task-1")!;
+  parent.status = "failed";
+  parent.substantiveRejections = 2;
+  const before = structuredClone(registry.listTasks());
+
+  assert.throws(() => registry.registerTaskList([
+    {
+      id: "task-1a",
+      title: "Valid sibling",
+      acceptance: [{ id: "A1", text: "Two players can join the same lobby." }],
+      parentTaskId: "task-1",
+    },
+    {
+      id: "task-1b",
+      title: "Invalid sibling",
+      acceptance: criteria,
+      parentTaskId: "task-1",
+    },
+  ]), /narrower/i);
+  assert.deepEqual(registry.listTasks(), before);
+});
+
+test("rejects child registration for an ineligible or self-parented task", () => {
+  const belowThreshold = registryWithTask();
+  assert.throws(() => belowThreshold.registerTaskList([{
+    id: "task-1a", title: "Too early", acceptance: [criteria[0]!], parentTaskId: "task-1",
+  }]), /retry|threshold/i);
+
+  const active = registryWithTask();
+  active.getTask("task-1")!.substantiveRejections = 2;
+  active.getTask("task-1")!.status = "delegated";
+  assert.throws(() => active.registerTaskList([{
+    id: "task-1a", title: "While active", acceptance: [criteria[0]!], parentTaskId: "task-1",
+  }]), /active|delegated/i);
+
+  const selfParent = registryWithTask();
+  selfParent.getTask("task-1")!.substantiveRejections = 2;
+  selfParent.getTask("task-1")!.status = "failed";
+  assert.throws(() => selfParent.registerTaskList([{
+    id: "task-1", title: "Cycle", acceptance: [criteria[0]!], parentTaskId: "task-1",
+  }]), /cycle|itself|self/i);
+});
+
+test("rejects empty, duplicate, and non-smaller child contracts atomically", () => {
+  for (const proposed of [
+    [
+      { id: "task-1a", title: "No contract", acceptance: [], parentTaskId: "task-1" },
+    ],
+    [
+      { id: "task-1a", title: "First copy", acceptance: [criteria[0]!], parentTaskId: "task-1" },
+      { id: "task-1a", title: "Second copy", acceptance: [criteria[1]!], parentTaskId: "task-1" },
+    ],
+    [
+      { id: "task-1a", title: "Same size", acceptance: criteria, parentTaskId: "task-1" },
+    ],
+  ]) {
+    const registry = registryWithTask();
+    const parent = registry.getTask("task-1")!;
+    parent.status = "failed";
+    parent.substantiveRejections = 2;
+    const before = structuredClone(registry.listTasks());
+
+    assert.throws(() => registry.registerTaskList(proposed), /contract|duplicate|narrower/i);
+    assert.deepEqual(registry.listTasks(), before);
+  }
+});
+
+test("does not attach a child to a missing parent", () => {
+  const registry = registryWithTask();
+  const before = structuredClone(registry.listTasks());
+
+  assert.throws(() => registry.registerTaskList([{
+    id: "orphan", title: "Orphan", acceptance: [criteria[0]!], parentTaskId: "missing-parent",
+  }]), /parent.*not found|missing parent/i);
+  assert.deepEqual(registry.listTasks(), before);
+});
+
+test("freezes an exact split child set after idempotent re-announcement", () => {
+  const registry = registryWithTask();
+  const parent = registry.getTask("task-1")!;
+  parent.status = "failed";
+  parent.substantiveRejections = 2;
+  const child = {
+    id: "task-1a",
+    title: "Second player join only",
+    acceptance: [criteria[0]!],
+    parentTaskId: "task-1",
+  };
+
+  registry.registerTaskList([child]);
+  assert.doesNotThrow(() => registry.registerTaskList([child]));
+  assert.throws(() => registry.registerTaskList([{
+    id: "task-1b", title: "Late child", acceptance: [criteria[1]!], parentTaskId: "task-1",
+  }]), /frozen|descendant|child set/i);
+  assert.equal(registry.getTask("task-1b"), undefined);
+});
+
 test("bounds attempt loops even without substantive rejections", () => {
   const registry = registryWithTask();
 

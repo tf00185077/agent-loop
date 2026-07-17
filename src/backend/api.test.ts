@@ -71,7 +71,11 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { stdin += chunk; });
 process.stdin.on("end", () => {
   const outputIndex = process.argv.indexOf("--output-last-message");
-  writeFileSync(process.argv[outputIndex + 1], ${JSON.stringify(response)});
+  // Guard the flag lookup: indexOf() === -1 would resolve to argv[0] (the
+  // node executable) and clobber it with the fake response.
+  if (outputIndex >= 0 && process.argv[outputIndex + 1]) {
+    writeFileSync(process.argv[outputIndex + 1], ${JSON.stringify(response)});
+  }
   writeFileSync(capturePath, JSON.stringify({ args: process.argv.slice(2), stdin }));
 });
 `,
@@ -1638,6 +1642,59 @@ describe("Backend API", () => {
           integrationAttemptId: null,
           resolvedCandidateCommitSha: null,
         });
+      } finally {
+        await providerServer.close();
+      }
+    });
+
+    it("returns the planning epoch projection derived from durable events", async () => {
+      const providerServer = await startServer();
+
+      try {
+        const { goal } = seedManagedSession(providerServer.db);
+        const eventRepo = createEventRepository(providerServer.db);
+        const emit = (data: Record<string, unknown>) =>
+          eventRepo.create({ goalId: goal.id, type: "agent.progress", message: "m", data });
+        emit({
+          runtimeEventType: "supervisor.change_plan",
+          epochSequence: 1,
+          changePlan: [{ id: "change-core", title: "Core", rationale: "r" }],
+        });
+        emit({ runtimeEventType: "change.activated", changeId: "change-core" });
+        emit({ runtimeEventType: "change.archived", changeId: "change-core" });
+        emit({
+          runtimeEventType: "supervisor.reassessment",
+          epochSequence: 1,
+          goalSatisfied: false,
+          evidence: ["core archived"],
+          remainingGaps: ["verification missing"],
+          nextEpochRationale: "integration surfaced a gap",
+        });
+        emit({
+          runtimeEventType: "supervisor.change_plan",
+          epochSequence: 2,
+          epochRationale: "integration surfaced a gap",
+          changePlan: [{ id: "change-verify", title: "Verification", rationale: "r" }],
+        });
+
+        const res = await fetch(`${providerServer.url}/api/goals/${goal.id}/agent-session`);
+        assert.equal(res.status, 200);
+        const body = (await json(res)) as Record<string, unknown>;
+
+        const epochs = body.planningEpochs as Array<Record<string, unknown>>;
+        assert.equal(epochs.length, 2);
+        assert.equal(epochs[0]!.sequence, 1);
+        assert.equal(epochs[0]!.status, "gaps_found");
+        assert.deepEqual(
+          (epochs[0]!.reassessment as Record<string, unknown>).remainingGaps,
+          ["verification missing"],
+        );
+        assert.equal(epochs[1]!.sequence, 2);
+        assert.equal(epochs[1]!.rationale, "integration surfaced a gap");
+        assert.equal(epochs[1]!.status, "executing");
+        assert.deepEqual(epochs[1]!.changes, [
+          { id: "change-verify", title: "Verification", status: "planned" },
+        ]);
       } finally {
         await providerServer.close();
       }

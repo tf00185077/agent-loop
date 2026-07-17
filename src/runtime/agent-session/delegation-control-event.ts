@@ -1,6 +1,7 @@
 import type {
   AgentRuntimeDelegationRole,
   AgentRuntimeSession,
+  GoalReassessment,
   ManagedChangePlanEntry,
   ManagedTaskListEntry,
   ManagedReviewDecisionControlEvent,
@@ -246,6 +247,7 @@ export type ManagedControlEventValidationResult =
   | { ok: true; kind: "task_list"; tasks: ManagedTaskListEntry[]; changeId: string | null }
   | { ok: true; kind: "task_result"; result: ManagedTaskResult }
   | { ok: true; kind: "change_plan"; plan: ManagedChangePlan }
+  | { ok: true; kind: "reassessment"; reassessment: GoalReassessment }
   | { ok: false; safeReason: string };
 
 export function validateManagedControlEvent(
@@ -282,13 +284,70 @@ export function validateManagedControlEvent(
     return validateChangePlan(input.controlEvent.changes);
   }
 
+  if (input.controlEvent.type === "managed_goal.reassessment") {
+    return validateGoalReassessment(input.controlEvent);
+  }
+
   return {
     ok: false,
     safeReason: `Unsupported control event type: ${String(input.controlEvent.type)}.`,
   };
 }
 
-const MIN_PLAN_CHANGES = 2;
+const MAX_REASSESSMENT_STRING = 500;
+const MAX_REASSESSMENT_ITEMS = 20;
+
+function validateGoalReassessment(controlEvent: Record<string, unknown>): ManagedControlEventValidationResult {
+  if (typeof controlEvent.goalSatisfied !== "boolean") {
+    return { ok: false, safeReason: "Reassessment goalSatisfied must be a boolean." };
+  }
+  const evidence = normalizeStringList(controlEvent.evidence);
+  if (!evidence || evidence.length === 0) {
+    return { ok: false, safeReason: "Reassessment requires at least one non-empty evidence string." };
+  }
+  const remainingGaps = controlEvent.remainingGaps === undefined ? [] : normalizeStringList(controlEvent.remainingGaps);
+  if (!remainingGaps) {
+    return { ok: false, safeReason: "Reassessment remaining gaps must be a list of non-empty strings." };
+  }
+  if (controlEvent.goalSatisfied && remainingGaps.length > 0) {
+    return { ok: false, safeReason: "A satisfied reassessment must not list remaining gaps." };
+  }
+  if (!controlEvent.goalSatisfied && remainingGaps.length === 0) {
+    return { ok: false, safeReason: "An unsatisfied reassessment requires at least one non-empty remaining gap." };
+  }
+  const nextEpochRationale =
+    typeof controlEvent.nextEpochRationale === "string" && controlEvent.nextEpochRationale.trim().length > 0
+      ? controlEvent.nextEpochRationale.trim().slice(0, MAX_REASSESSMENT_STRING)
+      : null;
+  if (!controlEvent.goalSatisfied && !nextEpochRationale) {
+    return { ok: false, safeReason: "An unsatisfied reassessment requires a non-empty nextEpochRationale." };
+  }
+  return {
+    ok: true,
+    kind: "reassessment",
+    reassessment: {
+      goalSatisfied: controlEvent.goalSatisfied,
+      evidence,
+      remainingGaps,
+      nextEpochRationale: controlEvent.goalSatisfied ? null : nextEpochRationale,
+    },
+  };
+}
+
+/** Trimmed, capped copy of a string list; null when the shape is invalid. */
+function normalizeStringList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const items: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim().length === 0) return null;
+    items.push(entry.trim().slice(0, MAX_REASSESSMENT_STRING));
+  }
+  return items.slice(0, MAX_REASSESSMENT_ITEMS);
+}
+
+// Minimum of 1: follow-up epochs legitimately need single-change batches
+// (e.g. a final verification change) and small planned goals may run one.
+const MIN_PLAN_CHANGES = 1;
 const MAX_PLAN_CHANGES = 8;
 
 function validateChangePlan(changes: unknown): ManagedControlEventValidationResult {

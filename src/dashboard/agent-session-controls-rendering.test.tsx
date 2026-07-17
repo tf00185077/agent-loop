@@ -33,6 +33,53 @@ test("goal detail renders managed session state approvals cancellation and unsup
   assert.match(html, /Codex exec mode cannot resume approvals/);
 });
 
+test("goal detail renders the planning epoch board with statuses, rationale, and gaps", () => {
+  const html = renderToStaticMarkup(
+    <GoalDetailPanel
+      goal={goal()}
+      latestMetadata={{ provider: "codex-local", model: "gpt-5-codex" }}
+      agentSessionSnapshot={{
+        ...sessionSnapshot(),
+        planningEpochs: [
+          {
+            sequence: 1,
+            rationale: null,
+            status: "gaps_found",
+            changes: [
+              { id: "change-core", title: "Core loop", status: "archived" },
+              { id: "change-modes", title: "Modes", status: "archived" },
+            ],
+            reassessment: {
+              goalSatisfied: false,
+              evidence: ["core delivered"],
+              remainingGaps: ["verification missing"],
+              nextEpochRationale: "integration surfaced a gap",
+            },
+          },
+          {
+            sequence: 2,
+            rationale: "integration surfaced a gap",
+            status: "executing",
+            changes: [{ id: "change-verify", title: "Verification", status: "specifying" }],
+            reassessment: null,
+          },
+        ],
+      }}
+      starting={false}
+      onStart={() => undefined}
+    />,
+  );
+
+  assert.match(html, /Planning epochs/);
+  assert.match(html, /Epoch 1 — gaps found — next epoch/);
+  assert.match(html, /Epoch 2 — executing/);
+  assert.match(html, /Why this epoch: integration surfaced a gap/);
+  assert.match(html, /change-core · archived/);
+  assert.match(html, /change-verify · specifying/);
+  assert.match(html, /Reassessment: gaps remain/);
+  assert.match(html, /verification missing/);
+});
+
 test("goal detail tolerates historical goals without managed session metadata", () => {
   const html = renderToStaticMarkup(
     <GoalDetailPanel

@@ -228,6 +228,7 @@ export const managedCompletionGapTypes = [
   "undelivered_changes",
   "uncontracted_only_work",
   "unarchived_change",
+  "invalid_split_lineage",
 ] as const;
 
 export type ManagedCompletionGapType = (typeof managedCompletionGapTypes)[number];
@@ -239,6 +240,8 @@ export interface ManagedCompletionGap {
   criterionId?: string | null;
   changeId?: string | null;
   delegationRequestId?: string | null;
+  reasonCode?: string | null;
+  taskIds?: string[];
 }
 
 export interface ManagedTaskRecord {
@@ -345,6 +348,7 @@ export const managedControlEventTypes = [
   "managed_review.decision",
   "managed_integration.result",
   "managed_change.plan",
+  "managed_goal.reassessment",
 ] as const;
 
 export type ManagedControlEventType = (typeof managedControlEventTypes)[number];
@@ -409,6 +413,22 @@ export interface ManagedChangePlanControlEvent {
   changes: ManagedChangePlanEntry[];
 }
 
+/**
+ * Supervisor's structured goal-level judgment after a planning epoch's
+ * changes are all archived. Unsatisfied judgments arm the next-epoch gate;
+ * satisfied judgments unlock the completion gate.
+ */
+export interface GoalReassessment {
+  goalSatisfied: boolean;
+  evidence: string[];
+  remainingGaps: string[];
+  nextEpochRationale: string | null;
+}
+
+export interface ManagedGoalReassessmentControlEvent extends GoalReassessment {
+  type: "managed_goal.reassessment";
+}
+
 export interface TaskCriterionEvidence {
   criterionId: string;
   evidence: string;
@@ -454,7 +474,8 @@ export type ManagedControlEvent =
   | ManagedTaskResultControlEvent
   | ManagedReviewDecisionControlEvent
   | ManagedIntegrationResultControlEvent
-  | ManagedChangePlanControlEvent;
+  | ManagedChangePlanControlEvent
+  | ManagedGoalReassessmentControlEvent;
 
 export interface AgentRuntimeDelegationRequest {
   id: string;

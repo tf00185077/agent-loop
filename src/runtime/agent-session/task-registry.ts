@@ -3,6 +3,7 @@ import type {
   ManagedTaskListEntry,
   TaskAcceptanceCriterion,
 } from "../../domain/index.js";
+import { planNarrowingRegistration } from "./managed-task-lineage.js";
 
 export type TaskStatus = "pending" | "delegated" | "done" | "failed" | "split";
 
@@ -52,9 +53,28 @@ export class GoalTaskRegistry {
   private readonly tasks = new Map<string, TaskRecord>();
 
   registerTaskList(entries: ManagedTaskListEntry[]): RegisterTaskListResult {
+    const plan = planNarrowingRegistration({
+      existing: [...this.tasks.values()].map((task) => ({
+        id: task.id,
+        goalId: null,
+        changeId: null,
+        parentTaskId: task.parentTaskId,
+        status: task.status,
+        attemptCount: task.attemptCount,
+        substantiveRejectionCount: task.substantiveRejections,
+        acceptance: task.acceptance,
+        pipelineActive: task.status === "delegated",
+      })),
+      entries,
+      goalId: null,
+      changeId: null,
+    });
+    const staged = new Map(
+      [...this.tasks].map(([id, task]) => [id, cloneTask(task)]),
+    );
     const result: RegisterTaskListResult = { tasks: [], ignoredMutations: [] };
     for (const entry of entries) {
-      const existing = this.tasks.get(entry.id);
+      const existing = staged.get(entry.id);
       if (!existing) {
         const record: TaskRecord = {
           id: entry.id,
@@ -67,10 +87,10 @@ export class GoalTaskRegistry {
           criterionOutcomes: Object.fromEntries(
             (entry.acceptance ?? []).map((criterion) => [criterion.id, "unknown" as CriterionOutcome]),
           ),
-          parentTaskId: findParent(this.tasks, entry),
+          parentTaskId: entry.parentTaskId ?? null,
           lastOutcomeSummary: null,
         };
-        this.tasks.set(entry.id, record);
+        staged.set(entry.id, record);
         result.tasks.push(record);
         continue;
       }
@@ -86,6 +106,12 @@ export class GoalTaskRegistry {
       }
       result.tasks.push(existing);
     }
+    for (const parentId of plan.splitParentIds) {
+      staged.get(parentId)!.status = "split";
+    }
+    this.tasks.clear();
+    for (const [id, task] of staged) this.tasks.set(id, task);
+    result.tasks = result.tasks.map((task) => this.tasks.get(task.id)!);
     return result;
   }
 
@@ -185,6 +211,7 @@ export class GoalTaskRegistry {
     }
     task.substantiveRejections += 1;
     task.lastCitedCriteria = cited;
+    if (task.status === "done") task.status = "pending";
     for (const id of cited) {
       task.criterionOutcomes[id] = "failed";
     }
@@ -221,10 +248,13 @@ function sameCriteria(a: TaskAcceptanceCriterion[], b: TaskAcceptanceCriterion[]
   return b.every((criterion) => byId.get(criterion.id) === criterion.text);
 }
 
-function findParent(tasks: Map<string, TaskRecord>, entry: ManagedTaskListEntry): string | null {
-  const parentId = entry.parentTaskId ?? null;
-  if (!parentId) return null;
-  return tasks.has(parentId) ? parentId : null;
+function cloneTask(task: TaskRecord): TaskRecord {
+  return {
+    ...task,
+    acceptance: task.acceptance?.map((criterion) => ({ ...criterion })) ?? null,
+    lastCitedCriteria: [...task.lastCitedCriteria],
+    criterionOutcomes: { ...task.criterionOutcomes },
+  };
 }
 
 function escapeRegExp(value: string): string {
