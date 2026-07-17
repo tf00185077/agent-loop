@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
+    "test": "node --import tsx --test --test-timeout=30000 \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "recover:managed-goal": "node --import tsx scripts/recover-managed-goal.ts",
     "dev:api": "tsx watch src/backend/server.ts",
     "dev:web": "vite --config src/dashboard/vite.config.ts",
