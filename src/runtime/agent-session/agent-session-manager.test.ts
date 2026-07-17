@@ -2511,22 +2511,27 @@ test("does not scaffold a change plan when durable synthetic task registration f
     supervisorCwd: "C:\\goal-workspace",
   });
 
-  await assert.rejects(
-    manager.startManagedSession({
-      goalId: fixture.goal.id,
-      providerId: "codex-local",
-      modelLabel: "gpt-5-codex",
-      adapter: adapterWithEvents([changePlanEvent([
-        { id: "feature-a", title: "Feature A", rationale: "First slice." },
-        { id: "feature-b", title: "Feature B", rationale: "Second slice." },
-      ])]),
-    }),
-    /injected durable registration failure/,
-  );
+  // The fault is contained durably (event-pump containment) instead of
+  // rejecting the caller; the plan must still not scaffold.
+  await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter: adapterWithEvents([changePlanEvent([
+      { id: "feature-a", title: "Feature A", rationale: "First slice." },
+      { id: "feature-b", title: "Feature B", rationale: "Second slice." },
+    ])]),
+  });
 
   assert.deepEqual(openSpec.scaffolded, []);
-  assert.ok(!fixture.eventRepo.listForGoal(fixture.goal.id)
-    .some((event) => event.data.runtimeEventType === "supervisor.change_plan"));
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  assert.ok(!events.some((event) => event.data.runtimeEventType === "supervisor.change_plan"));
+  const pumpFailure = events.find(
+    (event) => event.data.runtimeEventType === "runtime.event_pump_failed",
+  );
+  assert.ok(pumpFailure, "expected the registration fault to surface as a durable pump failure");
+  assert.match(String(pumpFailure.data.safeReason), /injected durable registration failure/);
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "failed");
   fixture.db.close();
 });
 
@@ -5785,3 +5790,65 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
   throw new Error("Timed out waiting for condition");
 }
+
+test("contains control-path faults durably instead of killing the event pump", async () => {
+  const fixture = createManagerFixture("event pump fault containment");
+  let thrown = false;
+  const eventRepo: typeof fixture.eventRepo = {
+    ...fixture.eventRepo,
+    create(input) {
+      if (!thrown && input.data?.runtimeEventType === "task.result") {
+        thrown = true;
+        throw new Error("synthetic control-path fault under C:\\goal-workspace\\state");
+      }
+      return fixture.eventRepo.create(input);
+    },
+  };
+  const adapter = adapterWithEvents([
+    {
+      type: "progress",
+      sessionId: "s",
+      goalId: "g",
+      runId: "r",
+      message: "Reporting task result.",
+      occurredAt: "2026-07-17T00:00:01.000Z",
+      metadata: {
+        delegationControlEvent: {
+          type: "managed_task.result",
+          taskId: "task-1",
+          criterionEvidence: [{ criterionId: "A1", evidence: "Verified." }],
+        },
+      },
+    },
+  ]);
+  const manager = createAgentSessionManager({
+    ...fixture,
+    eventRepo,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  // Must resolve: a control-path fault is contained, never rethrown into the caller.
+  const result = await manager.startManagedSession({
+    goalId: fixture.goal.id,
+    providerId: "codex-local",
+    modelLabel: "gpt-5-codex",
+    adapter,
+  });
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  const failure = events.find((event) => event.data.runtimeEventType === "runtime.event_pump_failed");
+  assert.ok(failure, "expected a durable runtime.event_pump_failed event");
+  assert.equal(failure.type, "error");
+  assert.match(String(failure.data.safeReason), /synthetic control-path fault/);
+  assert.ok(
+    !String(failure.data.safeReason).includes("C:\\goal-workspace"),
+    "safe reason must not leak the raw workspace path",
+  );
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "failed");
+  assert.equal(fixture.runRepo.getById(result.session.runId)?.status, "failed");
+  assert.equal(
+    fixture.agentSessionRepo.getSession(result.session.id)?.lifecycleState,
+    "failed",
+  );
+  fixture.db.close();
+});

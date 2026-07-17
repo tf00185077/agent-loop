@@ -566,10 +566,50 @@ async function runSessionEvents(
       await persistRuntimeEvent(deps, { ...input, event });
     }
   } catch (error) {
-    if (!(error instanceof PostCommitCacheRefreshInterruption)) throw error;
+    if (!(error instanceof PostCommitCacheRefreshInterruption)) {
+      recordEventPumpFailure(deps, input, error);
+    }
   } finally {
     input.activeHandles.delete(input.sessionId);
     clearRuntimeCommandIds(input.runtimeCommandIds, input.sessionId);
+  }
+}
+
+/**
+ * Terminal containment for the session event pump: a control-path fault must
+ * surface as a durable error event and a visibly failed run, never as an
+ * unhandled rejection (both continuation call sites are fire-and-forget).
+ */
+function recordEventPumpFailure(
+  deps: AgentSessionManagerDeps,
+  input: SessionEventContext,
+  error: unknown,
+): void {
+  const finishedAt = new Date().toISOString();
+  const safeReason = sanitizeArchiveReason(safeErrorMessage(error), input.state.supervisorCwd);
+  try {
+    deps.agentSessionRepo.updateLifecycleState(input.sessionId, "failed");
+    deps.runRepo.updateStatus(input.runId, "failed", { finishedAt, error: safeReason });
+    const goal = deps.goalRepo.getById(input.goalId);
+    if (goal && !["completed", "failed", "blocked", "cancelled"].includes(goal.status)) {
+      deps.goalRepo.updateStatus(input.goalId, "failed", { completedAt: finishedAt });
+    }
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "error",
+      message: "Runtime event handling failed; run stopped.",
+      data: {
+        sessionId: input.sessionId,
+        provider: input.providerId,
+        model: input.modelLabel,
+        runtimeEventType: "runtime.event_pump_failed",
+        safeReason,
+      },
+    });
+  } catch {
+    // The durable store itself failed; keeping the process alive is the only
+    // remaining containment.
   }
 }
 

@@ -9,9 +9,9 @@ first. Commit at the end of every task group.
 
 ## 1. Event-pump fault containment (D3, smallest and unblocks everything)
 
-- [ ] 1.1 Failing test: an adapter event whose control handling throws leaves a durable error event and a visibly failed run — no unhandled rejection, no goal stuck `running`
-- [ ] 1.2 Add terminal catch in `runSessionEvents` persisting a sanitized durable error event and failing the run; keep `PostCommitCacheRefreshInterruption` passthrough semantics
-- [ ] 1.3 Full suite + typecheck green; commit
+- [x] 1.1 Failing test: an adapter event whose control handling throws leaves a durable error event and a visibly failed run — no unhandled rejection, no goal stuck `running`
+- [x] 1.2 Add terminal catch in `runSessionEvents` persisting a sanitized durable error event and failing the run; keep `PostCommitCacheRefreshInterruption` passthrough semantics
+- [x] 1.3 Full suite + typecheck green; commit
 
 ## 2. Supervisor spec approval gate (REPRO-H4, new capability supervisor-spec-approval)
 
