@@ -356,12 +356,24 @@ function requireWorkerResult(
   // Fresh supervisor continuations are new sessions, so the worker result the
   // review references may hang off an earlier supervisor session of the same
   // goal — search the whole lineage, not just the requesting session.
-  const workerResult = deps.agentSessionRepo
+  const completedWorkers = deps.agentSessionRepo
     .listSessionsForGoal(parent.goalId)
     .flatMap((session) => deps.agentSessionRepo.listDelegationRequests(session.id))
-    .find((request) => request.id === workerDelegationRequestId && request.role === "worker" && request.resultSummary);
+    .filter((request) => request.role === "worker" && request.resultSummary);
+  const workerResult = completedWorkers.find((request) => request.id === workerDelegationRequestId);
   if (!workerResult?.resultSummary) {
-    throw new Error("Review merge requires an existing worker result.");
+    // Supervisors routinely confuse task ids with delegation request ids; a
+    // rejection that names the resolvable id lets them self-correct in one
+    // continuation instead of looping.
+    const latest = completedWorkers.at(-1);
+    throw new Error(
+      latest
+        ? "Review merge requires an existing worker result; " +
+          `"${workerDelegationRequestId ?? ""}" does not resolve. The latest completed worker attempt is ` +
+          `${latest.id}${latest.taskId ? ` (task ${latest.taskId})` : ""} — pass the workerDelegationRequestId ` +
+          "from the worker result observation, not the task id."
+        : "Review merge requires an existing worker result.",
+    );
   }
   return {
     id: workerResult.id,

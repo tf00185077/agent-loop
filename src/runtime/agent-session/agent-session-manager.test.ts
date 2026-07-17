@@ -6719,3 +6719,68 @@ test("cancelling a supervisor session cancels its in-flight child sessions first
   );
   fixture.db.close();
 });
+
+test("review-merge with an unresolvable worker id is rejected naming the latest completed attempt", async () => {
+  const fixture = createManagerFixture("teaching review-merge rejection");
+  const openSpec = recordingOpenSpecService("cli");
+  const adapter = scriptedEpochAdapter(fixture, 2, (_input, tools) =>
+    runScript(
+      (function* () {
+        yield tools.controlEvent(
+          {
+            type: "managed_change.plan",
+            changes: [{ id: "change-one", title: "Change one", rationale: "Only slice." }],
+          },
+          "2026-07-13T00:00:01.000Z",
+        );
+        yield tools.controlEvent(
+          {
+            type: "managed_delegation.request",
+            role: "worker",
+            taskId: "spec:change-one",
+            prompt: "Author change-one specs.",
+            summary: "Author change-one specs.",
+          },
+          "2026-07-13T00:00:02.000Z",
+        );
+        yield tools.gates[0]!.promise;
+        // The live-observed mistake: passing the task id where the delegation
+        // request id belongs.
+        yield tools.controlEvent(
+          {
+            type: "managed_delegation.request",
+            role: "review_merge",
+            workerDelegationRequestId: "spec:change-one",
+            prompt: "Merge change-one specs.",
+            summary: "Merge change-one specs.",
+          },
+          "2026-07-13T00:00:03.000Z",
+        );
+      })(),
+    ),
+  );
+  const manager = createAgentSessionManager({
+    ...fixture,
+    openSpecWorkspaceService: openSpec.service,
+    supervisorCwd: "C:\\goal-workspace",
+  });
+
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id).some((event) =>
+    event.data.runtimeEventType === "delegation.rejected" &&
+    /worker result/i.test(String(event.data.safeReason))));
+
+  const workerId = fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id)
+    .flatMap((session) => fixture.agentSessionRepo.listDelegationRequests(session.id))
+    .find((request) => request.role === "worker" && request.resultSummary)!.id;
+  const rejection = fixture.eventRepo.listForGoal(fixture.goal.id).find((event) =>
+    event.data.runtimeEventType === "delegation.rejected" &&
+    /worker result/i.test(String(event.data.safeReason)))!;
+  const reason = String(rejection.data.safeReason);
+  assert.ok(reason.includes(workerId), "the rejection must name the latest completed worker attempt id");
+  assert.match(reason, /task spec:change-one/, "the rejection must name the attempt's task for orientation");
+  assert.match(reason, /not the task id/i, "the rejection must teach the id-vs-task distinction");
+  fixture.db.close();
+});
