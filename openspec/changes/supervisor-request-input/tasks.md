@@ -7,8 +7,8 @@
 
 ## 2. Control-block validation
 
-- [ ] 2.1 Failing tests in `delegation-control-event.test.ts`: well-formed question accepted; empty question, oversized question (>2000), >5 context strings, oversized context string (>500) rejected with safe reasons naming the bounds
-- [ ] 2.2 Implement `managed_goal.request_input` shape validation in `delegation-control-event.ts` (pure; trims and bounds text)
+- [x] 2.1 Failing tests in `delegation-control-event.test.ts`: well-formed question accepted; empty question, oversized question (>2000), >5 context strings, oversized context string (>500) rejected with safe reasons naming the bounds
+- [x] 2.2 Implement `managed_goal.request_input` shape validation in `delegation-control-event.ts` (pure; trims and bounds text)
 
 ## 3. Manager acceptance gates and escalation
 

@@ -252,6 +252,7 @@ export type ManagedControlEventValidationResult =
   | { ok: true; kind: "change_plan"; plan: ManagedChangePlan }
   | { ok: true; kind: "spec_review"; review: ManagedSpecReviewControlEvent }
   | { ok: true; kind: "reassessment"; reassessment: GoalReassessment }
+  | { ok: true; kind: "request_input"; question: string; context: string[] }
   | { ok: false; safeReason: string };
 
 export function validateManagedControlEvent(
@@ -296,10 +297,56 @@ export function validateManagedControlEvent(
     return validateGoalReassessment(input.controlEvent);
   }
 
+  if (input.controlEvent.type === "managed_goal.request_input") {
+    return validateGoalRequestInput(input.controlEvent);
+  }
+
   return {
     ok: false,
     safeReason: `Unsupported control event type: ${String(input.controlEvent.type)}.`,
   };
+}
+
+const MAX_QUESTION_LENGTH = 2000;
+const MAX_QUESTION_CONTEXT_ITEMS = 5;
+const MAX_QUESTION_CONTEXT_LENGTH = 500;
+
+function validateGoalRequestInput(controlEvent: Record<string, unknown>): ManagedControlEventValidationResult {
+  const question = typeof controlEvent.question === "string" ? controlEvent.question.trim() : "";
+  if (question.length === 0) {
+    return { ok: false, safeReason: "request_input requires a non-empty question string." };
+  }
+  if (question.length > MAX_QUESTION_LENGTH) {
+    return {
+      ok: false,
+      safeReason: `request_input question is limited to ${MAX_QUESTION_LENGTH} characters.`,
+    };
+  }
+  if (controlEvent.context !== undefined && !Array.isArray(controlEvent.context)) {
+    return { ok: false, safeReason: "request_input context must be an array of strings when present." };
+  }
+  const rawContext = (controlEvent.context ?? []) as unknown[];
+  if (rawContext.length > MAX_QUESTION_CONTEXT_ITEMS) {
+    return {
+      ok: false,
+      safeReason: `request_input context is limited to ${MAX_QUESTION_CONTEXT_ITEMS} strings.`,
+    };
+  }
+  const context: string[] = [];
+  for (const entry of rawContext) {
+    const trimmed = typeof entry === "string" ? entry.trim() : "";
+    if (trimmed.length === 0) {
+      return { ok: false, safeReason: "request_input context entries must be non-empty strings." };
+    }
+    if (trimmed.length > MAX_QUESTION_CONTEXT_LENGTH) {
+      return {
+        ok: false,
+        safeReason: `request_input context entries are limited to ${MAX_QUESTION_CONTEXT_LENGTH} characters.`,
+      };
+    }
+    context.push(trimmed);
+  }
+  return { ok: true, kind: "request_input", question, context };
 }
 
 function validateSpecReview(

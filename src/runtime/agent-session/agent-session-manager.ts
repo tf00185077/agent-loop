@@ -94,6 +94,13 @@ export interface AgentSessionManagerDeps {
    */
   maxPlanningEpochs?: number;
   /**
+   * Maximum supervisor questions per goal (counted from durable
+   * `supervisor_question` requests of any status); further request_input
+   * blocks are rejected with autonomy guidance so the loop cannot stall on
+   * infinite asking.
+   */
+  maxSupervisorQuestions?: number;
+  /**
    * Resolves user-configured role→agent assignments for child dispatch.
    * Returning null keeps the goal's default adapter.
    */
@@ -179,6 +186,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     roleResolutions: new Map(),
     maxSupervisorContinuations: deps.maxSupervisorContinuations ?? 10,
     maxPlanningEpochs: deps.maxPlanningEpochs ?? 5,
+    maxSupervisorQuestions: deps.maxSupervisorQuestions ?? 3,
     openSpec: deps.openSpecWorkspaceService ?? createOpenSpecWorkspaceService(),
     supervisorCwd: deps.supervisorCwd ?? process.cwd(),
   };
@@ -798,6 +806,7 @@ interface SupervisorState {
   roleResolutions: Map<string, ResolvedRoleAgentLike | null>;
   maxSupervisorContinuations: number;
   maxPlanningEpochs: number;
+  maxSupervisorQuestions: number;
   openSpec: OpenSpecWorkspaceService;
   supervisorCwd: string;
 }
@@ -1086,6 +1095,22 @@ async function persistDelegationControlEvent(
   });
   if (!validation.ok) {
     recordControlRejection(deps, input, data, validation.safeReason);
+    return;
+  }
+
+  // A goal parked on a pending caller input request accepts no further
+  // control blocks: the asking supervisor's turn is over, and any trailing
+  // blocks from the ending session must not mutate goal state.
+  if (deps.goalRepo.getById(input.goalId)?.status === "waiting_user") {
+    recordControlRejection(
+      deps, input, data,
+      "The goal is waiting for caller input; no control blocks are accepted until the caller responds. End your turn.",
+    );
+    return;
+  }
+
+  if (validation.kind === "request_input") {
+    handleSupervisorRequestInput(deps, input, data, validation.question, validation.context);
     return;
   }
 
@@ -3468,6 +3493,66 @@ function blockGoalForMacroLoop(
 }
 
 /**
+ * Deterministic gates for a live supervisor's question: escalation available,
+ * goal running with no pending request, no in-flight child delegation, and a
+ * per-goal question budget so the loop cannot stall on infinite asking. Every
+ * rejection teaches the correct next action.
+ */
+function handleSupervisorRequestInput(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  data: Record<string, unknown>,
+  question: string,
+  context: string[],
+): void {
+  if (!deps.goalInputRequestRepo) {
+    recordControlRejection(
+      deps, input, data,
+      "Caller escalation is unavailable on this backend; decide autonomously using your best judgment and proceed.",
+    );
+    return;
+  }
+  const goal = deps.goalRepo.getById(input.goalId);
+  if (!goal || goal.status !== "running") {
+    recordControlRejection(
+      deps, input, data,
+      `Goal is ${goal?.status ?? "missing"}; questions are only accepted while the goal is running.`,
+    );
+    return;
+  }
+  const inFlight = deps.agentSessionRepo
+    .listDelegationRequests(input.sessionId)
+    .some((request) => ["requested", "accepted", "running"].includes(request.status));
+  if (inFlight) {
+    recordControlRejection(
+      deps, input, data,
+      "A child delegation is still in flight; wait for its observation before asking the caller.",
+    );
+    return;
+  }
+  const priorQuestions = deps.goalInputRequestRepo
+    .listForGoal(input.goalId)
+    .filter((request) => request.reasonCode === "supervisor_question").length;
+  if (priorQuestions >= input.state.maxSupervisorQuestions) {
+    recordControlRejection(
+      deps, input, data,
+      `The goal's question budget (${input.state.maxSupervisorQuestions}) is exhausted; ` +
+        "decide autonomously using your best judgment and proceed.",
+    );
+    return;
+  }
+  escalateGoalForCallerInput(deps, input, {
+    reasonCode: "supervisor_question",
+    runtimeEventType: "supervisor.question",
+    safeReason: question,
+    budgetName: null,
+    budgetValue: null,
+    evidence: context,
+    remainingGaps: [],
+  });
+}
+
+/**
  * Caller escalation: record the durable input request, make the transition
  * observable, and park the goal in the non-terminal `waiting_user` state. The
  * request row and its event are the escalation's source of truth — resume
@@ -3480,8 +3565,8 @@ function escalateGoalForCallerInput(
     reasonCode: GoalInputRequestReason;
     runtimeEventType: string;
     safeReason: string;
-    budgetName: GoalInputBudgetName;
-    budgetValue: number;
+    budgetName: GoalInputBudgetName | null;
+    budgetValue: number | null;
     evidence: string[];
     remainingGaps: ReassessmentGap[];
     extraData?: Record<string, unknown>;

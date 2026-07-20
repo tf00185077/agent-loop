@@ -785,3 +785,48 @@ test("rejects malformed executable checks with teaching reasons", () => {
     assert.match(result.ok ? "" : result.safeReason, pattern, JSON.stringify(check));
   }
 });
+
+test("validates supervisor request_input control events", () => {
+  const valid = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_goal.request_input",
+      question: "  Should the export default to CSV or JSON?  ",
+      context: [" Both formats are feasible. ", "The spec does not name one."],
+    },
+    parentSession: supervisorSession(),
+  });
+  assert.equal(valid.ok, true);
+  assert.equal(valid.ok ? valid.kind : null, "request_input");
+  if (valid.ok && valid.kind === "request_input") {
+    assert.equal(valid.question, "Should the export default to CSV or JSON?");
+    assert.deepEqual(valid.context, ["Both formats are feasible.", "The spec does not name one."]);
+  }
+
+  const noContext = validateManagedControlEvent({
+    controlEvent: { type: "managed_goal.request_input", question: "Which port should the API use?" },
+    parentSession: supervisorSession(),
+  });
+  assert.equal(noContext.ok && noContext.kind === "request_input" ? noContext.context.length : -1, 0);
+});
+
+test("rejects malformed request_input blocks naming the bounds", () => {
+  const cases: Array<[Record<string, unknown>, RegExp]> = [
+    [{ type: "managed_goal.request_input", question: "   " }, /question/i],
+    [{ type: "managed_goal.request_input" }, /question/i],
+    [{ type: "managed_goal.request_input", question: "x".repeat(2001) }, /2000/],
+    [
+      { type: "managed_goal.request_input", question: "Q?", context: ["a", "b", "c", "d", "e", "f"] },
+      /5/,
+    ],
+    [
+      { type: "managed_goal.request_input", question: "Q?", context: ["y".repeat(501)] },
+      /500/,
+    ],
+    [{ type: "managed_goal.request_input", question: "Q?", context: "not-a-list" }, /context/i],
+  ];
+  for (const [controlEvent, pattern] of cases) {
+    const result = validateManagedControlEvent({ controlEvent, parentSession: supervisorSession() });
+    assert.equal(result.ok, false, JSON.stringify(controlEvent).slice(0, 80));
+    assert.match(result.ok ? "" : result.safeReason, pattern, JSON.stringify(controlEvent).slice(0, 80));
+  }
+});
