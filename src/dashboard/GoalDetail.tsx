@@ -413,6 +413,7 @@ const INPUT_REASON_LABELS: Record<GoalInputRequestView["reasonCode"], string> = 
   epoch_budget_exhausted: "Planning-epoch budget exhausted",
   reassessment_circuit_breaker: "Reassessment loop is not converging",
   continuation_exhausted: "Supervisor continuation budget exhausted",
+  supervisor_question: "The supervisor is asking a question",
 };
 
 export function GoalInputRequestPanel({

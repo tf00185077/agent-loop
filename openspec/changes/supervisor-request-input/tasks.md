@@ -19,8 +19,8 @@
 
 ## 4. Prompt contract and dashboard label
 
-- [ ] 4.1 Document `managed_goal.request_input` in `supervisor-prompt.ts` (when to ask: only decisions the caller alone can make; question budget; end turn after asking); prompt test asserting the contract text
-- [ ] 4.2 Dashboard: add the `supervisor_question` reason label; rendering test showing question summary + guidance/abandon only
+- [x] 4.1 Document `managed_goal.request_input` in `supervisor-prompt.ts` (when to ask: only decisions the caller alone can make; question budget; end turn after asking); prompt test asserting the contract text
+- [x] 4.2 Dashboard: add the `supervisor_question` reason label; rendering test showing question summary + guidance/abandon only
 
 ## 5. Verification and archive
 

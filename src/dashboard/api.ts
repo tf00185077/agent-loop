@@ -294,11 +294,15 @@ export async function cancelAgentSession(sessionId: string): Promise<void> {
 export interface GoalInputRequestView {
   id: string;
   goalId: string;
-  reasonCode: "epoch_budget_exhausted" | "reassessment_circuit_breaker" | "continuation_exhausted";
+  reasonCode:
+    | "epoch_budget_exhausted"
+    | "reassessment_circuit_breaker"
+    | "continuation_exhausted"
+    | "supervisor_question";
   safeSummary: string;
   payload: {
-    budgetName: "planning_epochs" | "supervisor_continuations";
-    budgetValue: number;
+    budgetName: "planning_epochs" | "supervisor_continuations" | null;
+    budgetValue: number | null;
     evidence: string[];
     remainingGaps: Array<{ refs: string[]; summary: string }>;
     allowedDecisions: Array<"extend_budget" | "provide_guidance" | "abandon">;

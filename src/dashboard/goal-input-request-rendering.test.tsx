@@ -80,6 +80,31 @@ test("the panel offers exactly the allowed decisions", () => {
   assert.match(html, /Abandon goal/);
 });
 
+test("a supervisor question renders its text with guidance and abandon only", () => {
+  const html = renderToStaticMarkup(
+    <GoalInputRequestPanel
+      request={{
+        ...inputRequest({
+          budgetName: null,
+          budgetValue: null,
+          evidence: ["Both formats are feasible."],
+          remainingGaps: [],
+          allowedDecisions: ["provide_guidance", "abandon"],
+        }),
+        reasonCode: "supervisor_question",
+        safeSummary: "Should the export default to CSV or JSON?",
+      }}
+      notice={null}
+    />,
+  );
+
+  assert.match(html, /The supervisor is asking a question/);
+  assert.match(html, /Should the export default to CSV or JSON\?/);
+  assert.doesNotMatch(html, /Extend budget/);
+  assert.match(html, /Send guidance/);
+  assert.match(html, /Abandon goal/);
+});
+
 test("a standing-resolution notice renders without a pending request", () => {
   const html = renderToStaticMarkup(
     <GoalInputRequestPanel request={null} notice="Already resolved: accepted." />,

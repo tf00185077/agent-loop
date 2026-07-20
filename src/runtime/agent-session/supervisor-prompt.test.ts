@@ -95,6 +95,15 @@ test("bootstrap prompt includes one fenced example per control block type", () =
   assert.ok(fences.length >= 3, `expected at least 3 control block examples, got ${fences.length}`);
 });
 
+test("bootstrap prompt documents the caller-question contract and its limits", () => {
+  const prompt = buildSupervisorPrompt({ goal, phase: { kind: "bootstrap" } });
+
+  assert.match(prompt, /managed_goal\.request_input/);
+  assert.match(prompt, /decision is genuinely the caller's to make/i);
+  assert.match(prompt, /question budget/i);
+  assert.match(prompt, /proceed autonomously|decide and moving on|prefer deciding/i);
+});
+
 test("continuation prompt carries the child observation and the full contract", () => {
   const prompt = buildSupervisorPrompt({
     goal,
