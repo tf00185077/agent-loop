@@ -69,16 +69,30 @@ the conversation and resume even if the supervisor has not signalled — the cal
 override) and `abandon` (terminal block). Alternative (caller reply auto-unlocks)
 rejected: it recreates today's "answer handed to an unpaused session" problem.
 
-**D5 — The confirm-before-work checkpoint is a per-epoch gate keyed on a standing
-confirmation.** A goal carries a `confirmationPolicy` (`required` default, or `off`).
-When `required`, the first work-producing control block of an epoch —
+**D5 — The confirm-before-work checkpoint is a caller-owned gate keyed on a standing
+confirmation.** A goal carries a `confirmationPolicy` (`required` default, or `off`) that
+is **owned by the caller and invisible to the supervisor**: it is set when the goal is
+created (by the human on the dashboard, or by the parent caller over the API/MCP in the
+recursive case), stored on the goal, and changeable only through a caller action — never
+through any control block. The supervisor has no block to read or alter it, so `off` is
+the *caller's* opt-out (e.g. a trusted autonomous batch goal), never the agent's escape
+hatch. Under `required`, the first work-producing control block of an epoch —
 `managed_delegation.request` or `managed_change.plan` — is rejected unless a standing
-confirmation exists for the current epoch, with a safe reason instructing the supervisor
-to `propose_plan` and converse to `ready_to_proceed` first. A `ready_to_proceed` that
-closes a `plan_confirmation` conversation records the standing confirmation for the
-current epoch. Opening the next epoch clears it (mirrors how `supervisor-spec-approval`
-clears approval on a new attempt), re-arming the checkpoint. Flat goals treat "epoch 0"
-as the single checkpoint.
+confirmation exists, with a safe reason instructing the supervisor to `propose_plan` and
+converse to `ready_to_proceed` first; the supervisor therefore cannot do any work, and
+so cannot complete the goal, without at least one caller confirmation. A
+`ready_to_proceed` (or caller `proceed`) that closes a `plan_confirmation` conversation
+records the standing confirmation. Flat goals treat "epoch 0" as the single checkpoint.
+
+**D5a — The standing confirmation is invalidated by any plan-restatement, not only by a
+new epoch.** The confirmation is cleared — re-arming the checkpoint — whenever the
+supervisor emits a plan-defining control block after it was granted: `managed_change.plan`
+(which also opens the next epoch) or `managed_delegation.task_list` (a mid-epoch
+re-plan). These blocks are the deterministic "I am (re)defining what I will do" moments,
+so a supervisor that changes its task list must re-confirm before executing the new one.
+This is the enforceable proxy for "material plan change" — it triggers on the restatement
+block, not on an attempt to diff arbitrary semantic drift, which is not backend-detectable.
+Mirrors how `supervisor-spec-approval` clears approval on a new attempt.
 
 **D6 — `propose_plan` is a distinct block/reason so the dashboard can render confirm
 affordances.** `managed_goal.propose_plan { summary, items?: string[] }` opens a
@@ -123,10 +137,19 @@ Additive JSON payload fields and new control types; new nullable `confirmation_p
 column on goals (default `required`). No data migration; existing pending requests read
 as single-entry threads. Rollback = revert; thread fields are ignored by old code.
 
+## Resolved Decisions (from review)
+
+- **`confirmationPolicy` is caller-owned, not the agent's escape hatch** (D5): defaults
+  `required`, set at goal creation, immutable by the supervisor. `off` is a caller-only
+  opt-out. Under `required`, confirmation is mandatory before any work and therefore
+  before completion.
+- **The checkpoint re-arms on mid-epoch plan restatement** (D5a): any subsequent
+  `managed_change.plan` or `managed_delegation.task_list` clears the standing
+  confirmation, not only a new epoch.
+
 ## Open Questions
 
-- Should `confirmationPolicy` default to `required` for ALL goals, or only when the goal
-  is created through a caller that declares interactivity? Proposal defaults `required`
-  to match the user's stated preference; revisit if autonomous batch goals feel gated.
-- Should the checkpoint re-arm on a *materially changed* plan mid-epoch, not only on a
-  new epoch? Deferred — per-epoch re-arm is the simple, well-defined MVP.
+- Should a distinct "confirm before declaring done" checkpoint gate `managed_delegation.complete`
+  as well, independent of the work checkpoint? Not in this change's scope; the work gate
+  already prevents completion without confirmed work. Revisit if callers want a final
+  sign-off separate from the plan sign-off.

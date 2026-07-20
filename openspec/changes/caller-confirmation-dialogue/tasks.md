@@ -5,7 +5,7 @@
 - [ ] 1.1 Extend `GoalInputRequestPayload` with `thread: Array<{ role: "supervisor" | "caller"; text; at }>` and `phase: "awaiting_caller" | "awaiting_supervisor" | "resolved"`; add `plan_confirmation` reason and `proceed` decision; `allowedDecisionsForReason` returns guidance+proceed+abandon for conversation reasons (TDD)
 - [ ] 1.2 Add `managed_goal.propose_plan` and `managed_goal.ready_to_proceed` to `ManagedControlEventType` with interfaces
 - [ ] 1.3 Repository: `appendMessage`, `setPhase`, and a standing-confirmation query (per goal + epoch); failing tests for thread round-trip, phase transitions, and confirmation lookup
-- [ ] 1.4 Goals: nullable `confirmation_policy` column (default `required`); repo getter/setter; migration test
+- [ ] 1.4 Goals: nullable `confirmation_policy` column (default `required`), set at goal creation via a caller-facing field and changeable only by a caller action (no control block reads/writes it); repo getter/setter; migration test
 
 ## 2. Control-block validation
 
@@ -22,9 +22,9 @@
 
 ## 4. Confirm-before-work checkpoint
 
-- [ ] 4.1 Failing tests: under `required`, the first `managed_delegation.request`/`managed_change.plan` of an epoch with no standing confirmation is rejected with the propose-first safe reason; after a `plan_confirmation` closes with `ready_to_proceed`, work is accepted
-- [ ] 4.2 Implement the checkpoint gate + standing-confirmation recording on `plan_confirmation` close (supervisor ready or caller proceed)
-- [ ] 4.3 Failing test + implementation: opening the next epoch clears the standing confirmation and re-arms the checkpoint; `off` policy bypasses it entirely
+- [ ] 4.1 Failing tests: under `required`, a `managed_delegation.request`/`managed_change.plan` with no standing confirmation is rejected with the propose-first safe reason; after a `plan_confirmation` closes with `ready_to_proceed` (or caller `proceed`), work is accepted; a supervisor cannot bypass or change the policy via any control block
+- [ ] 4.2 Implement the checkpoint gate + standing-confirmation recording on `plan_confirmation` close (supervisor ready or caller proceed); policy read from the goal, never from a control block
+- [ ] 4.3 Failing test + implementation: the standing confirmation is cleared by any subsequent plan-defining block (`managed_change.plan` or mid-epoch `managed_delegation.task_list`), re-arming the checkpoint; `off` policy bypasses the checkpoint entirely
 
 ## 5. Prompt contract and API
 

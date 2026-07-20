@@ -20,26 +20,35 @@ prompt text SHALL only inform while these gates enforce.
 - **THEN** the backend rejects it with a durable safe reason
 
 ### Requirement: Confirmation checkpoint before work
-The system SHALL carry a per-goal confirmation policy (`required` by default, or `off`).
-Under `required`, the system SHALL reject the first work-producing control block of each
-epoch — `managed_delegation.request` or `managed_change.plan` — unless a standing caller
-confirmation exists for the current epoch, with a durable safe reason instructing the
-supervisor to propose its plan and reach `ready_to_proceed` first. Opening a new epoch
-SHALL clear the standing confirmation, re-arming the checkpoint. Under `off`, no
-checkpoint SHALL be enforced.
+The system SHALL carry a per-goal confirmation policy (`required` by default, or `off`)
+that is owned by the caller and set when the goal is created; the supervisor SHALL have
+no control block that reads or changes it, so the policy is never bypassable by the
+agent. Under `required`, the system SHALL reject a work-producing control block —
+`managed_delegation.request` or `managed_change.plan` — unless a standing caller
+confirmation exists for the goal, with a durable safe reason instructing the supervisor
+to propose its plan and reach `ready_to_proceed` first. A `plan_confirmation` conversation
+that closes by supervisor `ready_to_proceed` or caller `proceed` SHALL record the standing
+confirmation. The standing confirmation SHALL be cleared — re-arming the checkpoint —
+whenever the supervisor subsequently emits a plan-defining control block
+(`managed_change.plan`, which also opens the next epoch, or a mid-epoch
+`managed_delegation.task_list`). Under `off`, no checkpoint SHALL be enforced.
 
 #### Scenario: Work without confirmation is rejected under the required policy
-- **WHEN** a `required`-policy goal's supervisor emits its first delegation or change plan of an epoch with no standing confirmation
+- **WHEN** a `required`-policy goal's supervisor emits a delegation or change plan with no standing confirmation
 - **THEN** the backend rejects it and instructs the supervisor to propose a plan and reach ready_to_proceed first
 
-#### Scenario: Confirmed plan admits work
-- **WHEN** a `plan_confirmation` conversation has closed with a standing confirmation for the current epoch
-- **THEN** the supervisor's work-producing control blocks for that epoch are accepted
+#### Scenario: The supervisor cannot disable the policy
+- **WHEN** a `required`-policy goal's supervisor emits any control block attempting to skip or change the confirmation policy
+- **THEN** the backend does not honor it as a policy change and the checkpoint still applies
 
-#### Scenario: A new epoch re-arms the checkpoint
-- **WHEN** the goal opens the next epoch after a satisfied checkpoint
-- **THEN** the standing confirmation is cleared and the first work-producing block of the new epoch requires a fresh confirmation
+#### Scenario: Confirmed plan admits work
+- **WHEN** a `plan_confirmation` conversation has closed with a standing confirmation
+- **THEN** the supervisor's work-producing control blocks are accepted until the confirmation is cleared
+
+#### Scenario: A restated plan re-arms the checkpoint
+- **WHEN** the supervisor emits a new `managed_change.plan` or a mid-epoch `managed_delegation.task_list` after a confirmation was granted
+- **THEN** the standing confirmation is cleared and the next work-producing block requires a fresh confirmation
 
 #### Scenario: Off policy keeps the autonomous flow
-- **WHEN** a goal's confirmation policy is `off`
+- **WHEN** a goal's caller-set confirmation policy is `off`
 - **THEN** work-producing control blocks are accepted with no confirmation checkpoint
