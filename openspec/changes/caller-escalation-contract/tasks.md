@@ -15,17 +15,17 @@
 
 ## 3. Response validation and application
 
-- [ ] 3.1 Failing tests: decision-not-allowed, out-of-range extension, empty guidance, response to non-pending request — all rejected with safe reasons, request stays pending, goal unchanged
-- [ ] 3.2 Implement deterministic response validation in the manager (mirror of control-block validation; no prompt-text enforcement)
-- [ ] 3.3 Implement effective-budget derivation: base + accepted grants (bounded 1..base per grant); switch epoch-budget and continuation checks to effective values; `provide_guidance` on budget reasons implies +1
-- [ ] 3.4 Implement `abandon`: request resolved, goal to terminal `blocked` with caller-attributed durable reason
-- [ ] 3.5 Durable events: `goal.input_response` (accepted and rejected variants) written before side effects
+- [x] 3.1 Failing tests: decision-not-allowed, out-of-range extension, empty guidance, response to non-pending request — all rejected with safe reasons, request stays pending, goal unchanged
+- [x] 3.2 Implement deterministic response validation in the manager (mirror of control-block validation; no prompt-text enforcement)
+- [x] 3.3 Implement effective-budget derivation: base + accepted grants (bounded 1..base per grant); switch epoch-budget and continuation checks to effective values; `provide_guidance` on budget reasons implies +1
+- [x] 3.4 Implement `abandon`: request resolved, goal to terminal `blocked` with caller-attributed durable reason
+- [x] 3.5 Durable events: `goal.input_response` (accepted and rejected variants) written before side effects
 
 ## 4. Resume as fresh continuation
 
-- [ ] 4.1 Failing test: accepted guidance/extension resumes the goal — registries rehydrated, fresh supervisor session started, continuation prompt carries the caller decision as an observation, goal back to `running`
-- [ ] 4.2 Implement resume reusing the fresh branch of `continueSupervisorAfterChild` + `supervisor-state-rehydration` (cold path: no active handle); deterministic observation rendering for each decision kind
-- [ ] 4.3 Failing test + implementation: post-resume loop honors extended budgets end to end (next unsatisfied reassessment admits an epoch under base+grant; continuation counter continues under extended bound)
+- [x] 4.1 Failing test: accepted guidance/extension resumes the goal — registries rehydrated, fresh supervisor session started, continuation prompt carries the caller decision as an observation, goal back to `running`
+- [x] 4.2 Implement resume reusing the fresh branch of `continueSupervisorAfterChild` + `supervisor-state-rehydration` (cold path: no active handle); deterministic observation rendering for each decision kind
+- [x] 4.3 Failing test + implementation: post-resume loop honors extended budgets end to end (next unsatisfied reassessment admits an epoch under base+grant; continuation counter continues under extended bound)
 
 ## 5. Restart and cancellation stability
 

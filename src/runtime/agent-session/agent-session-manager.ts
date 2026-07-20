@@ -7,12 +7,15 @@ import type {
   AgentRuntimeSession,
   AgentSessionHandle,
   GoalInputBudgetName,
+  GoalInputRequest,
   GoalInputRequestReason,
+  GoalInputResponse,
   GoalReassessment,
   ManagedCompletionGap,
   ReassessmentGap,
 } from "../../domain/index.js";
 import { allowedDecisionsForReason } from "../../domain/index.js";
+import { validateGoalInputResponse } from "./goal-input-response.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type { GoalInputRequestRepository } from "../../persistence/goal-input-request-repository.js";
 import type { AppDatabase } from "../../persistence/database.js";
@@ -125,11 +128,29 @@ export interface StartManagedSessionResult {
   session: AgentRuntimeSession;
 }
 
+export interface RespondToGoalInputRequestInput {
+  goalId: string;
+  requestId: string;
+  /** Raw caller response body; validated deterministically before any effect. */
+  body: unknown;
+  /**
+   * Adapter bundle used to restart the supervisor for resume decisions. When
+   * absent, an accepted resume decision defers visibly: the goal is left
+   * `interrupted` so the next boot's recovery resumes it.
+   */
+  runtime?: { providerId: string; modelLabel: string | null; adapter: AgentRuntimeAdapter };
+}
+
+export type RespondToGoalInputRequestResult =
+  | { ok: true; request: GoalInputRequest; outcome: "resumed" | "resume_deferred" | "abandoned" }
+  | { ok: false; code: "not_found" | "conflict" | "invalid"; safeReason: string; standing?: GoalInputRequest };
+
 export interface AgentSessionManager {
   startManagedSession(input: StartManagedSessionInput): Promise<StartManagedSessionResult>;
   recoverOrphanedSessions(): AgentRuntimeSession[];
   reconcileOrphanedWorktrees(): Promise<void>;
   resumeInterruptedGoal(input: ResumeInterruptedGoalInput): Promise<void>;
+  respondToGoalInputRequest(input: RespondToGoalInputRequestInput): Promise<RespondToGoalInputRequestResult>;
   approve(sessionId: string, requestId: string): Promise<boolean>;
   reject(sessionId: string, requestId: string, reason?: string): Promise<boolean>;
   cancel(sessionId: string, reason?: string): Promise<boolean>;
@@ -285,75 +306,136 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     async resumeInterruptedGoal(input) {
       const goal = deps.goalRepo.getById(input.goalId);
       if (!goal || goal.status !== "interrupted") return;
-
-      // Rehydrate the working caches from the durable ledger so the resumed
-      // session gates and continues against the same state it had before the crash.
-      if (deps.managedTaskRepo) {
-        rehydrateTaskRegistry(getTaskRegistry(state, input.goalId), deps.managedTaskRepo, input.goalId);
-        rehydrateChangeRegistry(
-          getChangeRegistry(state, input.goalId),
-          deps.managedTaskRepo,
-          input.goalId,
-          deps.eventRepo.listForGoal(input.goalId),
-        );
-      }
-      if (deps.database && !reconcileDurableArchivesBeforeResume(deps, state, input.goalId)) return;
-
-      const continuationPrompt = buildSupervisorPrompt({
-        goal,
-        phase: { kind: "continuation", observation: "Resumed after backend restart." },
-        taskHistory: getTaskRegistry(state, input.goalId).listTasks(),
-        managedTaskContext: deps.managedTaskRepo
-          ? projectManagedTaskContext(deps.managedTaskRepo, input.goalId)
-          : undefined,
-        changeHistory: getChangeRegistry(state, input.goalId).listChanges(),
-        epochHistory: getChangeRegistry(state, input.goalId).listEpochs(),
+      await resumeGoalFromDurableProjection(input, {
+        observation: "Resumed after backend restart.",
+        resumedEventMessage: "Interrupted goal resumed from durable projection.",
+        resumedRuntimeEventType: "recovery.resumed",
       });
+    },
 
-      // The most recent persisted provider session id, if any, lets the adapter
-      // replay the prior transcript (Phase 4b); it falls back to fresh when the
-      // provider does not support resume.
-      const resumeSessionId = deps.agentSessionRepo
-        .listSessionsForGoal(input.goalId)
-        .reverse()
-        .find((session) => session.providerSessionId)?.providerSessionId ?? null;
+    async respondToGoalInputRequest(input) {
+      const repo = deps.goalInputRequestRepo;
+      if (!repo) {
+        return { ok: false, code: "not_found", safeReason: "Goal escalation is unavailable on this backend." };
+      }
+      const request = repo.getById(input.requestId);
+      if (!request || request.goalId !== input.goalId) {
+        return { ok: false, code: "not_found", safeReason: "Input request not found for this goal." };
+      }
+      if (request.status !== "pending") {
+        return {
+          ok: false,
+          code: "conflict",
+          safeReason: `Input request already resolved: ${request.status}.`,
+          standing: request,
+        };
+      }
+      const goal = deps.goalRepo.getById(input.goalId);
+      if (!goal || goal.status !== "waiting_user") {
+        return {
+          ok: false,
+          code: "conflict",
+          safeReason: `Goal is ${goal?.status ?? "missing"}, not waiting for caller input.`,
+          standing: request,
+        };
+      }
 
-      deps.goalRepo.updateStatus(input.goalId, "running");
+      const base = request.payload.budgetName === "planning_epochs"
+        ? state.maxPlanningEpochs
+        : state.maxSupervisorContinuations;
+      const validation = validateGoalInputResponse(request, input.body, base);
+      if (!validation.ok) {
+        deps.eventRepo.create({
+          goalId: input.goalId,
+          type: "goal.input_response",
+          message: "Caller response rejected.",
+          data: {
+            runtimeEventType: "goal.input_response_rejected",
+            inputRequestId: request.id,
+            safeReason: validation.safeReason,
+          },
+        });
+        return { ok: false, code: "invalid", safeReason: validation.safeReason };
+      }
+      const response = validation.response;
+
+      if (response.decision === "abandon") {
+        const resolved = repo.resolve(request.id, "abandoned", response);
+        deps.eventRepo.create({
+          goalId: input.goalId,
+          type: "goal.input_response",
+          message: "Caller abandoned the goal.",
+          data: {
+            runtimeEventType: "goal.input_response_accepted",
+            inputRequestId: request.id,
+            decision: "abandon",
+            ...(response.reason ? { reason: response.reason } : {}),
+          },
+        });
+        deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: new Date().toISOString() });
+        deps.eventRepo.create({
+          goalId: input.goalId,
+          type: "goal.blocked",
+          message: "Goal blocked: the caller chose to abandon after escalation.",
+          data: {
+            runtimeEventType: "goal.abandoned_by_caller",
+            inputRequestId: request.id,
+            reasonCode: request.reasonCode,
+            ...(response.reason ? { reason: response.reason } : {}),
+          },
+        });
+        return { ok: true, request: resolved, outcome: "abandoned" };
+      }
+
+      const resolved = repo.resolve(request.id, "accepted", response);
+      const effective = effectiveBudget(deps, state, input.goalId, request.payload.budgetName);
+      const label = budgetLabel(request.payload.budgetName);
       deps.eventRepo.create({
         goalId: input.goalId,
-        type: "agent.progress",
-        message: "Interrupted goal resumed from durable projection.",
+        type: "goal.input_response",
+        message: response.decision === "extend_budget"
+          ? `Caller granted ${response.extension} additional ${label} (effective budget ${effective}).`
+          : "Caller provided guidance for the resumed supervisor.",
         data: {
-          runtimeEventType: "recovery.resumed",
-          provider: input.providerId,
-          model: input.modelLabel,
-          providerResume: Boolean(resumeSessionId),
+          runtimeEventType: "goal.input_response_accepted",
+          inputRequestId: request.id,
+          decision: response.decision,
+          budgetName: request.payload.budgetName,
+          effectiveBudget: effective,
+          ...(response.decision === "extend_budget"
+            ? { extension: response.extension }
+            : { guidance: response.guidance }),
         },
       });
 
-      try {
-        await manager.startManagedSession({
-          goalId: input.goalId,
-          providerId: input.providerId,
-          modelLabel: input.modelLabel,
-          adapter: input.adapter,
-          prompt: continuationPrompt,
-          resumeSessionId,
-        });
-      } catch (error) {
-        // Best-effort: a resume that cannot start must not spin. Revert to the
-        // visible interrupted state so a later boot can reconcile and resume.
+      if (!input.runtime) {
+        // Degrade visibly: without an adapter the grant is durable but the
+        // restart is deferred to the interrupted-goal recovery on next boot.
         deps.goalRepo.updateStatus(input.goalId, "interrupted");
         deps.eventRepo.create({
           goalId: input.goalId,
           type: "agent.progress",
-          message: "Resume failed to start; goal left interrupted for a later boot.",
-          data: {
-            runtimeEventType: "recovery.resume_failed",
-            safeReason: error instanceof Error ? error.message : String(error),
-          },
+          message: "Caller response accepted; resume deferred until a provider adapter is available.",
+          data: { runtimeEventType: "escalation.resume_deferred", inputRequestId: request.id },
         });
+        return { ok: true, request: resolved, outcome: "resume_deferred" };
       }
+
+      await resumeGoalFromDurableProjection(
+        {
+          goalId: input.goalId,
+          providerId: input.runtime.providerId,
+          modelLabel: input.runtime.modelLabel,
+          adapter: input.runtime.adapter,
+        },
+        {
+          observation: renderCallerObservation(response, label, effective),
+          resumedEventMessage: "Goal resumed after caller input.",
+          resumedRuntimeEventType: "escalation.resumed",
+          extraEventData: { inputRequestId: request.id },
+        },
+      );
+      return { ok: true, request: resolved, outcome: "resumed" };
     },
 
     approve(sessionId, requestId) {
@@ -380,7 +462,131 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     },
   };
 
+  /**
+   * Cold-path resume shared by restart recovery and caller-escalation resume:
+   * rehydrate the working caches from the durable ledger, rebuild the
+   * continuation prompt around the given observation, and start a fresh
+   * supervisor session. On failure the goal reverts to the visible
+   * `interrupted` state so a later boot can pick it up.
+   */
+  async function resumeGoalFromDurableProjection(
+    input: ResumeInterruptedGoalInput,
+    resume: {
+      observation: string;
+      resumedEventMessage: string;
+      resumedRuntimeEventType: string;
+      extraEventData?: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    const goal = deps.goalRepo.getById(input.goalId);
+    if (!goal) return;
+
+    if (deps.managedTaskRepo) {
+      rehydrateTaskRegistry(getTaskRegistry(state, input.goalId), deps.managedTaskRepo, input.goalId);
+      rehydrateChangeRegistry(
+        getChangeRegistry(state, input.goalId),
+        deps.managedTaskRepo,
+        input.goalId,
+        deps.eventRepo.listForGoal(input.goalId),
+      );
+    }
+    if (deps.database && !reconcileDurableArchivesBeforeResume(deps, state, input.goalId)) return;
+
+    const continuationPrompt = buildSupervisorPrompt({
+      goal,
+      phase: { kind: "continuation", observation: resume.observation },
+      taskHistory: getTaskRegistry(state, input.goalId).listTasks(),
+      managedTaskContext: deps.managedTaskRepo
+        ? projectManagedTaskContext(deps.managedTaskRepo, input.goalId)
+        : undefined,
+      changeHistory: getChangeRegistry(state, input.goalId).listChanges(),
+      epochHistory: getChangeRegistry(state, input.goalId).listEpochs(),
+    });
+
+    // The most recent persisted provider session id, if any, lets the adapter
+    // replay the prior transcript (Phase 4b); it falls back to fresh when the
+    // provider does not support resume.
+    const resumeSessionId = deps.agentSessionRepo
+      .listSessionsForGoal(input.goalId)
+      .reverse()
+      .find((session) => session.providerSessionId)?.providerSessionId ?? null;
+
+    deps.goalRepo.updateStatus(input.goalId, "running");
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      type: "agent.progress",
+      message: resume.resumedEventMessage,
+      data: {
+        runtimeEventType: resume.resumedRuntimeEventType,
+        provider: input.providerId,
+        model: input.modelLabel,
+        providerResume: Boolean(resumeSessionId),
+        ...resume.extraEventData,
+      },
+    });
+
+    try {
+      await manager.startManagedSession({
+        goalId: input.goalId,
+        providerId: input.providerId,
+        modelLabel: input.modelLabel,
+        adapter: input.adapter,
+        prompt: continuationPrompt,
+        resumeSessionId,
+      });
+    } catch (error) {
+      // Best-effort: a resume that cannot start must not spin. Revert to the
+      // visible interrupted state so a later boot can reconcile and resume.
+      deps.goalRepo.updateStatus(input.goalId, "interrupted");
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        type: "agent.progress",
+        message: "Resume failed to start; goal left interrupted for a later boot.",
+        data: {
+          runtimeEventType: "recovery.resume_failed",
+          safeReason: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
   return manager;
+}
+
+/** Human-readable name of a goal-level budget for observations and events. */
+function budgetLabel(name: GoalInputBudgetName): string {
+  return name === "planning_epochs" ? "planning epochs" : "supervisor continuations";
+}
+
+/**
+ * Deterministic rendering of an accepted caller decision, injected into the
+ * resumed supervisor's continuation prompt as an observation. Guidance is
+ * information for the supervisor; every deterministic gate still applies.
+ */
+function renderCallerObservation(
+  response: Extract<GoalInputResponse, { decision: "extend_budget" | "provide_guidance" }>,
+  label: string,
+  effective: number,
+): string {
+  if (response.decision === "extend_budget") {
+    return `Caller input: granted additional ${label}; the effective budget is now ${effective}. ` +
+      "Continue the goal within the extended bound.";
+  }
+  return `Caller input: guidance for continuing — ${response.guidance}`;
+}
+
+/**
+ * Effective goal-level budget: the configured base plus every accepted caller
+ * grant, recomputed from durable rows so restarts cannot lose an extension.
+ */
+function effectiveBudget(
+  deps: AgentSessionManagerDeps,
+  state: SupervisorState,
+  goalId: string,
+  budgetName: GoalInputBudgetName,
+): number {
+  const base = budgetName === "planning_epochs" ? state.maxPlanningEpochs : state.maxSupervisorContinuations;
+  return base + (deps.goalInputRequestRepo?.sumAcceptedExtensions(goalId, budgetName) ?? 0);
 }
 
 /**
@@ -1230,11 +1436,12 @@ async function persistDelegationControlEvent(
         );
         return;
       }
-      if (changeRegistry.epochCount() >= input.state.maxPlanningEpochs) {
+      const epochBudget = effectiveBudget(deps, input.state, input.goalId, "planning_epochs");
+      if (changeRegistry.epochCount() >= epochBudget) {
         blockGoalForMacroLoop(
           deps, input,
           "supervisor.epoch_budget_exhausted",
-          `Goal reached its planning-epoch budget (${input.state.maxPlanningEpochs}) with gaps remaining.`,
+          `Goal reached its planning-epoch budget (${epochBudget}) with gaps remaining.`,
           validation.reassessment,
         );
         return;
@@ -3216,7 +3423,7 @@ function blockGoalForMacroLoop(
     runtimeEventType,
     safeReason: reason,
     budgetName: "planning_epochs",
-    budgetValue: input.state.maxPlanningEpochs,
+    budgetValue: effectiveBudget(deps, input.state, input.goalId, "planning_epochs"),
     evidence: reassessment.evidence,
     remainingGaps: reassessment.remainingGaps,
     extraData: {
@@ -3362,16 +3569,17 @@ async function startCompletionlessContinuation(
   }
 
   const count = input.state.completionlessContinuations.get(input.goalId) ?? 0;
-  if (count >= input.state.maxSupervisorContinuations) {
+  const continuationBudget = effectiveBudget(deps, input.state, input.goalId, "supervisor_continuations");
+  if (count >= continuationBudget) {
     const completionRequestEvaluated = input.state.completionRequestsEvaluated.has(input.goalId);
     const completionGaps = input.state.lastCompletionGaps.get(input.goalId) ?? [];
     const reason = completionRequestEvaluated
-      ? `Supervisor reached ${input.state.maxSupervisorContinuations} continuations without reaching successful completion`
-      : `Supervisor reached ${input.state.maxSupervisorContinuations} continuations without a completion signal`;
+      ? `Supervisor reached ${continuationBudget} continuations without reaching successful completion`
+      : `Supervisor reached ${continuationBudget} continuations without a completion signal`;
     const sharedData = {
       ...data,
       delegationControlEvent: undefined,
-      maxSupervisorContinuations: input.state.maxSupervisorContinuations,
+      maxSupervisorContinuations: continuationBudget,
       completionRequestEvaluated,
       ...(completionGaps.length > 0 ? { completionGaps } : {}),
       reason,
@@ -3392,7 +3600,7 @@ async function startCompletionlessContinuation(
       runtimeEventType: "supervisor.continuations_exhausted",
       safeReason: reason,
       budgetName: "supervisor_continuations",
-      budgetValue: input.state.maxSupervisorContinuations,
+      budgetValue: continuationBudget,
       evidence: completionGaps.map((gap) => gap.safeSummary),
       remainingGaps: [],
       extraData: sharedData,
