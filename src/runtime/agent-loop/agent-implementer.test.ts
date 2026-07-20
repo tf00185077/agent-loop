@@ -12,6 +12,7 @@ const goal = {
   status: "running",
   priority: "normal",
   agentType: "general",
+  confirmationPolicy: "off",
   createdAt: "2026-06-22T00:00:00.000Z",
   updatedAt: "2026-06-22T00:00:00.000Z",
   startedAt: "2026-06-22T00:00:00.000Z",

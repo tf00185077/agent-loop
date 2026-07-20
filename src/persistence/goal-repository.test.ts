@@ -41,6 +41,25 @@ test("creates, lists, and gets persisted goals", () => {
   db.close();
 });
 
+test("confirmation policy defaults to off and honors an explicit required opt-in", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goals = createGoalRepository(db);
+
+  const autonomous = goals.create({ title: "Autonomous", description: "no confirmation" });
+  assert.equal(autonomous.confirmationPolicy, "off");
+  assert.equal(goals.getById(autonomous.id)?.confirmationPolicy, "off");
+
+  const gated = goals.create({
+    title: "High stakes",
+    description: "requires sign-off",
+    confirmationPolicy: "required",
+  });
+  assert.equal(gated.confirmationPolicy, "required");
+  assert.equal(goals.getById(gated.id)?.confirmationPolicy, "required");
+
+  db.close();
+});
+
 test("updates goal lifecycle status and timestamps", () => {
   const db = openDatabase({ path: testDatabasePath() });
   // Deterministic, strictly increasing clock so updatedAt is guaranteed to

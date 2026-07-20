@@ -352,6 +352,8 @@ export const managedControlEventTypes = [
   "managed_change.spec_review",
   "managed_goal.reassessment",
   "managed_goal.request_input",
+  "managed_goal.propose_plan",
+  "managed_goal.ready_to_proceed",
 ] as const;
 
 export type ManagedControlEventType = (typeof managedControlEventTypes)[number];
@@ -487,6 +489,30 @@ export interface ManagedGoalRequestInputControlEvent {
   context?: string[];
 }
 
+/**
+ * A supervisor proposes its plan/interpretation for caller confirmation,
+ * opening a `plan_confirmation` conversation. Under a `required` confirmation
+ * policy this is how the supervisor obtains the standing confirmation that
+ * unlocks work.
+ */
+export interface ManagedGoalProposePlanControlEvent {
+  type: "managed_goal.propose_plan";
+  summary: string;
+  /** Optional structured plan items shown to the caller. */
+  items?: string[];
+}
+
+/**
+ * A supervisor signals that an open conversation is resolved: the backend
+ * closes it and resumes the working loop. Honored only during a conversational
+ * turn.
+ */
+export interface ManagedGoalReadyToProceedControlEvent {
+  type: "managed_goal.ready_to_proceed";
+  /** Optional short note recorded with the resolution. */
+  summary?: string;
+}
+
 export interface TaskCriterionEvidence {
   criterionId: string;
   evidence: string;
@@ -535,7 +561,9 @@ export type ManagedControlEvent =
   | ManagedChangePlanControlEvent
   | ManagedSpecReviewControlEvent
   | ManagedGoalReassessmentControlEvent
-  | ManagedGoalRequestInputControlEvent;
+  | ManagedGoalRequestInputControlEvent
+  | ManagedGoalProposePlanControlEvent
+  | ManagedGoalReadyToProceedControlEvent;
 
 export interface AgentRuntimeDelegationRequest {
   id: string;

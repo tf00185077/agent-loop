@@ -100,6 +100,49 @@ test("accepted guidance on a supervisor question grants no budget", () => {
   assert.equal(repo.sumAcceptedExtensions(goal.id, "supervisor_continuations"), 0);
 });
 
+test("appendMessage grows the thread and flips the phase, round-tripping durably", () => {
+  const { goal, repo } = setup();
+  const opened = repo.createRequest({
+    goalId: goal.id,
+    reasonCode: "plan_confirmation",
+    safeSummary: "Here is my plan: A then B.",
+    payload: {
+      budgetName: null,
+      budgetValue: null,
+      evidence: ["Step A", "Step B"],
+      remainingGaps: [],
+      allowedDecisions: allowedDecisionsForReason("plan_confirmation"),
+      thread: [{ role: "supervisor", text: "Here is my plan: A then B.", at: "2026-07-20T00:00:00.000Z" }],
+      phase: "awaiting_caller",
+    },
+  });
+  assert.equal(opened.payload.phase, "awaiting_caller");
+  assert.equal(opened.payload.thread?.length, 1);
+
+  const afterCaller = repo.appendMessage(
+    opened.id,
+    { role: "caller", text: "Swap the order: B then A.", at: "2026-07-20T00:01:00.000Z" },
+    "awaiting_supervisor",
+  );
+  assert.equal(afterCaller.payload.phase, "awaiting_supervisor");
+  assert.deepEqual(afterCaller.payload.thread?.map((m) => m.role), ["supervisor", "caller"]);
+
+  // Durable round-trip.
+  const reread = repo.getPending(goal.id);
+  assert.equal(reread?.payload.thread?.length, 2);
+  assert.equal(reread?.payload.thread?.[1]?.text, "Swap the order: B then A.");
+});
+
+test("appendMessage rejects a non-pending request", () => {
+  const { goal, repo } = setup();
+  const opened = repo.createRequest(requestInput(goal.id));
+  repo.resolve(opened.id, "abandoned", { decision: "abandon", reason: null });
+  assert.throws(
+    () => repo.appendMessage(opened.id, { role: "caller", text: "x", at: "t" }, "awaiting_supervisor"),
+    /not pending/i,
+  );
+});
+
 test("listForGoal returns chronological history and sums accepted grants", () => {
   const { goal, repo } = setup();
   const first = repo.createRequest(requestInput(goal.id));

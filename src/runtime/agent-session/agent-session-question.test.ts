@@ -84,7 +84,7 @@ test("a valid question parks the goal as a supervisor_question request", async (
   const pending = fixture.goalInputRequestRepo.getPending(fixture.goal.id);
   assert.equal(pending?.reasonCode, "supervisor_question");
   assert.equal(pending?.safeSummary, QUESTION.question);
-  assert.deepEqual(pending?.payload.allowedDecisions, ["provide_guidance", "abandon"]);
+  assert.deepEqual(pending?.payload.allowedDecisions, ["provide_guidance", "proceed", "abandon"]);
   assert.equal(pending?.payload.budgetName, null);
   assert.equal(pending?.payload.budgetValue, null);
   assert.deepEqual(pending?.payload.evidence, ["Both are feasible."]);

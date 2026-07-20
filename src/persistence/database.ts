@@ -67,6 +67,7 @@ function initializeSchema(
       status TEXT NOT NULL,
       priority TEXT NOT NULL,
       agent_type TEXT NOT NULL,
+      confirmation_policy TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       started_at TEXT,
@@ -378,6 +379,8 @@ function initializeSchema(
   ensureColumn(db, "agent_delegation_requests", "change_id", "TEXT");
   ensureColumn(db, "agent_delegation_requests", "attempt_number", "INTEGER");
   ensureColumn(db, "provider_settings", "role_assignments", "TEXT");
+  // Caller-owned confirmation policy; default off keeps existing goals autonomous.
+  ensureColumn(db, "goals", "confirmation_policy", "TEXT");
   ensureColumn(db, "managed_task_reviews", "integration_attempt_id", "TEXT");
   ensureColumn(db, "managed_task_criteria", "check_json", "TEXT");
   ensureColumn(db, "managed_task_reviews", "reviewed_candidate_commit_sha", "TEXT");

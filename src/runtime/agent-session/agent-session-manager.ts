@@ -418,7 +418,11 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
           ...(budgetName ? { budgetName, effectiveBudget: effective } : {}),
           ...(response.decision === "extend_budget"
             ? { extension: response.extension }
-            : { guidance: response.guidance }),
+            : response.decision === "provide_guidance"
+              ? { guidance: response.guidance }
+              : response.decision === "proceed" && response.note
+                ? { note: response.note }
+                : {}),
         },
       });
 
@@ -603,13 +607,16 @@ function budgetLabel(name: GoalInputBudgetName): string {
  */
 function renderCallerObservation(
   request: GoalInputRequest,
-  response: Extract<GoalInputResponse, { decision: "extend_budget" | "provide_guidance" }>,
+  response: Extract<GoalInputResponse, { decision: "extend_budget" | "provide_guidance" | "proceed" }>,
   label: string | null,
   effective: number | null,
 ): string {
   if (response.decision === "extend_budget") {
     return `Caller input: granted additional ${label}; the effective budget is now ${effective}. ` +
       "Continue the goal within the extended bound.";
+  }
+  if (response.decision === "proceed") {
+    return `Caller directed the goal to proceed${response.note ? ` — ${response.note}` : ""}.`;
   }
   if (request.reasonCode === "supervisor_question") {
     return `Caller answered the supervisor's question. Q: ${request.safeSummary} A: ${response.guidance}`;

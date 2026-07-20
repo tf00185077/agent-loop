@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import type {
   GoalInputBudgetName,
+  GoalInputMessage,
+  GoalInputPhase,
   GoalInputRequest,
   GoalInputRequestPayload,
   GoalInputRequestReason,
@@ -28,6 +30,8 @@ export interface GoalInputRequestRepository {
     status: Exclude<GoalInputRequestStatus, "pending">,
     response: GoalInputResponse | null,
   ): GoalInputRequest;
+  /** Append a conversation message and set the new phase in one durable write. */
+  appendMessage(id: string, message: GoalInputMessage, phase: GoalInputPhase): GoalInputRequest;
   /**
    * Sum of budget grants from accepted responses for one bound: explicit
    * `extend_budget` extensions, plus the implicit minimal grant (1) that an
@@ -91,6 +95,20 @@ export function createGoalInputRequestRepository(
       db.prepare(`
         UPDATE goal_input_requests SET status = ?, response = ?, resolved_at = ? WHERE id = ?
       `).run(status, response ? JSON.stringify(response) : null, now(), id);
+      return getById(id)!;
+    },
+    appendMessage(id, message, phase) {
+      const existing = getById(id);
+      if (!existing) throw new Error(`Goal input request not found: ${id}`);
+      if (existing.status !== "pending") {
+        throw new Error(`Goal input request ${id} is not pending (status: ${existing.status}).`);
+      }
+      const payload = {
+        ...existing.payload,
+        thread: [...(existing.payload.thread ?? []), message],
+        phase,
+      };
+      db.prepare("UPDATE goal_input_requests SET payload = ? WHERE id = ?").run(JSON.stringify(payload), id);
       return getById(id)!;
     },
     sumAcceptedExtensions(goalId, budgetName) {

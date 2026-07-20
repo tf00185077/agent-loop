@@ -11,26 +11,53 @@ export type GoalInputRequestReason =
   | "epoch_budget_exhausted"
   | "reassessment_circuit_breaker"
   | "continuation_exhausted"
-  | "supervisor_question";
+  | "supervisor_question"
+  | "plan_confirmation";
 
-export type GoalInputDecision = "extend_budget" | "provide_guidance" | "abandon";
+export type GoalInputDecision = "extend_budget" | "provide_guidance" | "proceed" | "abandon";
 
 /** The bound whose exhaustion (or governing loop) triggered the escalation. */
 export type GoalInputBudgetName = "planning_epochs" | "supervisor_continuations";
 
+/** Reasons that open a multi-turn conversation rather than a single-turn request. */
+export const conversationReasons: readonly GoalInputRequestReason[] = [
+  "supervisor_question",
+  "plan_confirmation",
+];
+
+export function isConversationReason(reason: GoalInputRequestReason): boolean {
+  return conversationReasons.includes(reason);
+}
+
+export type GoalInputMessageRole = "supervisor" | "caller";
+
+export interface GoalInputMessage {
+  role: GoalInputMessageRole;
+  text: string;
+  at: string;
+}
+
+/** Whose turn it is in an open conversation, or `resolved` once closed. */
+export type GoalInputPhase = "awaiting_caller" | "awaiting_supervisor" | "resolved";
+
 export interface GoalInputRequestPayload {
-  /** Null for supervisor questions — a question exhausts no budget. */
+  /** Null for conversation reasons — a question/proposal exhausts no budget. */
   budgetName: GoalInputBudgetName | null;
   /** Effective value of the bound at escalation time (base + accepted grants). */
   budgetValue: number | null;
   evidence: string[];
   remainingGaps: ReassessmentGap[];
   allowedDecisions: GoalInputDecision[];
+  /** Present for conversation reasons: the durable back-and-forth so far. */
+  thread?: GoalInputMessage[];
+  /** Present for conversation reasons: whose turn it is. */
+  phase?: GoalInputPhase;
 }
 
 export type GoalInputResponse =
   | { decision: "extend_budget"; extension: number }
   | { decision: "provide_guidance"; guidance: string }
+  | { decision: "proceed"; note: string | null }
   | { decision: "abandon"; reason: string | null };
 
 export type GoalInputRequestStatus = "pending" | "accepted" | "abandoned" | "cancelled";
@@ -48,10 +75,13 @@ export interface GoalInputRequest {
 }
 
 /** Allowed decisions are fixed per reason: extending budget without new
- * information would repeat the loop the circuit breaker just caught, and a
- * supervisor question has no budget to extend. */
+ * information would repeat the loop the circuit breaker just caught; a
+ * conversation has no budget to extend but the caller may force `proceed`. */
 export function allowedDecisionsForReason(reason: GoalInputRequestReason): GoalInputDecision[] {
-  return reason === "reassessment_circuit_breaker" || reason === "supervisor_question"
+  if (isConversationReason(reason)) {
+    return ["provide_guidance", "proceed", "abandon"];
+  }
+  return reason === "reassessment_circuit_breaker"
     ? ["provide_guidance", "abandon"]
     : ["extend_budget", "provide_guidance", "abandon"];
 }

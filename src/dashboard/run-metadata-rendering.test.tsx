@@ -120,6 +120,7 @@ function goal(): Goal {
     description: "Display the latest run metadata",
     priority: "normal",
     agentType: "general",
+    confirmationPolicy: "off",
     status: "completed",
     createdAt: "2026-06-22T01:00:00.000Z",
     updatedAt: "2026-06-22T01:03:00.000Z",

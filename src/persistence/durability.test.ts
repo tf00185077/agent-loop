@@ -24,6 +24,7 @@ test("created goals and events survive database reopen", () => {
       description: "Verify goal and timeline durability.",
       priority: "high",
       agentType: "general",
+      confirmationPolicy: "off",
     });
     const run = runs.create({ goalId: goal.id, provider: "mock", model: "mock-agent-v1" });
     const step = steps.create({

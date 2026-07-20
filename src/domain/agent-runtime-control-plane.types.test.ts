@@ -313,6 +313,12 @@ test("defines closed durable task decision vocabularies", () => {
   ]);
 });
 
+test("includes the caller-dialogue control block types", () => {
+  assert.ok(managedControlEventTypes.includes("managed_goal.request_input"));
+  assert.ok(managedControlEventTypes.includes("managed_goal.propose_plan"));
+  assert.ok(managedControlEventTypes.includes("managed_goal.ready_to_proceed"));
+});
+
 test("binds integration results and Judge records to an exact candidate", () => {
   assert.ok(managedControlEventTypes.includes("managed_integration.result"));
 

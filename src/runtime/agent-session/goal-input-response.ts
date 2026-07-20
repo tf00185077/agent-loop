@@ -52,6 +52,15 @@ export function validateGoalInputResponse(
     return { ok: true, response: { decision: "provide_guidance", guidance } };
   }
 
+  if (decision === "proceed") {
+    const note = record.note;
+    if (note !== undefined && note !== null && typeof note !== "string") {
+      return invalid("proceed accepts an optional string note.");
+    }
+    const trimmedNote = typeof note === "string" ? note.trim().slice(0, MAX_GUIDANCE_LENGTH) : "";
+    return { ok: true, response: { decision: "proceed", note: trimmedNote.length > 0 ? trimmedNote : null } };
+  }
+
   const reason = record.reason;
   if (reason !== undefined && reason !== null && typeof reason !== "string") {
     return invalid("abandon accepts an optional string reason.");

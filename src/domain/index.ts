@@ -20,6 +20,7 @@ export type {
 export { plannerDecisionValues } from "./agent-loop.types.js";
 export type {
   AgentType,
+  ConfirmationPolicy,
   CreateGoalInput,
   Goal,
   GoalPriority,
@@ -84,6 +85,8 @@ export type {
   ManagedControlEventType,
   ManagedGoalReassessmentControlEvent,
   ManagedGoalRequestInputControlEvent,
+  ManagedGoalProposePlanControlEvent,
+  ManagedGoalReadyToProceedControlEvent,
   ManagedSpecReviewControlEvent,
   ManagedDelegationCompleteControlEvent,
   ManagedDelegationRequestControlEvent,
@@ -139,13 +142,21 @@ export type { GoalStatus, RunStatus, StepStatus } from "./status.types.js";
 export type {
   GoalInputBudgetName,
   GoalInputDecision,
+  GoalInputMessage,
+  GoalInputMessageRole,
+  GoalInputPhase,
   GoalInputRequest,
   GoalInputRequestPayload,
   GoalInputRequestReason,
   GoalInputRequestStatus,
   GoalInputResponse,
 } from "./goal-input-request.types.js";
-export { allowedDecisionsForReason, budgetGrantReasons } from "./goal-input-request.types.js";
+export {
+  allowedDecisionsForReason,
+  budgetGrantReasons,
+  conversationReasons,
+  isConversationReason,
+} from "./goal-input-request.types.js";
 export type {
   AgentLiveStatus,
   AgentLiveStatusPhase,
