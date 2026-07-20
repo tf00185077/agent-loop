@@ -36,8 +36,8 @@
 
 ## 6. API endpoints
 
-- [ ] 6.1 Failing route tests: `GET /api/goals/:id/input-request` (pending → structured JSON; none → 404), `POST /api/goals/:id/input-request/:requestId/respond` (valid → applied; invalid → 400 with safe reason; already-resolved → 409 naming the standing resolution)
-- [ ] 6.2 Implement the goal-scoped routes (modeled on `agent-sessions.ts` approval routes); sanitize all outgoing payloads; wire into `src/backend/app.ts`
+- [x] 6.1 Failing route tests: `GET /api/goals/:id/input-request` (pending → structured JSON; none → 404), `POST /api/goals/:id/input-request/:requestId/respond` (valid → applied; invalid → 400 with safe reason; already-resolved → 409 naming the standing resolution)
+- [x] 6.2 Implement the goal-scoped routes (modeled on `agent-sessions.ts` approval routes); sanitize all outgoing payloads; wire into `src/backend/app.ts`
 
 ## 7. Dashboard
 

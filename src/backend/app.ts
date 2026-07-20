@@ -8,6 +8,7 @@ import {
 import type { AppDatabase } from "../persistence/database.js";
 import { createEventBus } from "../persistence/event-bus.js";
 import { createGoalRepository } from "../persistence/goal-repository.js";
+import { createGoalInputRequestRepository } from "../persistence/goal-input-request-repository.js";
 import { createManagedTaskRepository } from "../persistence/managed-task-repository.js";
 import {
   createProviderSettingsRepository,
@@ -83,6 +84,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
   const stepRepo = createStepRepository(db);
   const agentSessionRepo = createAgentSessionRepository(db);
   const managedTaskRepo = createManagedTaskRepository(db);
+  const goalInputRequestRepo = createGoalInputRequestRepository(db);
   const eventBus = createEventBus();
   const eventRepo = createEventRepository(db, { eventBus });
   const providerSettingsRepo = createProviderSettingsRepository(db);
@@ -93,6 +95,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     agentSessionRepo,
     database: db,
     managedTaskRepo,
+    goalInputRequestRepo,
     maxSupervisorContinuations: options.maxSupervisorContinuations,
     roleAdapterResolver: createRoleAdapterResolver({
       getSettings: () => providerSettingsRepo.get(),
@@ -158,7 +161,10 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     res.json({ status: "ok" });
   });
 
-  app.use("/api/goals", createGoalRouter({ goalRepo, eventRepo, eventBus, runtime, agentSessionRepo, managedTaskRepo }));
+  app.use(
+    "/api/goals",
+    createGoalRouter({ goalRepo, eventRepo, eventBus, runtime, agentSessionRepo, managedTaskRepo, goalInputRequestRepo }),
+  );
   app.use("/api/agent-sessions", createAgentSessionRouter({ agentSessionRepo, agentSessionManager }));
   app.use(
     "/api/provider-settings",
@@ -239,6 +245,15 @@ function createRuntimeFromSavedProviderSettings(
         return runtime.resume(goalId);
       }
     },
+    async respondToInput(goalId: string, requestId: string, body: unknown) {
+      const runtime = selectRuntimeForSettings(deps.providerSettingsRepo.get(), deps);
+      if ("respondToInput" in runtime && typeof runtime.respondToInput === "function") {
+        return runtime.respondToInput(goalId, requestId, body);
+      }
+      // No managed adapter under the current settings: validation and grants
+      // still apply; an accepted resume decision defers visibly to next boot.
+      return deps.agentSessionManager.respondToGoalInputRequest({ goalId, requestId, body });
+    },
   };
 }
 
@@ -296,6 +311,14 @@ function createRuntimeFromAgentRuntimeAdapter(
         providerId: settings.provider,
         modelLabel: settings.modelLabel,
         adapter,
+      });
+    },
+    async respondToInput(goalId: string, requestId: string, body: unknown) {
+      return deps.agentSessionManager.respondToGoalInputRequest({
+        goalId,
+        requestId,
+        body,
+        runtime: { providerId: settings.provider, modelLabel: settings.modelLabel, adapter },
       });
     },
   };
@@ -386,6 +409,23 @@ function createRuntimeFromCodexLocalSettings(
         goalId, providerId: "codex-local", modelLabel: settings.modelLabel, adapter,
       });
     },
+    async respondToInput(goalId: string, requestId: string, body: unknown) {
+      const adapter = createCodexRuntimeAdapter({
+        commandPath: resolved.commandPath ?? "",
+        modelLabel: settings.modelLabel,
+        probe: deps.codexRuntimeCapabilityProbe,
+        sessionRunner: deps.codexRuntimeSessionRunner,
+      });
+      const managed = (await adapter.detectCapabilities()).eventStreaming;
+      return deps.agentSessionManager.respondToGoalInputRequest({
+        goalId,
+        requestId,
+        body,
+        ...(managed
+          ? { runtime: { providerId: "codex-local", modelLabel: settings.modelLabel, adapter } }
+          : {}),
+      });
+    },
   };
 }
 
@@ -469,6 +509,23 @@ function createRuntimeFromClaudeLocalSettings(
       if (!(await adapter.detectCapabilities()).eventStreaming) return;
       return deps.agentSessionManager.resumeInterruptedGoal({
         goalId, providerId: "claude-local", modelLabel: settings.modelLabel, adapter,
+      });
+    },
+    async respondToInput(goalId: string, requestId: string, body: unknown) {
+      const adapter = createClaudeRuntimeAdapter({
+        commandPath: resolved.commandPath ?? "",
+        modelLabel: settings.modelLabel,
+        probe: deps.claudeRuntimeCapabilityProbe,
+        sessionRunner: deps.claudeRuntimeSessionRunner,
+      });
+      const managed = (await adapter.detectCapabilities()).eventStreaming;
+      return deps.agentSessionManager.respondToGoalInputRequest({
+        goalId,
+        requestId,
+        body,
+        ...(managed
+          ? { runtime: { providerId: "claude-local", modelLabel: settings.modelLabel, adapter } }
+          : {}),
       });
     },
   };

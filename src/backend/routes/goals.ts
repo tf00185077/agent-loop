@@ -3,11 +3,14 @@ import { Router } from "express";
 import {
   sanitizeStartGoalProviderOverride,
   type Event,
+  type GoalInputRequest,
   type StartGoalProviderOverride,
 } from "../../domain/index.js";
 import type { EventBus } from "../../persistence/event-bus.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
+import type { GoalInputRequestRepository } from "../../persistence/goal-input-request-repository.js";
 import type { ManagedTaskRepository } from "../../persistence/managed-task-repository.js";
+import type { RespondToGoalInputRequestResult } from "../../runtime/agent-session/agent-session-manager.js";
 import type {
   AgentSessionRepository,
   EventRepository,
@@ -36,6 +39,8 @@ interface RuntimeRunOptions {
 
 interface RuntimeRunner {
   run(goalId: string, options?: RuntimeRunOptions): Promise<unknown>;
+  /** Managed runtimes route caller responses through the session manager. */
+  respondToInput?(goalId: string, requestId: string, body: unknown): Promise<RespondToGoalInputRequestResult>;
 }
 
 interface GoalRouterDeps {
@@ -45,6 +50,7 @@ interface GoalRouterDeps {
   runtime: RuntimeRunner;
   agentSessionRepo: AgentSessionRepository;
   managedTaskRepo?: ManagedTaskRepository;
+  goalInputRequestRepo?: GoalInputRequestRepository;
 }
 
 export function createGoalRouter(deps: GoalRouterDeps): Router {
@@ -105,6 +111,52 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
         return;
       }
       res.json(goal);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // GET /api/goals/:id/input-request — the pending caller escalation, if any.
+  router.get("/:id/input-request", (req, res, next) => {
+    try {
+      const goal = goalRepo.getById(req.params.id);
+      if (!goal) {
+        res.status(404).json({ error: "Goal not found" });
+        return;
+      }
+      const pending = deps.goalInputRequestRepo?.getPending(goal.id);
+      if (!pending) {
+        res.status(404).json({ error: "No pending input request for this goal" });
+        return;
+      }
+      res.json(sanitizeGoalInputRequest(pending));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // POST /api/goals/:id/input-request/:requestId/respond — caller decision.
+  router.post("/:id/input-request/:requestId/respond", async (req, res, next) => {
+    try {
+      const goal = goalRepo.getById(req.params.id);
+      if (!goal) {
+        res.status(404).json({ error: "Goal not found" });
+        return;
+      }
+      if (!runtime.respondToInput) {
+        res.status(409).json({ error: "The active runtime does not support escalation responses" });
+        return;
+      }
+      const result = await runtime.respondToInput(goal.id, req.params.requestId, req.body);
+      if (result.ok) {
+        res.json({ outcome: result.outcome, request: sanitizeGoalInputRequest(result.request) });
+        return;
+      }
+      const status = result.code === "not_found" ? 404 : result.code === "conflict" ? 409 : 400;
+      res.status(status).json({
+        error: result.safeReason,
+        ...(result.standing ? { standing: sanitizeGoalInputRequest(result.standing) } : {}),
+      });
     } catch (err) {
       next(err);
     }
@@ -338,4 +390,23 @@ function nullableStringValue(value: unknown): string | null {
 
 function recordValue(value: unknown): Record<string, unknown> | null {
   return isRecord(value) && !Array.isArray(value) ? value : null;
+}
+
+/**
+ * Outgoing escalation payloads cross the API boundary: sanitize every
+ * free-text field the same way other control-plane text is sanitized.
+ */
+function sanitizeGoalInputRequest(request: GoalInputRequest): GoalInputRequest {
+  return {
+    ...request,
+    safeSummary: sanitizeControlPlaneText(request.safeSummary) ?? "",
+    payload: {
+      ...request.payload,
+      evidence: request.payload.evidence.map((entry) => sanitizeControlPlaneText(entry) ?? ""),
+      remainingGaps: request.payload.remainingGaps.map((gap) => ({
+        refs: gap.refs,
+        summary: sanitizeControlPlaneText(gap.summary) ?? "",
+      })),
+    },
+  };
 }
