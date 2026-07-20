@@ -73,6 +73,7 @@ export interface CreateAppOptions {
   claudeRuntimeCapabilityProbe?: ClaudeRuntimeCapabilityProbe;
   claudeRuntimeSessionRunner?: ClaudeRuntimeSessionRunner;
   maxSupervisorContinuations?: number;
+  maxSupervisorQuestions?: number;
 }
 
 export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
@@ -97,6 +98,7 @@ export function createApp(db: AppDatabase, options: CreateAppOptions = {}) {
     managedTaskRepo,
     goalInputRequestRepo,
     maxSupervisorContinuations: options.maxSupervisorContinuations,
+    maxSupervisorQuestions: options.maxSupervisorQuestions,
     roleAdapterResolver: createRoleAdapterResolver({
       getSettings: () => providerSettingsRepo.get(),
       agentRuntimeAdapters: options.agentRuntimeAdapters,

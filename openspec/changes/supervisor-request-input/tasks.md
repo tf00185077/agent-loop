@@ -24,6 +24,6 @@
 
 ## 5. Verification and archive
 
-- [ ] 5.1 `npm test` and `npm run typecheck` green
-- [ ] 5.2 Live smoke: scripted supervisor emits a question mid-run → API shows the pending question → answer via `provide_guidance` → resumed continuation prompt contains Q and A → second question after budget exhaustion is rejected with the autonomy reason; record evidence in `verification.md`
-- [ ] 5.3 Update README escalation section; commit per task group throughout
+- [x] 5.1 `npm test` and `npm run typecheck` green
+- [x] 5.2 Live smoke: scripted supervisor emits a question mid-run → API shows the pending question → answer via `provide_guidance` → resumed continuation prompt contains Q and A → second question after budget exhaustion is rejected with the autonomy reason; record evidence in `verification.md`
+- [x] 5.3 Update README escalation section; commit per task group throughout

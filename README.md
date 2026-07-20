@@ -337,6 +337,16 @@ invalid, 404 unknown, 409 already-resolved with the standing resolution).
 Unrecoverable failures (archive capability unavailable, lineage-corrupt
 recovery) still write terminal `blocked`.
 
+A live supervisor can also **initiate** an escalation: a `managed_goal.request_input`
+control block asks the caller one bounded question (reason `supervisor_question`)
+when a decision is genuinely the caller's — an ambiguous requirement, a missing
+preference — instead of guessing and being second-guessed a loop later. Backend
+gates enforce it: no pending request already open, no in-flight child delegation,
+a bounded question, and a per-goal question budget (default 3) whose exhaustion
+rejects with "decide autonomously and proceed". The answer travels as
+`provide_guidance` and resumes the goal with the question and answer in the
+continuation prompt; a question grants no budget.
+
 ### Post-MVP Priority Todo
 
 After the MVP supervisor/child/review-merge loop works end to end, revisit
