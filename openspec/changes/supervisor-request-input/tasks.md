@@ -12,10 +12,10 @@
 
 ## 3. Manager acceptance gates and escalation
 
-- [ ] 3.1 Failing tests (new theme file or `agent-session-escalation.test.ts`): valid question → `supervisor_question` pending request with null budget fields, `waiting_user`, `goal.input_requested` event with `runtimeEventType: "supervisor.question"`, no continuation after session exit
-- [ ] 3.2 Failing tests: rejections — pending request already exists; in-flight delegation (requested/accepted/running); question budget exhausted (default 3, counted from durable rows, restart-safe) with autonomy-teaching safe reason; each via `recordControlRejection`
-- [ ] 3.3 Implement the handler branch + `maxSupervisorQuestions` deps option; reuse `escalateGoalForCallerInput` with nullable budget fields
-- [ ] 3.4 Failing test + implementation: respond flow handles null budgets (no effective-budget math in the accepted event); answer resume observation renders `Q: … A: …`; abandon on a question blocks the goal
+- [x] 3.1 Failing tests (new theme file or `agent-session-escalation.test.ts`): valid question → `supervisor_question` pending request with null budget fields, `waiting_user`, `goal.input_requested` event with `runtimeEventType: "supervisor.question"`, no continuation after session exit
+- [x] 3.2 Failing tests: rejections — pending request already exists; in-flight delegation (requested/accepted/running); question budget exhausted (default 3, counted from durable rows, restart-safe) with autonomy-teaching safe reason; each via `recordControlRejection`
+- [x] 3.3 Implement the handler branch + `maxSupervisorQuestions` deps option; reuse `escalateGoalForCallerInput` with nullable budget fields
+- [x] 3.4 Failing test + implementation: respond flow handles null budgets (no effective-budget math in the accepted event); answer resume observation renders `Q: … A: …`; abandon on a question blocks the goal
 
 ## 4. Prompt contract and dashboard label
 
