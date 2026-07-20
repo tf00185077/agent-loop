@@ -4,12 +4,16 @@ import {
   cancelAgentSession,
   getAgentSessionSnapshot,
   getGoal,
+  getGoalInputRequest,
   listEvents,
   rejectAgentSessionApproval,
+  respondToGoalInputRequest,
   startGoal,
   Goal,
   type AgentSessionSnapshot,
+  type GoalInputRequestView,
   type PlanningEpochReadModel,
+  type RespondToGoalInputBody,
   type StartGoalProviderOverride,
 } from "./api";
 import {
@@ -28,6 +32,8 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
   const [goal, setGoal] = useState<Goal | null>(null);
   const [latestMetadata, setLatestMetadata] = useState<RunDisplayMetadata | null>(null);
   const [agentSessionSnapshot, setAgentSessionSnapshot] = useState<AgentSessionSnapshot | null>(null);
+  const [inputRequest, setInputRequest] = useState<GoalInputRequestView | null>(null);
+  const [inputRequestNotice, setInputRequestNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -35,11 +41,17 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([getGoal(goalId), listEvents(goalId), getAgentSessionSnapshot(goalId)])
-      .then(([nextGoal, events, nextAgentSessionSnapshot]) => {
+    Promise.all([
+      getGoal(goalId),
+      listEvents(goalId),
+      getAgentSessionSnapshot(goalId),
+      getGoalInputRequest(goalId),
+    ])
+      .then(([nextGoal, events, nextAgentSessionSnapshot, nextInputRequest]) => {
         setGoal(nextGoal);
         setLatestMetadata(latestRunMetadata(events));
         setAgentSessionSnapshot(nextAgentSessionSnapshot);
+        setInputRequest(nextInputRequest);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -99,6 +111,32 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
     }
   }
 
+  async function handleRespondToInput(body: RespondToGoalInputBody) {
+    if (!inputRequest) return;
+    setInputRequestNotice(null);
+    try {
+      const result = await respondToGoalInputRequest(goalId, inputRequest.id, body);
+      if (result.ok) {
+        setInputRequestNotice(
+          result.outcome === "abandoned"
+            ? "Goal abandoned."
+            : result.outcome === "resume_deferred"
+              ? "Response accepted; the goal resumes on the next backend start."
+              : "Goal resumed.",
+        );
+      } else if (result.standing) {
+        // Another client already resolved this request: show the standing
+        // resolution instead of a raw error.
+        setInputRequestNotice(`Already resolved: ${result.standing.status}.`);
+      } else {
+        setInputRequestNotice(result.error);
+      }
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setInputRequestNotice(String(e));
+    }
+  }
+
   if (loading) return <p>Loading...</p>;
   if (error) return <p style={{ color: "red" }}>{error}</p>;
   if (!goal) return null;
@@ -108,11 +146,14 @@ export default function GoalDetail({ goalId, refreshKey, providerOverride, onSta
       goal={goal}
       latestMetadata={latestMetadata}
       agentSessionSnapshot={agentSessionSnapshot}
+      inputRequest={inputRequest}
+      inputRequestNotice={inputRequestNotice}
       starting={starting}
       onStart={handleStart}
       onApproveApproval={handleApproveApproval}
       onRejectApproval={handleRejectApproval}
       onCancelSession={handleCancelSession}
+      onRespondToInput={handleRespondToInput}
     />
   );
 }
@@ -121,20 +162,26 @@ export function GoalDetailPanel({
   goal,
   latestMetadata,
   agentSessionSnapshot,
+  inputRequest,
+  inputRequestNotice,
   starting,
   onStart,
   onApproveApproval,
   onRejectApproval,
   onCancelSession,
+  onRespondToInput,
 }: {
   goal: Goal;
   latestMetadata: RunDisplayMetadata | null;
   agentSessionSnapshot?: AgentSessionSnapshot | null;
+  inputRequest?: GoalInputRequestView | null;
+  inputRequestNotice?: string | null;
   starting: boolean;
   onStart: () => void;
   onApproveApproval?: (approvalId: string) => void;
   onRejectApproval?: (approvalId: string) => void;
   onCancelSession?: () => void;
+  onRespondToInput?: (body: RespondToGoalInputBody) => void;
 }) {
   const session = agentSessionSnapshot?.session ?? null;
   const sessionsById = new Map((agentSessionSnapshot?.sessions ?? []).map((managedSession) => [managedSession.id, managedSession]));
@@ -176,6 +223,13 @@ export function GoalDetailPanel({
           )}
         </tbody>
       </table>
+      {(inputRequest || inputRequestNotice) && (
+        <GoalInputRequestPanel
+          request={inputRequest ?? null}
+          notice={inputRequestNotice ?? null}
+          onRespond={onRespondToInput}
+        />
+      )}
       {agentSessionSnapshot?.liveStatus && (
         <AgentLiveStatusPanel status={agentSessionSnapshot.liveStatus} />
       )}
@@ -355,6 +409,109 @@ function PlanningEpochBoard({ epochs }: { epochs: PlanningEpochReadModel[] }) {
   );
 }
 
+const INPUT_REASON_LABELS: Record<GoalInputRequestView["reasonCode"], string> = {
+  epoch_budget_exhausted: "Planning-epoch budget exhausted",
+  reassessment_circuit_breaker: "Reassessment loop is not converging",
+  continuation_exhausted: "Supervisor continuation budget exhausted",
+};
+
+export function GoalInputRequestPanel({
+  request,
+  notice,
+  onRespond,
+}: {
+  request: GoalInputRequestView | null;
+  notice: string | null;
+  onRespond?: (body: RespondToGoalInputBody) => void;
+}) {
+  const [extension, setExtension] = useState(1);
+  const [guidance, setGuidance] = useState("");
+  return (
+    <section style={{ margin: "12px 0 20px", padding: 12, border: "2px solid #ff9800", borderRadius: 6 }}>
+      <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>Caller input needed</h3>
+      {notice && <p style={{ margin: "0 0 8px", color: "#8a5a00" }}>{notice}</p>}
+      {request && (
+        <>
+          <div style={{ fontWeight: 600 }}>{INPUT_REASON_LABELS[request.reasonCode]}</div>
+          <p style={{ margin: "6px 0" }}>{request.safeSummary}</p>
+          {request.payload.evidence.length > 0 && (
+            <ul style={{ margin: "4px 0 8px 18px", fontSize: 13 }}>
+              {request.payload.evidence.map((entry) => (
+                <li key={entry}>{entry}</li>
+              ))}
+            </ul>
+          )}
+          {request.payload.remainingGaps.length > 0 && (
+            <div style={{ fontSize: 13 }}>
+              Remaining gaps:
+              <ul style={{ margin: "4px 0 8px 18px" }}>
+                {request.payload.remainingGaps.map((gap) => (
+                  <li key={`${gap.refs.join("|")}:${gap.summary}`}>
+                    {gap.summary}
+                    {gap.refs.length > 0 ? ` (${gap.refs.join(", ")})` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+            {request.payload.allowedDecisions.includes("extend_budget") && (
+              <div>
+                <input
+                  type="number"
+                  min={1}
+                  value={extension}
+                  onChange={(event) => setExtension(Number(event.target.value))}
+                  style={{ width: 60, marginRight: 8 }}
+                  aria-label="Budget extension"
+                />
+                <button
+                  type="button"
+                  style={{ padding: "4px 10px" }}
+                  onClick={() => onRespond?.({ decision: "extend_budget", extension })}
+                >
+                  Extend budget
+                </button>
+              </div>
+            )}
+            {request.payload.allowedDecisions.includes("provide_guidance") && (
+              <div>
+                <textarea
+                  value={guidance}
+                  onChange={(event) => setGuidance(event.target.value)}
+                  placeholder="Guidance for the resumed supervisor"
+                  rows={2}
+                  style={{ width: "100%", maxWidth: 480, display: "block", marginBottom: 4 }}
+                  aria-label="Guidance"
+                />
+                <button
+                  type="button"
+                  style={{ padding: "4px 10px" }}
+                  disabled={guidance.trim().length === 0}
+                  onClick={() => onRespond?.({ decision: "provide_guidance", guidance: guidance.trim() })}
+                >
+                  Send guidance
+                </button>
+              </div>
+            )}
+            {request.payload.allowedDecisions.includes("abandon") && (
+              <div>
+                <button
+                  type="button"
+                  style={{ padding: "4px 10px", color: "#b71c1c" }}
+                  onClick={() => onRespond?.({ decision: "abandon" })}
+                >
+                  Abandon goal
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function AgentLiveStatusPanel({ status }: {
   status: NonNullable<AgentSessionSnapshot["liveStatus"]>;
 }) {
@@ -421,6 +578,7 @@ function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     draft: "#888",
     running: "#2196f3",
+    waiting_user: "#ff9800",
     completed: "#4caf50",
     blocked: "#f44336",
   };

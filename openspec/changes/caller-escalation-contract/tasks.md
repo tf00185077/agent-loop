@@ -41,9 +41,9 @@
 
 ## 7. Dashboard
 
-- [ ] 7.1 `waiting_user` status badge treatment in goal list/detail; live-status panel already maps the state — verify
-- [ ] 7.2 Pending-request panel on goal detail: reason, summary, gaps, and exactly the allowed decisions (extension number input / guidance textarea / abandon confirm); submit via the new endpoints
-- [ ] 7.3 Panel refresh on event-stream signal; 409 standing-resolution rendering; component tests following `agent-session-controls-rendering.test.tsx`
+- [x] 7.1 `waiting_user` status badge treatment in goal list/detail; live-status panel already maps the state — verify
+- [x] 7.2 Pending-request panel on goal detail: reason, summary, gaps, and exactly the allowed decisions (extension number input / guidance textarea / abandon confirm); submit via the new endpoints
+- [x] 7.3 Panel refresh on event-stream signal; 409 standing-resolution rendering; component tests following `agent-session-controls-rendering.test.tsx`
 
 ## 8. Verification and archive
 

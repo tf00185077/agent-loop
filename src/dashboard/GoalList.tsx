@@ -64,6 +64,7 @@ function statusColor(status: string): string {
     case "running": return "#2196f3";
     case "completed": return "#4caf50";
     case "blocked": return "#f44336";
+    case "waiting_user": return "#ff9800";
     case "interrupted": return "#ff9800";
     default: return "#999";
   }

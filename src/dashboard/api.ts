@@ -291,6 +291,60 @@ export async function cancelAgentSession(sessionId: string): Promise<void> {
   if (!res.ok) throw new Error(`cancelAgentSession: ${res.status}`);
 }
 
+export interface GoalInputRequestView {
+  id: string;
+  goalId: string;
+  reasonCode: "epoch_budget_exhausted" | "reassessment_circuit_breaker" | "continuation_exhausted";
+  safeSummary: string;
+  payload: {
+    budgetName: "planning_epochs" | "supervisor_continuations";
+    budgetValue: number;
+    evidence: string[];
+    remainingGaps: Array<{ refs: string[]; summary: string }>;
+    allowedDecisions: Array<"extend_budget" | "provide_guidance" | "abandon">;
+  };
+  status: "pending" | "accepted" | "abandoned" | "cancelled";
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export type RespondToGoalInputBody =
+  | { decision: "extend_budget"; extension: number }
+  | { decision: "provide_guidance"; guidance: string }
+  | { decision: "abandon"; reason?: string };
+
+export type RespondToGoalInputResult =
+  | { ok: true; outcome: "resumed" | "resume_deferred" | "abandoned" }
+  | { ok: false; error: string; standing?: GoalInputRequestView };
+
+export async function getGoalInputRequest(goalId: string): Promise<GoalInputRequestView | null> {
+  const res = await fetch(`${BASE}/goals/${goalId}/input-request`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`getGoalInputRequest: ${res.status}`);
+  return res.json();
+}
+
+export async function respondToGoalInputRequest(
+  goalId: string,
+  requestId: string,
+  body: RespondToGoalInputBody,
+): Promise<RespondToGoalInputResult> {
+  const res = await fetch(`${BASE}/goals/${goalId}/input-request/${requestId}/respond`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await res.json()) as Record<string, unknown>;
+  if (res.ok) {
+    return { ok: true, outcome: payload.outcome as "resumed" | "resume_deferred" | "abandoned" };
+  }
+  return {
+    ok: false,
+    error: typeof payload.error === "string" ? payload.error : `respondToGoalInputRequest: ${res.status}`,
+    ...(payload.standing ? { standing: payload.standing as GoalInputRequestView } : {}),
+  };
+}
+
 export function openEventStream(id: string, onEvent: (event: GoalEvent) => void): () => void {
   const source = new EventSource(`${BASE}/goals/${id}/events/stream`);
   source.onmessage = (message) => {
