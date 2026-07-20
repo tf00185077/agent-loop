@@ -351,6 +351,7 @@ export const managedControlEventTypes = [
   "managed_change.plan",
   "managed_change.spec_review",
   "managed_goal.reassessment",
+  "managed_goal.request_input",
 ] as const;
 
 export type ManagedControlEventType = (typeof managedControlEventTypes)[number];
@@ -473,6 +474,19 @@ export interface ManagedGoalReassessmentControlEvent extends GoalReassessment {
   type: "managed_goal.reassessment";
 }
 
+/**
+ * A live supervisor asks its caller one bounded question and ends its turn.
+ * The backend validates deterministically, records a `supervisor_question`
+ * input request, and parks the goal in `waiting_user` until the caller
+ * answers (`provide_guidance`) or abandons.
+ */
+export interface ManagedGoalRequestInputControlEvent {
+  type: "managed_goal.request_input";
+  question: string;
+  /** Optional supervisor-supplied context shown to the caller as evidence. */
+  context?: string[];
+}
+
 export interface TaskCriterionEvidence {
   criterionId: string;
   evidence: string;
@@ -520,7 +534,8 @@ export type ManagedControlEvent =
   | ManagedIntegrationResultControlEvent
   | ManagedChangePlanControlEvent
   | ManagedSpecReviewControlEvent
-  | ManagedGoalReassessmentControlEvent;
+  | ManagedGoalReassessmentControlEvent
+  | ManagedGoalRequestInputControlEvent;
 
 export interface AgentRuntimeDelegationRequest {
   id: string;

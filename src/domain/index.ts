@@ -83,6 +83,7 @@ export type {
   ManagedControlEvent,
   ManagedControlEventType,
   ManagedGoalReassessmentControlEvent,
+  ManagedGoalRequestInputControlEvent,
   ManagedSpecReviewControlEvent,
   ManagedDelegationCompleteControlEvent,
   ManagedDelegationRequestControlEvent,
@@ -144,7 +145,7 @@ export type {
   GoalInputRequestStatus,
   GoalInputResponse,
 } from "./goal-input-request.types.js";
-export { allowedDecisionsForReason } from "./goal-input-request.types.js";
+export { allowedDecisionsForReason, budgetGrantReasons } from "./goal-input-request.types.js";
 export type {
   AgentLiveStatus,
   AgentLiveStatusPhase,

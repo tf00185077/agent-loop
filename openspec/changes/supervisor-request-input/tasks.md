@@ -2,8 +2,8 @@
 
 ## 1. Domain and grant allowlist
 
-- [ ] 1.1 Add `supervisor_question` to `GoalInputRequestReason`; make `payload.budgetName`/`budgetValue` nullable; `allowedDecisionsForReason` returns `provide_guidance`+`abandon` for questions; add `managed_goal.request_input` to the control-event type union (TDD: type/contract tests first)
-- [ ] 1.2 Failing test + fix: `sumAcceptedExtensions` implicit +1 applies only to `epoch_budget_exhausted` and `continuation_exhausted` (accepted question guidance grants nothing)
+- [x] 1.1 Add `supervisor_question` to `GoalInputRequestReason`; make `payload.budgetName`/`budgetValue` nullable; `allowedDecisionsForReason` returns `provide_guidance`+`abandon` for questions; add `managed_goal.request_input` to the control-event type union (TDD: type/contract tests first)
+- [x] 1.2 Failing test + fix: `sumAcceptedExtensions` implicit +1 applies only to `epoch_budget_exhausted` and `continuation_exhausted` (accepted question guidance grants nothing)
 
 ## 2. Control-block validation
 

@@ -10,7 +10,8 @@ import type { ReassessmentGap } from "./agent-runtime-control-plane.types.js";
 export type GoalInputRequestReason =
   | "epoch_budget_exhausted"
   | "reassessment_circuit_breaker"
-  | "continuation_exhausted";
+  | "continuation_exhausted"
+  | "supervisor_question";
 
 export type GoalInputDecision = "extend_budget" | "provide_guidance" | "abandon";
 
@@ -18,9 +19,10 @@ export type GoalInputDecision = "extend_budget" | "provide_guidance" | "abandon"
 export type GoalInputBudgetName = "planning_epochs" | "supervisor_continuations";
 
 export interface GoalInputRequestPayload {
-  budgetName: GoalInputBudgetName;
+  /** Null for supervisor questions — a question exhausts no budget. */
+  budgetName: GoalInputBudgetName | null;
   /** Effective value of the bound at escalation time (base + accepted grants). */
-  budgetValue: number;
+  budgetValue: number | null;
   evidence: string[];
   remainingGaps: ReassessmentGap[];
   allowedDecisions: GoalInputDecision[];
@@ -46,9 +48,16 @@ export interface GoalInputRequest {
 }
 
 /** Allowed decisions are fixed per reason: extending budget without new
- * information would repeat the loop the circuit breaker just caught. */
+ * information would repeat the loop the circuit breaker just caught, and a
+ * supervisor question has no budget to extend. */
 export function allowedDecisionsForReason(reason: GoalInputRequestReason): GoalInputDecision[] {
-  return reason === "reassessment_circuit_breaker"
+  return reason === "reassessment_circuit_breaker" || reason === "supervisor_question"
     ? ["provide_guidance", "abandon"]
     : ["extend_budget", "provide_guidance", "abandon"];
 }
+
+/** Reasons whose accepted guidance implies the minimal +1 budget grant. */
+export const budgetGrantReasons: readonly GoalInputRequestReason[] = [
+  "epoch_budget_exhausted",
+  "continuation_exhausted",
+];

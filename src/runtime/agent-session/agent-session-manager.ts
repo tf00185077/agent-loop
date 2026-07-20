@@ -391,20 +391,23 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
       }
 
       const resolved = repo.resolve(request.id, "accepted", response);
-      const effective = effectiveBudget(deps, state, input.goalId, request.payload.budgetName);
-      const label = budgetLabel(request.payload.budgetName);
+      // Supervisor questions carry no budget; skip the effective-budget math.
+      const budgetName = request.payload.budgetName;
+      const effective = budgetName ? effectiveBudget(deps, state, input.goalId, budgetName) : null;
+      const label = budgetName ? budgetLabel(budgetName) : null;
       deps.eventRepo.create({
         goalId: input.goalId,
         type: "goal.input_response",
         message: response.decision === "extend_budget"
           ? `Caller granted ${response.extension} additional ${label} (effective budget ${effective}).`
-          : "Caller provided guidance for the resumed supervisor.",
+          : request.reasonCode === "supervisor_question"
+            ? "Caller answered the supervisor's question."
+            : "Caller provided guidance for the resumed supervisor.",
         data: {
           runtimeEventType: "goal.input_response_accepted",
           inputRequestId: request.id,
           decision: response.decision,
-          budgetName: request.payload.budgetName,
-          effectiveBudget: effective,
+          ...(budgetName ? { budgetName, effectiveBudget: effective } : {}),
           ...(response.decision === "extend_budget"
             ? { extension: response.extension }
             : { guidance: response.guidance }),
@@ -432,7 +435,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
           adapter: input.runtime.adapter,
         },
         {
-          observation: renderCallerObservation(response, label, effective),
+          observation: renderCallerObservation(request, response, label, effective),
           resumedEventMessage: "Goal resumed after caller input.",
           resumedRuntimeEventType: "escalation.resumed",
           extraEventData: { inputRequestId: request.id },
@@ -587,15 +590,21 @@ function budgetLabel(name: GoalInputBudgetName): string {
  * Deterministic rendering of an accepted caller decision, injected into the
  * resumed supervisor's continuation prompt as an observation. Guidance is
  * information for the supervisor; every deterministic gate still applies.
+ * Question answers carry both sides so the fresh continuation needs no
+ * event-timeline archaeology.
  */
 function renderCallerObservation(
+  request: GoalInputRequest,
   response: Extract<GoalInputResponse, { decision: "extend_budget" | "provide_guidance" }>,
-  label: string,
-  effective: number,
+  label: string | null,
+  effective: number | null,
 ): string {
   if (response.decision === "extend_budget") {
     return `Caller input: granted additional ${label}; the effective budget is now ${effective}. ` +
       "Continue the goal within the extended bound.";
+  }
+  if (request.reasonCode === "supervisor_question") {
+    return `Caller answered the supervisor's question. Q: ${request.safeSummary} A: ${response.guidance}`;
   }
   return `Caller input: guidance for continuing — ${response.guidance}`;
 }

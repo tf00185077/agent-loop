@@ -8,6 +8,7 @@ import type {
   GoalInputRequestStatus,
   GoalInputResponse,
 } from "../domain/index.js";
+import { budgetGrantReasons } from "../domain/index.js";
 import type { AppDatabase } from "./database.js";
 
 export interface CreateGoalInputRequestInput {
@@ -31,8 +32,8 @@ export interface GoalInputRequestRepository {
    * Sum of budget grants from accepted responses for one bound: explicit
    * `extend_budget` extensions, plus the implicit minimal grant (1) that an
    * accepted `provide_guidance` carries for budget-exhaustion reasons so the
-   * resumed loop can act. Circuit-breaker guidance grants nothing — the
-   * breaker is not a budget.
+   * resumed loop can act. Guidance on the circuit breaker or a supervisor
+   * question grants nothing — neither is a budget.
    */
   sumAcceptedExtensions(goalId: string, budgetName: GoalInputBudgetName): number;
 }
@@ -100,7 +101,7 @@ export function createGoalInputRequestRepository(
           total += request.response.extension;
         } else if (
           request.response?.decision === "provide_guidance" &&
-          request.reasonCode !== "reassessment_circuit_breaker"
+          budgetGrantReasons.includes(request.reasonCode)
         ) {
           total += 1;
         }

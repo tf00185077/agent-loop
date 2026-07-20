@@ -80,6 +80,26 @@ test("a resolved request allows a new pending request for the same goal", () => 
   assert.equal(repo.getPending(goal.id)?.id, second.id);
 });
 
+test("accepted guidance on a supervisor question grants no budget", () => {
+  const { goal, repo } = setup();
+  const question = repo.createRequest({
+    goalId: goal.id,
+    reasonCode: "supervisor_question",
+    safeSummary: "Should the export use CSV or JSON?",
+    payload: {
+      budgetName: null,
+      budgetValue: null,
+      evidence: ["Both formats are feasible."],
+      remainingGaps: [],
+      allowedDecisions: allowedDecisionsForReason("supervisor_question"),
+    },
+  });
+  repo.resolve(question.id, "accepted", { decision: "provide_guidance", guidance: "CSV." });
+
+  assert.equal(repo.sumAcceptedExtensions(goal.id, "planning_epochs"), 0);
+  assert.equal(repo.sumAcceptedExtensions(goal.id, "supervisor_continuations"), 0);
+});
+
 test("listForGoal returns chronological history and sums accepted grants", () => {
   const { goal, repo } = setup();
   const first = repo.createRequest(requestInput(goal.id));
