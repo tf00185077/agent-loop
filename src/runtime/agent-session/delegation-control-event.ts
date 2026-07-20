@@ -253,6 +253,8 @@ export type ManagedControlEventValidationResult =
   | { ok: true; kind: "spec_review"; review: ManagedSpecReviewControlEvent }
   | { ok: true; kind: "reassessment"; reassessment: GoalReassessment }
   | { ok: true; kind: "request_input"; question: string; context: string[] }
+  | { ok: true; kind: "propose_plan"; summary: string; items: string[] }
+  | { ok: true; kind: "ready_to_proceed"; summary: string | null }
   | { ok: false; safeReason: string };
 
 export function validateManagedControlEvent(
@@ -301,10 +303,54 @@ export function validateManagedControlEvent(
     return validateGoalRequestInput(input.controlEvent);
   }
 
+  if (input.controlEvent.type === "managed_goal.propose_plan") {
+    return validateGoalProposePlan(input.controlEvent);
+  }
+
+  if (input.controlEvent.type === "managed_goal.ready_to_proceed") {
+    const summary = typeof input.controlEvent.summary === "string" ? input.controlEvent.summary.trim() : "";
+    if (summary.length > MAX_PLAN_SUMMARY) {
+      return { ok: false, safeReason: `ready_to_proceed summary is limited to ${MAX_PLAN_SUMMARY} characters.` };
+    }
+    return { ok: true, kind: "ready_to_proceed", summary: summary.length > 0 ? summary : null };
+  }
+
   return {
     ok: false,
     safeReason: `Unsupported control event type: ${String(input.controlEvent.type)}.`,
   };
+}
+
+const MAX_PLAN_ITEMS = 10;
+const MAX_PLAN_SUMMARY = 4000;
+
+function validateGoalProposePlan(controlEvent: Record<string, unknown>): ManagedControlEventValidationResult {
+  const summary = typeof controlEvent.summary === "string" ? controlEvent.summary.trim() : "";
+  if (summary.length === 0) {
+    return { ok: false, safeReason: "propose_plan requires a non-empty summary string." };
+  }
+  if (summary.length > MAX_PLAN_SUMMARY) {
+    return { ok: false, safeReason: `propose_plan summary is limited to ${MAX_PLAN_SUMMARY} characters.` };
+  }
+  if (controlEvent.items !== undefined && !Array.isArray(controlEvent.items)) {
+    return { ok: false, safeReason: "propose_plan items must be an array of strings when present." };
+  }
+  const rawItems = (controlEvent.items ?? []) as unknown[];
+  if (rawItems.length > MAX_PLAN_ITEMS) {
+    return { ok: false, safeReason: `propose_plan items are limited to ${MAX_PLAN_ITEMS} entries.` };
+  }
+  const items: string[] = [];
+  for (const entry of rawItems) {
+    const trimmed = typeof entry === "string" ? entry.trim() : "";
+    if (trimmed.length === 0) {
+      return { ok: false, safeReason: "propose_plan items must be non-empty strings." };
+    }
+    if (trimmed.length > MAX_QUESTION_CONTEXT_LENGTH) {
+      return { ok: false, safeReason: `propose_plan items are limited to ${MAX_QUESTION_CONTEXT_LENGTH} characters.` };
+    }
+    items.push(trimmed);
+  }
+  return { ok: true, kind: "propose_plan", summary, items };
 }
 
 const MAX_QUESTION_LENGTH = 2000;

@@ -14,7 +14,7 @@ import type {
   ManagedCompletionGap,
   ReassessmentGap,
 } from "../../domain/index.js";
-import { allowedDecisionsForReason } from "../../domain/index.js";
+import { allowedDecisionsForReason, isConversationReason } from "../../domain/index.js";
 import { validateGoalInputResponse } from "./goal-input-response.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type { GoalInputRequestRepository } from "../../persistence/goal-input-request-repository.js";
@@ -1118,6 +1118,20 @@ async function persistDelegationControlEvent(
 
   if (validation.kind === "request_input") {
     handleSupervisorRequestInput(deps, input, data, validation.question, validation.context);
+    return;
+  }
+
+  if (validation.kind === "propose_plan") {
+    handleSupervisorProposePlan(deps, input, data, validation.summary, validation.items);
+    return;
+  }
+
+  if (validation.kind === "ready_to_proceed") {
+    // Outside an open conversational turn there is nothing to resolve.
+    recordControlRejection(
+      deps, input, data,
+      "ready_to_proceed is only valid during an open caller conversation; there is no conversation to close.",
+    );
     return;
   }
 
@@ -3505,6 +3519,40 @@ function blockGoalForMacroLoop(
  * per-goal question budget so the loop cannot stall on infinite asking. Every
  * rejection teaches the correct next action.
  */
+/**
+ * Shared gates for a supervisor opening a conversation (a question or a plan
+ * proposal): escalation available, goal running with no pending request, no
+ * in-flight child delegation, and a per-goal conversation budget that bounds
+ * how many times the supervisor may open the caller loop. Returns a safe reason
+ * to reject with, or null when the conversation may open.
+ */
+function supervisorConversationRejection(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+): string | null {
+  if (!deps.goalInputRequestRepo) {
+    return "Caller escalation is unavailable on this backend; decide autonomously using your best judgment and proceed.";
+  }
+  const goal = deps.goalRepo.getById(input.goalId);
+  if (!goal || goal.status !== "running") {
+    return `Goal is ${goal?.status ?? "missing"}; the caller loop is only opened while the goal is running.`;
+  }
+  const inFlight = deps.agentSessionRepo
+    .listDelegationRequests(input.sessionId)
+    .some((request) => ["requested", "accepted", "running"].includes(request.status));
+  if (inFlight) {
+    return "A child delegation is still in flight; wait for its observation before asking the caller.";
+  }
+  const priorConversations = deps.goalInputRequestRepo
+    .listForGoal(input.goalId)
+    .filter((request) => isConversationReason(request.reasonCode)).length;
+  if (priorConversations >= input.state.maxSupervisorQuestions) {
+    return `The goal's question budget (${input.state.maxSupervisorQuestions}) is exhausted; ` +
+      "decide autonomously using your best judgment and proceed.";
+  }
+  return null;
+}
+
 function handleSupervisorRequestInput(
   deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
@@ -3512,40 +3560,9 @@ function handleSupervisorRequestInput(
   question: string,
   context: string[],
 ): void {
-  if (!deps.goalInputRequestRepo) {
-    recordControlRejection(
-      deps, input, data,
-      "Caller escalation is unavailable on this backend; decide autonomously using your best judgment and proceed.",
-    );
-    return;
-  }
-  const goal = deps.goalRepo.getById(input.goalId);
-  if (!goal || goal.status !== "running") {
-    recordControlRejection(
-      deps, input, data,
-      `Goal is ${goal?.status ?? "missing"}; questions are only accepted while the goal is running.`,
-    );
-    return;
-  }
-  const inFlight = deps.agentSessionRepo
-    .listDelegationRequests(input.sessionId)
-    .some((request) => ["requested", "accepted", "running"].includes(request.status));
-  if (inFlight) {
-    recordControlRejection(
-      deps, input, data,
-      "A child delegation is still in flight; wait for its observation before asking the caller.",
-    );
-    return;
-  }
-  const priorQuestions = deps.goalInputRequestRepo
-    .listForGoal(input.goalId)
-    .filter((request) => request.reasonCode === "supervisor_question").length;
-  if (priorQuestions >= input.state.maxSupervisorQuestions) {
-    recordControlRejection(
-      deps, input, data,
-      `The goal's question budget (${input.state.maxSupervisorQuestions}) is exhausted; ` +
-        "decide autonomously using your best judgment and proceed.",
-    );
+  const rejection = supervisorConversationRejection(deps, input);
+  if (rejection) {
+    recordControlRejection(deps, input, data, rejection);
     return;
   }
   escalateGoalForCallerInput(deps, input, {
@@ -3555,6 +3572,29 @@ function handleSupervisorRequestInput(
     budgetName: null,
     budgetValue: null,
     evidence: context,
+    remainingGaps: [],
+  });
+}
+
+function handleSupervisorProposePlan(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  data: Record<string, unknown>,
+  summary: string,
+  items: string[],
+): void {
+  const rejection = supervisorConversationRejection(deps, input);
+  if (rejection) {
+    recordControlRejection(deps, input, data, rejection);
+    return;
+  }
+  escalateGoalForCallerInput(deps, input, {
+    reasonCode: "plan_confirmation",
+    runtimeEventType: "supervisor.plan_proposed",
+    safeReason: summary,
+    budgetName: null,
+    budgetValue: null,
+    evidence: items,
     remainingGaps: [],
   });
 }
@@ -3580,6 +3620,8 @@ function escalateGoalForCallerInput(
   },
 ): void {
   const allowedDecisions = allowedDecisionsForReason(request.reasonCode);
+  // Conversation reasons seed a one-entry supervisor thread awaiting the caller.
+  const conversation = isConversationReason(request.reasonCode);
   const created = deps.goalInputRequestRepo!.createRequest({
     goalId: input.goalId,
     reasonCode: request.reasonCode,
@@ -3590,6 +3632,12 @@ function escalateGoalForCallerInput(
       evidence: request.evidence,
       remainingGaps: request.remainingGaps,
       allowedDecisions,
+      ...(conversation
+        ? {
+            thread: [{ role: "supervisor" as const, text: request.safeReason, at: new Date().toISOString() }],
+            phase: "awaiting_caller" as const,
+          }
+        : {}),
     },
   });
   deps.eventRepo.create({

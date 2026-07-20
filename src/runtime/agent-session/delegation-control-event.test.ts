@@ -830,3 +830,52 @@ test("rejects malformed request_input blocks naming the bounds", () => {
     assert.match(result.ok ? "" : result.safeReason, pattern, JSON.stringify(controlEvent).slice(0, 80));
   }
 });
+
+test("validates propose_plan and ready_to_proceed control events", () => {
+  const proposal = validateManagedControlEvent({
+    controlEvent: {
+      type: "managed_goal.propose_plan",
+      summary: "  Plan: build the loop, then the modes.  ",
+      items: [" Build the core loop ", "Add 4v4 mode"],
+    },
+    parentSession: supervisorSession(),
+  });
+  assert.equal(proposal.ok, true);
+  assert.equal(proposal.ok ? proposal.kind : null, "propose_plan");
+  if (proposal.ok && proposal.kind === "propose_plan") {
+    assert.equal(proposal.summary, "Plan: build the loop, then the modes.");
+    assert.deepEqual(proposal.items, ["Build the core loop", "Add 4v4 mode"]);
+  }
+
+  const ready = validateManagedControlEvent({
+    controlEvent: { type: "managed_goal.ready_to_proceed", summary: "  Understood, proceeding.  " },
+    parentSession: supervisorSession(),
+  });
+  assert.equal(ready.ok, true);
+  assert.equal(ready.ok ? ready.kind : null, "ready_to_proceed");
+  if (ready.ok && ready.kind === "ready_to_proceed") {
+    assert.equal(ready.summary, "Understood, proceeding.");
+  }
+
+  const readyNoSummary = validateManagedControlEvent({
+    controlEvent: { type: "managed_goal.ready_to_proceed" },
+    parentSession: supervisorSession(),
+  });
+  assert.equal(readyNoSummary.ok, true);
+});
+
+test("rejects malformed propose_plan blocks naming the bounds", () => {
+  const cases: Array<[Record<string, unknown>, RegExp]> = [
+    [{ type: "managed_goal.propose_plan", summary: "   " }, /summary/i],
+    [{ type: "managed_goal.propose_plan" }, /summary/i],
+    [{ type: "managed_goal.propose_plan", summary: "x".repeat(4001) }, /4000/],
+    [{ type: "managed_goal.propose_plan", summary: "P", items: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"] }, /10/],
+    [{ type: "managed_goal.propose_plan", summary: "P", items: ["y".repeat(501)] }, /500/],
+    [{ type: "managed_goal.propose_plan", summary: "P", items: "not-a-list" }, /items/i],
+  ];
+  for (const [controlEvent, pattern] of cases) {
+    const result = validateManagedControlEvent({ controlEvent, parentSession: supervisorSession() });
+    assert.equal(result.ok, false, JSON.stringify(controlEvent).slice(0, 80));
+    assert.match(result.ok ? "" : result.safeReason, pattern, JSON.stringify(controlEvent).slice(0, 80));
+  }
+});

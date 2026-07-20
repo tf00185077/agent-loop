@@ -9,8 +9,8 @@
 
 ## 2. Control-block validation
 
-- [ ] 2.1 Failing tests: well-formed `propose_plan` (bounded summary + bounded items) and `ready_to_proceed` accepted; malformed rejected naming the bounds
-- [ ] 2.2 Implement both validators in `delegation-control-event.ts` (pure, bounded, trimmed)
+- [x] 2.1 Failing tests: well-formed `propose_plan` (bounded summary + bounded items) and `ready_to_proceed` accepted; malformed rejected naming the bounds
+- [x] 2.2 Implement both validators in `delegation-control-event.ts` (pure, bounded, trimmed)
 
 ## 3. Read-only conversational turns
 
