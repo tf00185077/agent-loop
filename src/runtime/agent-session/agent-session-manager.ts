@@ -6,11 +6,15 @@ import type {
   AgentRuntimeEvent,
   AgentRuntimeSession,
   AgentSessionHandle,
+  GoalInputBudgetName,
+  GoalInputRequestReason,
   GoalReassessment,
   ManagedCompletionGap,
   ReassessmentGap,
 } from "../../domain/index.js";
+import { allowedDecisionsForReason } from "../../domain/index.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
+import type { GoalInputRequestRepository } from "../../persistence/goal-input-request-repository.js";
 import type { AppDatabase } from "../../persistence/database.js";
 import type { ManagedTaskRepository } from "../../persistence/managed-task-repository.js";
 import {
@@ -67,6 +71,12 @@ export interface AgentSessionManagerDeps {
   reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   managedChangeArchiveRepo?: ManagedChangeArchiveRepository;
+  /**
+   * Durable ledger for goal-level caller escalation. When absent the
+   * recoverable bound decisions degrade visibly to the legacy terminal
+   * `blocked` behavior instead of waiting for caller input.
+   */
+  goalInputRequestRepo?: GoalInputRequestRepository;
   /** Test-only fault windows around non-transactional archive boundaries. */
   archiveFault?: (point: "after_intent" | "after_move" | "after_final_event") => void;
   supervisorCwd?: string;
@@ -3166,8 +3176,9 @@ function resolveReassessmentGapRefs(
 
 /**
  * Bounded macro loop (AC7): epoch budget exhaustion or a repeated-gap
- * signature moves the goal to blocked with the judgment preserved durably,
- * instead of opening another epoch.
+ * signature escalates the goal to its caller as a durable input request in
+ * `waiting_user`, instead of opening another epoch. Without the escalation
+ * ledger this degrades visibly to the legacy terminal block.
  */
 function blockGoalForMacroLoop(
   deps: AgentSessionManagerDeps,
@@ -3176,25 +3187,100 @@ function blockGoalForMacroLoop(
   reason: string,
   reassessment: GoalReassessment,
 ): void {
-  const finishedAt = new Date().toISOString();
-  deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
+  if (!deps.goalInputRequestRepo) {
+    const finishedAt = new Date().toISOString();
+    deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "goal.blocked",
+      message: `Goal blocked: ${reason}`,
+      data: {
+        sessionId: input.sessionId,
+        provider: input.providerId,
+        model: input.modelLabel,
+        runtimeEventType,
+        safeReason: reason,
+        goalSatisfied: reassessment.goalSatisfied,
+        evidence: reassessment.evidence,
+        remainingGaps: reassessment.remainingGaps,
+        ...(reassessment.nextEpochRationale ? { nextEpochRationale: reassessment.nextEpochRationale } : {}),
+      },
+    });
+    return;
+  }
+  escalateGoalForCallerInput(deps, input, {
+    reasonCode: runtimeEventType === "supervisor.epoch_budget_exhausted"
+      ? "epoch_budget_exhausted"
+      : "reassessment_circuit_breaker",
+    runtimeEventType,
+    safeReason: reason,
+    budgetName: "planning_epochs",
+    budgetValue: input.state.maxPlanningEpochs,
+    evidence: reassessment.evidence,
+    remainingGaps: reassessment.remainingGaps,
+    extraData: {
+      goalSatisfied: reassessment.goalSatisfied,
+      ...(reassessment.nextEpochRationale ? { nextEpochRationale: reassessment.nextEpochRationale } : {}),
+    },
+  });
+}
+
+/**
+ * Caller escalation: record the durable input request, make the transition
+ * observable, and park the goal in the non-terminal `waiting_user` state. The
+ * request row and its event are the escalation's source of truth — resume
+ * works from durable state alone, long after this session is gone.
+ */
+function escalateGoalForCallerInput(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  request: {
+    reasonCode: GoalInputRequestReason;
+    runtimeEventType: string;
+    safeReason: string;
+    budgetName: GoalInputBudgetName;
+    budgetValue: number;
+    evidence: string[];
+    remainingGaps: ReassessmentGap[];
+    extraData?: Record<string, unknown>;
+  },
+): void {
+  const allowedDecisions = allowedDecisionsForReason(request.reasonCode);
+  const created = deps.goalInputRequestRepo!.createRequest({
+    goalId: input.goalId,
+    reasonCode: request.reasonCode,
+    safeSummary: request.safeReason,
+    payload: {
+      budgetName: request.budgetName,
+      budgetValue: request.budgetValue,
+      evidence: request.evidence,
+      remainingGaps: request.remainingGaps,
+      allowedDecisions,
+    },
+  });
   deps.eventRepo.create({
     goalId: input.goalId,
     runId: input.runId,
-    type: "goal.blocked",
-    message: `Goal blocked: ${reason}`,
+    type: "goal.input_requested",
+    message: request.safeReason,
     data: {
       sessionId: input.sessionId,
       provider: input.providerId,
       model: input.modelLabel,
-      runtimeEventType,
-      safeReason: reason,
-      goalSatisfied: reassessment.goalSatisfied,
-      evidence: reassessment.evidence,
-      remainingGaps: reassessment.remainingGaps,
-      ...(reassessment.nextEpochRationale ? { nextEpochRationale: reassessment.nextEpochRationale } : {}),
+      runtimeEventType: request.runtimeEventType,
+      reasonCode: request.reasonCode,
+      inputRequestId: created.id,
+      allowedDecisions,
+      budgetName: request.budgetName,
+      budgetValue: request.budgetValue,
+      safeReason: request.safeReason,
+      evidence: request.evidence,
+      remainingGaps: request.remainingGaps,
+      ...request.extraData,
     },
   });
+  deps.goalRepo.updateStatus(input.goalId, "waiting_user", {});
 }
 
 /**
@@ -3271,33 +3357,45 @@ async function startCompletionlessContinuation(
   data: Record<string, unknown>,
 ): Promise<void> {
   const goal = deps.goalRepo.getById(input.goalId);
-  if (!goal || ["completed", "failed", "blocked"].includes(goal.status)) {
+  if (!goal || ["completed", "failed", "blocked", "cancelled", "waiting_user"].includes(goal.status)) {
     return;
   }
 
   const count = input.state.completionlessContinuations.get(input.goalId) ?? 0;
   if (count >= input.state.maxSupervisorContinuations) {
-    const finishedAt = new Date().toISOString();
     const completionRequestEvaluated = input.state.completionRequestsEvaluated.has(input.goalId);
     const completionGaps = input.state.lastCompletionGaps.get(input.goalId) ?? [];
     const reason = completionRequestEvaluated
       ? `Supervisor reached ${input.state.maxSupervisorContinuations} continuations without reaching successful completion`
       : `Supervisor reached ${input.state.maxSupervisorContinuations} continuations without a completion signal`;
-    deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: finishedAt });
-    deps.eventRepo.create({
-      goalId: input.goalId,
-      runId: input.runId,
-      type: "goal.blocked",
-      message: reason,
-      data: {
-        ...data,
-        delegationControlEvent: undefined,
-        runtimeEventType: "supervisor.continuations_exhausted",
-        maxSupervisorContinuations: input.state.maxSupervisorContinuations,
-        completionRequestEvaluated,
-        ...(completionGaps.length > 0 ? { completionGaps } : {}),
-        reason,
-      },
+    const sharedData = {
+      ...data,
+      delegationControlEvent: undefined,
+      maxSupervisorContinuations: input.state.maxSupervisorContinuations,
+      completionRequestEvaluated,
+      ...(completionGaps.length > 0 ? { completionGaps } : {}),
+      reason,
+    };
+    if (!deps.goalInputRequestRepo) {
+      deps.goalRepo.updateStatus(input.goalId, "blocked", { completedAt: new Date().toISOString() });
+      deps.eventRepo.create({
+        goalId: input.goalId,
+        runId: input.runId,
+        type: "goal.blocked",
+        message: reason,
+        data: { ...sharedData, runtimeEventType: "supervisor.continuations_exhausted" },
+      });
+      return;
+    }
+    escalateGoalForCallerInput(deps, input, {
+      reasonCode: "continuation_exhausted",
+      runtimeEventType: "supervisor.continuations_exhausted",
+      safeReason: reason,
+      budgetName: "supervisor_continuations",
+      budgetValue: input.state.maxSupervisorContinuations,
+      evidence: completionGaps.map((gap) => gap.safeSummary),
+      remainingGaps: [],
+      extraData: sharedData,
     });
     return;
   }

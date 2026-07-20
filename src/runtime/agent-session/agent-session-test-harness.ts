@@ -12,6 +12,7 @@ import type {
 import { openDatabase, type AppDatabase } from "../../persistence/database.js";
 import type { EventBus } from "../../persistence/event-bus.js";
 import { createGoalRepository } from "../../persistence/goal-repository.js";
+import { createGoalInputRequestRepository } from "../../persistence/goal-input-request-repository.js";
 import { createManagedTaskRepository } from "../../persistence/managed-task-repository.js";
 import {
   createAgentSessionRepository,
@@ -262,6 +263,7 @@ export interface ManagerFixture {
   runRepo: ReturnType<typeof createRunRepository>;
   eventRepo: ReturnType<typeof createEventRepository>;
   agentSessionRepo: ReturnType<typeof createAgentSessionRepository>;
+  goalInputRequestRepo: ReturnType<typeof createGoalInputRequestRepository>;
   worktreeService: ReturnType<typeof memoryWorktreeService>;
   reviewMergeWorkspaceService: ReturnType<typeof cleanReviewMergeWorkspaceService>;
   reviewMergeVerificationService: ReturnType<typeof passingReviewMergeVerificationService>;
@@ -284,6 +286,7 @@ export function createManagerFixture(title: string): ManagerFixture {
     runRepo,
     eventRepo,
     agentSessionRepo,
+    goalInputRequestRepo: createGoalInputRequestRepository(db),
     worktreeService: memoryWorktreeService(),
     reviewMergeWorkspaceService: cleanReviewMergeWorkspaceService(),
     reviewMergeVerificationService: passingReviewMergeVerificationService(),

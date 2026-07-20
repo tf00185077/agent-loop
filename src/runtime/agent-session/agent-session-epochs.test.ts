@@ -67,17 +67,20 @@ test("continuation exhaustion preserves rejected completion gaps and reports uns
   await manager.startManagedSession({
     goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
   });
-  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "waiting_user");
 
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   const rejected = events.filter((event) => event.data.runtimeEventType === "delegation.rejected");
   assert.equal(rejected.length, 2);
   assert.ok(rejected.every((event) => Array.isArray(event.data.completionGaps)));
   const blocked = events.find((event) => event.data.runtimeEventType === "supervisor.continuations_exhausted");
+  assert.equal(blocked?.type, "goal.input_requested");
   assert.match(String(blocked?.data.reason), /without reaching successful completion/i);
   assert.equal(blocked?.data.completionRequestEvaluated, true);
   assert.deepEqual(blocked?.data.completionGaps, rejected.at(-1)?.data.completionGaps);
   assert.ok((blocked?.data.completionGaps as Array<{ type: string }>).some((gap) => gap.type === "criterion_not_passed"));
+  const pending = fixture.goalInputRequestRepo.getPending(fixture.goal.id);
+  assert.equal(pending?.reasonCode, "continuation_exhausted");
   fixture.db.close();
 });
 
@@ -1639,16 +1642,20 @@ test("blocks the goal when consecutive reassessments repeat the same gaps", asyn
     modelLabel: "gpt-5-codex",
     adapter,
   });
-  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "waiting_user");
 
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   const breaker = events.find(
     (event) => event.data.runtimeEventType === "supervisor.reassessment_circuit_breaker",
   );
   assert.ok(breaker, "expected a durable circuit-breaker event");
-  assert.equal(breaker.type, "goal.blocked");
+  assert.equal(breaker.type, "goal.input_requested");
   assert.match(String(breaker.data.safeReason), /same remaining gaps/i);
   assert.deepEqual(breaker.data.remainingGaps, [{ refs: ["new:same-gap"], summary: "The same gap is still unresolved." }]);
+  // The breaker never offers a budget extension: repeating without new
+  // information is exactly what it caught.
+  assert.deepEqual(breaker.data.allowedDecisions, ["provide_guidance", "abandon"]);
+  assert.equal(fixture.goalInputRequestRepo.getPending(fixture.goal.id)?.reasonCode, "reassessment_circuit_breaker");
   // Only the two consumed plans exist; no third epoch was admitted.
   assert.equal(
     events.filter((event) => event.data.runtimeEventType === "supervisor.change_plan").length,
@@ -1698,15 +1705,19 @@ test("blocks the goal when the planning-epoch budget is exhausted with gaps rema
     modelLabel: "gpt-5-codex",
     adapter,
   });
-  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "waiting_user");
 
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   const exhausted = events.find(
     (event) => event.data.runtimeEventType === "supervisor.epoch_budget_exhausted",
   );
   assert.ok(exhausted, "expected a durable epoch-budget event");
-  assert.equal(exhausted.type, "goal.blocked");
+  assert.equal(exhausted.type, "goal.input_requested");
   assert.match(String(exhausted.data.safeReason), /planning-epoch budget \(1\)/);
+  assert.deepEqual(exhausted.data.allowedDecisions, ["extend_budget", "provide_guidance", "abandon"]);
+  const pending = fixture.goalInputRequestRepo.getPending(fixture.goal.id);
+  assert.equal(pending?.reasonCode, "epoch_budget_exhausted");
+  assert.deepEqual(pending?.payload.remainingGaps, [{ refs: ["new:more-work"], summary: "More work is needed." }]);
 
   fixture.db.close();
 });
@@ -1860,7 +1871,7 @@ test("REPRO-H6: reworded gaps with identical refs still trip the circuit breaker
     (event) => event.data.runtimeEventType === "supervisor.reassessment_circuit_breaker",
   );
   assert.ok(breaker, "identical ref-sets must trip the breaker even when the prose is reworded");
-  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "blocked");
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "waiting_user");
   fixture.db.close();
 });
 

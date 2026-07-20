@@ -1010,7 +1010,7 @@ test("starts bounded nudge continuations and blocks the goal when exhausted", as
     modelLabel: "gpt-5-codex",
     adapter,
   });
-  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "waiting_user");
 
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   assert.equal(starts.length, 3);
@@ -1019,11 +1019,12 @@ test("starts bounded nudge continuations and blocks the goal when exhausted", as
     events.filter((event) => event.data.continuationReason === "completionless_exit").length,
     2,
   );
-  const blocked = events.find((event) => event.type === "goal.blocked");
+  const blocked = events.find((event) => event.type === "goal.input_requested");
   assert.equal(blocked?.data.runtimeEventType, "supervisor.continuations_exhausted");
   assert.equal(blocked?.data.maxSupervisorContinuations, 2);
   assert.match(String(blocked?.data.reason), /without a completion signal/i);
   assert.equal(blocked?.data.completionRequestEvaluated, false);
+  assert.equal(fixture.goalInputRequestRepo.getPending(fixture.goal.id)?.reasonCode, "continuation_exhausted");
   fixture.db.close();
 });
 
@@ -1059,7 +1060,7 @@ test("continuation accounting preserves configured maximum, reason reset, increm
   await manager.startManagedSession({
     goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
   });
-  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "blocked");
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "waiting_user");
 
   const events = fixture.eventRepo.listForGoal(fixture.goal.id);
   assert.equal(turn, 3, "one initial turn plus exactly two continuations");

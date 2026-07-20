@@ -18,6 +18,8 @@ export type EventType =
   | "run.completed"
   | "goal.completed"
   | "goal.blocked"
+  | "goal.input_requested"
+  | "goal.input_response"
   | "error";
 
 export interface Event {

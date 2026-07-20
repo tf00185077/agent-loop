@@ -2,16 +2,16 @@
 
 ## 1. Domain and persistence
 
-- [ ] 1.1 Add `GoalInputRequest` domain types: reason-code union, payload shape (evidence, gaps, budget name + effective value, allowed decisions), response union (`extend_budget` | `provide_guidance` | `abandon`), request status union; export through `src/domain/index.ts` (TDD: type-contract test first)
-- [ ] 1.2 Add `goal_input_requests` table and repository (create/getPending/listForGoal/resolve) in `src/persistence/` following existing repo patterns; enforce at most one pending request per goal at the repository layer
-- [ ] 1.3 Repository tests: single-pending invariant, resolve transitions (accepted/abandoned/cancelled), payload round-trip
+- [x] 1.1 Add `GoalInputRequest` domain types: reason-code union, payload shape (evidence, gaps, budget name + effective value, allowed decisions), response union (`extend_budget` | `provide_guidance` | `abandon`), request status union; export through `src/domain/index.ts` (TDD: type-contract test first)
+- [x] 1.2 Add `goal_input_requests` table and repository (create/getPending/listForGoal/resolve) in `src/persistence/` following existing repo patterns; enforce at most one pending request per goal at the repository layer
+- [x] 1.3 Repository tests: single-pending invariant, resolve transitions (accepted/abandoned/cancelled), payload round-trip
 
 ## 2. Escalation at the block sites
 
-- [ ] 2.1 Failing tests: epoch-budget exhaustion and repeated-gap circuit breaker produce a durable input request + `waiting_user` (not `blocked`), close the supervisor session, and start no provider work
-- [ ] 2.2 Redirect `blockGoalForMacroLoop` to record the input request (reason-specific allowed decisions, reassessment evidence/gaps in payload) and set `waiting_user`; keep unrecoverable block sites (archive capability, lineage recovery) writing terminal `blocked`
-- [ ] 2.3 Failing test + implementation: continuation exhaustion escalates with reason `continuation_exhausted`
-- [ ] 2.4 Durable events: `goal.input_requested` written before the status update; event data sanitized
+- [x] 2.1 Failing tests: epoch-budget exhaustion and repeated-gap circuit breaker produce a durable input request + `waiting_user` (not `blocked`), close the supervisor session, and start no provider work
+- [x] 2.2 Redirect `blockGoalForMacroLoop` to record the input request (reason-specific allowed decisions, reassessment evidence/gaps in payload) and set `waiting_user`; keep unrecoverable block sites (archive capability, lineage recovery) writing terminal `blocked`
+- [x] 2.3 Failing test + implementation: continuation exhaustion escalates with reason `continuation_exhausted`
+- [x] 2.4 Durable events: `goal.input_requested` written before the status update; event data sanitized
 
 ## 3. Response validation and application
 
