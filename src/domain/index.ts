@@ -136,6 +136,16 @@ export type {
 } from "./event.types.js";
 export type { GoalStatus, RunStatus, StepStatus } from "./status.types.js";
 export type {
+  GoalInputBudgetName,
+  GoalInputDecision,
+  GoalInputRequest,
+  GoalInputRequestPayload,
+  GoalInputRequestReason,
+  GoalInputRequestStatus,
+  GoalInputResponse,
+} from "./goal-input-request.types.js";
+export { allowedDecisionsForReason } from "./goal-input-request.types.js";
+export type {
   AgentLiveStatus,
   AgentLiveStatusPhase,
   AgentLiveStatusState,

@@ -343,6 +343,21 @@ function initializeSchema(
       UNIQUE (goal_id, change_id)
     );
 
+    CREATE TABLE IF NOT EXISTS goal_input_requests (
+      id TEXT PRIMARY KEY,
+      goal_id TEXT NOT NULL REFERENCES goals(id),
+      reason_code TEXT NOT NULL,
+      safe_summary TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL,
+      response TEXT,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS goal_input_requests_single_pending
+      ON goal_input_requests (goal_id) WHERE status = 'pending';
+
     CREATE TABLE IF NOT EXISTS schema_migrations (
       name TEXT PRIMARY KEY,
       applied_at TEXT NOT NULL,

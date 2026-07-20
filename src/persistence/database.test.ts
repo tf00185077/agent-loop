@@ -33,6 +33,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "agent_runtime_commands",
     "agent_sessions",
     "events",
+    "goal_input_requests",
     "goals",
     "managed_change_archive_operations",
     "managed_goal_recovery_authorizations",
