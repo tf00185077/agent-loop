@@ -47,6 +47,6 @@
 
 ## 8. Verification and archive
 
-- [ ] 8.1 `npm test` and `npm run typecheck` green
-- [ ] 8.2 Live smoke: start API, drive a goal to epoch-budget escalation (low budget), read the input request via API, respond `extend_budget`, confirm resume events, then a second escalation answered with `abandon` → terminal `blocked`; restart backend mid-wait and answer after restart; record evidence in `verification.md`
-- [ ] 8.3 Update README capability notes; commit per task group throughout
+- [x] 8.1 `npm test` and `npm run typecheck` green
+- [x] 8.2 Live smoke: start API, drive a goal to epoch-budget escalation (low budget), read the input request via API, respond `extend_budget`, confirm resume events, then a second escalation answered with `abandon` → terminal `blocked`; restart backend mid-wait and answer after restart; record evidence in `verification.md`
+- [x] 8.3 Update README capability notes; commit per task group throughout

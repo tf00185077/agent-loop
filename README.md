@@ -313,6 +313,30 @@ Direction anchors:
   copy Paperclip's broader organization/remote workspace model until the local
   goal-driven control plane needs it.
 
+### Caller Escalation (waiting_user)
+
+Recoverable goal-level bounds no longer terminate the goal. When the
+planning-epoch budget is exhausted, the reassessment circuit breaker trips, or
+supervisor continuations run out, the backend records a durable structured
+input request and parks the goal in the non-terminal `waiting_user` status.
+The goal's caller — the dashboard today, an agent client over the same API
+later — answers with one machine-validated decision:
+
+- `extend_budget` (integer 1..base) raises the effective budget, derived as
+  base + accepted grants and recomputed from durable rows on restart.
+- `provide_guidance` injects the caller's text into the resumed supervisor's
+  continuation prompt as an observation (budget reasons imply a +1 grant; the
+  circuit breaker never offers a bare extension).
+- `abandon` blocks the goal terminally with a caller-attributed reason.
+
+Resume is always a fresh supervisor continuation rehydrated from durable
+state, so answers work minutes or days later and across backend restarts.
+`GET /api/goals/:id/input-request` reads the pending request;
+`POST /api/goals/:id/input-request/:requestId/respond` answers it (400
+invalid, 404 unknown, 409 already-resolved with the standing resolution).
+Unrecoverable failures (archive capability unavailable, lineage-corrupt
+recovery) still write terminal `blocked`.
+
 ### Post-MVP Priority Todo
 
 After the MVP supervisor/child/review-merge loop works end to end, revisit
