@@ -20,7 +20,7 @@ prompt text SHALL only inform while these gates enforce.
 - **THEN** the backend rejects it with a durable safe reason
 
 ### Requirement: Confirmation checkpoint before work
-The system SHALL carry a per-goal confirmation policy (`required` by default, or `off`)
+The system SHALL carry a per-goal confirmation policy (`off` by default, or `required`)
 that is owned by the caller and set when the goal is created; the supervisor SHALL have
 no control block that reads or changes it, so the policy is never bypassable by the
 agent. Under `required`, the system SHALL reject a work-producing control block —

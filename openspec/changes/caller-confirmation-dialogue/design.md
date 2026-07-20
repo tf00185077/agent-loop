@@ -70,13 +70,23 @@ override) and `abandon` (terminal block). Alternative (caller reply auto-unlocks
 rejected: it recreates today's "answer handed to an unpaused session" problem.
 
 **D5 — The confirm-before-work checkpoint is a caller-owned gate keyed on a standing
-confirmation.** A goal carries a `confirmationPolicy` (`required` default, or `off`) that
-is **owned by the caller and invisible to the supervisor**: it is set when the goal is
-created (by the human on the dashboard, or by the parent caller over the API/MCP in the
-recursive case), stored on the goal, and changeable only through a caller action — never
-through any control block. The supervisor has no block to read or alter it, so `off` is
-the *caller's* opt-out (e.g. a trusted autonomous batch goal), never the agent's escape
-hatch. Under `required`, the first work-producing control block of an epoch —
+confirmation, defaulting off.** A goal carries a `confirmationPolicy` (`off` default, or
+`required`) that is **owned by the caller and invisible to the supervisor**: it is set
+when the goal is created (by the human on the dashboard, or by the parent caller over the
+API/MCP in the recursive case), stored on the goal, and changeable only through a caller
+action — never through any control block. The supervisor has no block to read or alter
+it, so `required` is the *caller's* opt-in, never the agent's, and the agent can never
+disable a `required` gate.
+
+The default is `off` because the checkpoint's value scales with the goal's ambiguity:
+forcing propose→confirm on a well-specified goal is pure friction (an extra round-trip
+and human latency) that slows the agent for no benefit. The primary mechanism for "pause
+and check with the caller" is the agent's own judgment — the always-available
+`managed_goal.request_input` (feature 1), which the supervisor emits when *it* senses it
+is uncertain, and which multi-turn conversation then resolves. The `required` checkpoint
+is the narrower opt-in for callers who want a human sign-off regardless of the agent's
+judgment (e.g. a high-stakes goal, or a parent human confirming a risky sub-goal). Under
+`required`, the first work-producing control block of an epoch —
 `managed_delegation.request` or `managed_change.plan` — is rejected unless a standing
 confirmation exists, with a safe reason instructing the supervisor to `propose_plan` and
 converse to `ready_to_proceed` first; the supervisor therefore cannot do any work, and
@@ -134,15 +144,18 @@ generalized endpoints.
 ## Migration Plan
 
 Additive JSON payload fields and new control types; new nullable `confirmation_policy`
-column on goals (default `required`). No data migration; existing pending requests read
-as single-entry threads. Rollback = revert; thread fields are ignored by old code.
+column on goals (default `off`, so existing goals keep the autonomous flow). No data
+migration; existing pending requests read as single-entry threads. Rollback = revert;
+thread fields are ignored by old code.
 
 ## Resolved Decisions (from review)
 
-- **`confirmationPolicy` is caller-owned, not the agent's escape hatch** (D5): defaults
-  `required`, set at goal creation, immutable by the supervisor. `off` is a caller-only
-  opt-out. Under `required`, confirmation is mandatory before any work and therefore
-  before completion.
+- **`confirmationPolicy` is caller-owned, defaults `off`** (D5): `required` is the
+  caller's opt-in, set at goal creation, immutable by the supervisor and never disablable
+  by the agent. It defaults off because confirmation friction is only warranted for
+  ambiguous goals; the agent's own `request_input` judgment (feature 1) is the primary
+  pause-and-check mechanism. Under `required`, confirmation is mandatory before any work
+  and therefore before completion.
 - **The checkpoint re-arms on mid-epoch plan restatement** (D5a): any subsequent
   `managed_change.plan` or `managed_delegation.task_list` clears the standing
   confirmation, not only a new epoch.

@@ -24,12 +24,15 @@ proceeds only when caller and supervisor agree — not one-way input.
   with the whole thread as context. A conversation-turn budget bounds it.
 - **Multi-turn clarification** (feature 1): the existing `supervisor_question` flow now
   supports follow-ups through the thread instead of ending after one answer.
-- **Mandatory propose→confirm checkpoint** (feature 2): a per-goal confirmation policy
-  requires a **standing caller confirmation** before the first work-producing control
-  block of each epoch. Without it, that block is rejected, forcing the supervisor to
-  emit `managed_goal.propose_plan` (reason `plan_confirmation`) and converse to a
-  `ready_to_proceed` first. Opening a new epoch clears the confirmation, re-arming the
-  checkpoint. The policy defaults to on; a goal may opt out for the flat autonomous flow.
+- **Opt-in propose→confirm checkpoint** (feature 2): a per-goal confirmation policy that,
+  when `required`, demands a **standing caller confirmation** before a work-producing
+  control block. Without it, that block is rejected, forcing the supervisor to emit
+  `managed_goal.propose_plan` (reason `plan_confirmation`) and converse to a
+  `ready_to_proceed` first; any later plan restatement re-arms the checkpoint. The policy
+  is **caller-owned and defaults `off`** — confirmation friction is only warranted for
+  ambiguous goals, and the agent's own `request_input` judgment (feature 1) is the primary
+  pause-and-check mechanism. A caller opts a high-stakes goal into `required`; the
+  supervisor can neither read nor disable the policy.
 - **Caller controls**: within a conversation the caller may reply (continue), or choose
   `proceed` (force the loop forward without waiting for the supervisor's `ready`), or
   `abandon`. Existing `extend_budget`/`provide_guidance`/`abandon` semantics for

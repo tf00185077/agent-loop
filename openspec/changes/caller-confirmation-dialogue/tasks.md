@@ -5,7 +5,7 @@
 - [ ] 1.1 Extend `GoalInputRequestPayload` with `thread: Array<{ role: "supervisor" | "caller"; text; at }>` and `phase: "awaiting_caller" | "awaiting_supervisor" | "resolved"`; add `plan_confirmation` reason and `proceed` decision; `allowedDecisionsForReason` returns guidance+proceed+abandon for conversation reasons (TDD)
 - [ ] 1.2 Add `managed_goal.propose_plan` and `managed_goal.ready_to_proceed` to `ManagedControlEventType` with interfaces
 - [ ] 1.3 Repository: `appendMessage`, `setPhase`, and a standing-confirmation query (per goal + epoch); failing tests for thread round-trip, phase transitions, and confirmation lookup
-- [ ] 1.4 Goals: nullable `confirmation_policy` column (default `required`), set at goal creation via a caller-facing field and changeable only by a caller action (no control block reads/writes it); repo getter/setter; migration test
+- [ ] 1.4 Goals: nullable `confirmation_policy` column (default `off`), set at goal creation via a caller-facing field and changeable only by a caller action (no control block reads/writes it); repo getter/setter; migration test
 
 ## 2. Control-block validation
 
