@@ -29,10 +29,10 @@
 
 ## 5. Restart and cancellation stability
 
-- [ ] 5.1 Failing tests: startup reconciliation leaves a `waiting_user` goal untouched (not interrupted, not resumed) and worktree reclamation skips its worktrees
-- [ ] 5.2 Add `waiting_user` to the reconciliation/reclamation stable sets; verify a caller response after restart validates and applies from durable state alone
-- [ ] 5.3 Failing test + implementation: cancelling a `waiting_user` goal resolves the pending request as cancelled and follows the existing cancellation flow
-- [ ] 5.4 Rehydration test: accepted grants recompute the same effective budgets after restart
+- [x] 5.1 Failing tests: startup reconciliation leaves a `waiting_user` goal untouched (not interrupted, not resumed) and worktree reclamation skips its worktrees
+- [x] 5.2 Add `waiting_user` to the reconciliation/reclamation stable sets; verify a caller response after restart validates and applies from durable state alone
+- [x] 5.3 Failing test + implementation: cancelling a `waiting_user` goal resolves the pending request as cancelled and follows the existing cancellation flow
+- [x] 5.4 Rehydration test: accepted grants recompute the same effective budgets after restart
 
 ## 6. API endpoints
 

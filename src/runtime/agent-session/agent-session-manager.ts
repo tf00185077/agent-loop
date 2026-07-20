@@ -263,7 +263,10 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
         if (reconciledGoals.has(session.goalId)) continue;
         reconciledGoals.add(session.goalId);
         const goal = deps.goalRepo.getById(session.goalId);
-        if (goal && ["interrupted", "completed", "failed", "blocked", "cancelled"].includes(goal.status)) continue;
+        // waiting_user is stable: a goal parked on a pending caller input
+        // request keeps waiting across restarts instead of being reconciled
+        // into interrupted recovery.
+        if (goal && ["interrupted", "completed", "failed", "blocked", "cancelled", "waiting_user"].includes(goal.status)) continue;
         reconcileInterruptedGoal(deps, deliveryService, worktreeService, state, session);
       }
 
@@ -458,7 +461,29 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
           handle.cancel(reason),
         );
       }
-      return deliverControl(activeHandles, deliveredControls, sessionId, "cancel", (handle) => handle.cancel(reason));
+      const delivered = await deliverControl(activeHandles, deliveredControls, sessionId, "cancel", (handle) =>
+        handle.cancel(reason),
+      );
+      // A waiting_user goal has no live handle to cancel through; resolve its
+      // pending input request and close the goal out directly.
+      const session = deps.agentSessionRepo.getSession(sessionId);
+      const goal = session ? deps.goalRepo.getById(session.goalId) : null;
+      if (goal?.status === "waiting_user" && deps.goalInputRequestRepo) {
+        const pending = deps.goalInputRequestRepo.getPending(goal.id);
+        if (pending) deps.goalInputRequestRepo.resolve(pending.id, "cancelled", null);
+        deps.goalRepo.updateStatus(goal.id, "cancelled", { completedAt: new Date().toISOString() });
+        deps.eventRepo.create({
+          goalId: goal.id,
+          type: "agent.progress",
+          message: "Waiting goal cancelled; pending input request resolved.",
+          data: {
+            runtimeEventType: "escalation.cancelled",
+            ...(pending ? { inputRequestId: pending.id } : {}),
+            ...(reason ? { safeReason: reason } : {}),
+          },
+        });
+      }
+      return delivered;
     },
   };
 

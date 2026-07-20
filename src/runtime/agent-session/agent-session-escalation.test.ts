@@ -266,6 +266,60 @@ test("an accepted epoch grant admits the next epoch instead of re-escalating", a
   fixture.db.close();
 });
 
+test("a waiting goal survives restart reconciliation and answers from durable state alone", async () => {
+  const { fixture, request } = await escalatedFixture("restart stability");
+  // Simulate a crash window where the supervisor session was still live when
+  // the process died: restart recovery must stall the session without
+  // sweeping the waiting goal into interrupted recovery.
+  const lastSession = fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id).at(-1)!;
+  fixture.agentSessionRepo.updateLifecycleState(lastSession.id, "running");
+
+  const prompts: string[] = [];
+  const restarted = createAgentSessionManager({ ...fixture, maxSupervisorContinuations: 1 });
+  restarted.recoverOrphanedSessions();
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "waiting_user");
+  assert.equal(fixture.goalInputRequestRepo.getPending(fixture.goal.id)?.id, request.id);
+
+  // The restarted manager has empty in-memory state; the response applies from
+  // durable rows alone and the effective budget is recomputed from the grant.
+  const result = await restarted.respondToGoalInputRequest({
+    goalId: fixture.goal.id, requestId: request.id,
+    body: { decision: "extend_budget", extension: 1 },
+    runtime: { providerId: "codex-local", modelLabel: "gpt-5-codex", adapter: completionlessAdapter(prompts) },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.outcome, "resumed");
+  assert.match(prompts[0]!, /effective budget is now 2/);
+  fixture.db.close();
+});
+
+test("a waiting goal's worktrees are not reclaimed as terminal", async () => {
+  const { fixture } = await escalatedFixture("worktree preservation");
+  const lastSession = fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id).at(-1)!;
+  fixture.agentSessionRepo.updateSessionWorktree(lastSession.id, {
+    path: "C:\\worktrees\\waiting-goal", label: "waiting-goal",
+  });
+
+  const terminal = fixture.agentSessionRepo.listWorktreesForTerminalGoals();
+  assert.ok(
+    !terminal.some((record) => record.goalId === fixture.goal.id),
+    "waiting_user goals keep their worktrees — scope is still live",
+  );
+  fixture.db.close();
+});
+
+test("cancelling a waiting goal resolves the pending request as cancelled", async () => {
+  const { fixture, manager, request } = await escalatedFixture("cancel waiting goal");
+  const lastSession = fixture.agentSessionRepo.listSessionsForGoal(fixture.goal.id).at(-1)!;
+
+  await manager.cancel(lastSession.id, "User cancelled.");
+
+  assert.equal(fixture.goalRepo.getById(fixture.goal.id)?.status, "cancelled");
+  assert.equal(fixture.goalInputRequestRepo.getById(request.id)?.status, "cancelled");
+  assert.equal(fixture.goalInputRequestRepo.getPending(fixture.goal.id), null);
+  fixture.db.close();
+});
+
 test("responding to an unknown request or wrong goal is not found", async () => {
   const { fixture, manager, request } = await escalatedFixture("unknown request");
   const unknown = await manager.respondToGoalInputRequest({
