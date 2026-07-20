@@ -1,0 +1,44 @@
+# Tasks — caller-confirmation-dialogue
+
+## 1. Domain and persistence — the thread
+
+- [ ] 1.1 Extend `GoalInputRequestPayload` with `thread: Array<{ role: "supervisor" | "caller"; text; at }>` and `phase: "awaiting_caller" | "awaiting_supervisor" | "resolved"`; add `plan_confirmation` reason and `proceed` decision; `allowedDecisionsForReason` returns guidance+proceed+abandon for conversation reasons (TDD)
+- [ ] 1.2 Add `managed_goal.propose_plan` and `managed_goal.ready_to_proceed` to `ManagedControlEventType` with interfaces
+- [ ] 1.3 Repository: `appendMessage`, `setPhase`, and a standing-confirmation query (per goal + epoch); failing tests for thread round-trip, phase transitions, and confirmation lookup
+- [ ] 1.4 Goals: nullable `confirmation_policy` column (default `required`); repo getter/setter; migration test
+
+## 2. Control-block validation
+
+- [ ] 2.1 Failing tests: well-formed `propose_plan` (bounded summary + bounded items) and `ready_to_proceed` accepted; malformed rejected naming the bounds
+- [ ] 2.2 Implement both validators in `delegation-control-event.ts` (pure, bounded, trimmed)
+
+## 3. Read-only conversational turns
+
+- [ ] 3.1 Failing tests: a caller `provide_guidance` reply to a conversation appends to the thread, sets `awaiting_supervisor`, and runs a conversational turn; a work-producing block (delegation/task_list/change_plan/complete) in that turn is rejected read-only; another question/proposal continues the thread (`conversation_continued`, still `waiting_user`)
+- [ ] 3.2 Implement the conversational-turn path: whitelist enforcement in `persistDelegationControlEvent` keyed on phase `awaiting_supervisor`; reuse `resumeGoalFromDurableProjection` with a conversational prompt; new `respondToGoalInputRequest` outcome `conversation_continued`
+- [ ] 3.3 Failing test + implementation: `ready_to_proceed` resolves the conversation and resumes a fresh working session whose prompt carries the whole thread
+- [ ] 3.4 Failing test + implementation: caller `proceed` force-closes and resumes; `abandon` blocks terminally
+- [ ] 3.5 Failing test + implementation: conversation-turn budget (`maxSupervisorConversationTurns` deps option) exhaustion resolves the conversation with autonomy guidance and, under `required`, records a forced standing confirmation
+
+## 4. Confirm-before-work checkpoint
+
+- [ ] 4.1 Failing tests: under `required`, the first `managed_delegation.request`/`managed_change.plan` of an epoch with no standing confirmation is rejected with the propose-first safe reason; after a `plan_confirmation` closes with `ready_to_proceed`, work is accepted
+- [ ] 4.2 Implement the checkpoint gate + standing-confirmation recording on `plan_confirmation` close (supervisor ready or caller proceed)
+- [ ] 4.3 Failing test + implementation: opening the next epoch clears the standing confirmation and re-arms the checkpoint; `off` policy bypasses it entirely
+
+## 5. Prompt contract and API
+
+- [ ] 5.1 Document in `supervisor-prompt.ts`: propose→confirm before work under a required policy, how to converse and when to signal `ready_to_proceed`, the read-only nature of a conversation, and the turn budget; prompt test asserting the contract
+- [ ] 5.2 API: `GET /api/goals/:id/input-request` returns the thread; respond endpoint accepts `proceed` and returns `conversation_continued`/`resumed`/`abandoned`; route tests for each outcome and the read-only rejection surfacing
+
+## 6. Dashboard
+
+- [ ] 6.1 Render the input request as a thread (supervisor/caller messages) with a persistent reply box while `phase !== resolved`
+- [ ] 6.2 Affordances by reason: confirm/revise + proceed + abandon for `plan_confirmation`, reply + proceed + abandon for `supervisor_question`; component tests following the existing rendering test
+- [ ] 6.3 `waiting_user` badge already exists — verify the thread panel replaces the single-summary panel without regressing budget-escalation rendering
+
+## 7. Verification and archive
+
+- [ ] 7.1 `npm test` and `npm run typecheck` green
+- [ ] 7.2 Live smoke: a `required`-policy goal whose supervisor's first delegation is rejected → it emits `propose_plan` → caller replies twice (multi-turn) → supervisor `ready_to_proceed` → work proceeds; then a work block in a conversational turn is shown rejected read-only; record evidence in `verification.md`
+- [ ] 7.3 Update README escalation section; commit per task group throughout
