@@ -46,7 +46,7 @@ The system SHALL render the goal's SQLite-backed task history into supervisor co
 - **THEN** the rendered task history is equivalent to the last committed durable state before restart
 
 ### Requirement: Iterate until explicit completion
-The system SHALL continue a managed supervisor across multiple delegation cycles until the supervisor emits an explicit completion signal or a terminal failure, cancellation, or configured bound is reached; provider process exit alone SHALL NOT complete the goal.
+The system SHALL continue a managed supervisor across multiple delegation cycles until the supervisor emits an explicit completion signal or a terminal failure, cancellation, or configured bound is reached; provider process exit alone SHALL NOT complete the goal. The continuation bound SHALL be the goal's effective continuation bound (configured base plus accepted caller grants), and reaching it SHALL escalate to the goal's caller as a durable input request instead of terminally blocking the goal.
 
 #### Scenario: Multi-task goal runs task by task
 - **WHEN** a supervisor decomposes a goal into multiple tasks and delegates them sequentially
@@ -57,8 +57,12 @@ The system SHALL continue a managed supervisor across multiple delegation cycles
 - **THEN** the backend starts a supervisor continuation prompting the supervisor to continue or complete, and records a durable continuation event
 
 #### Scenario: Continuation bound reached
-- **WHEN** the number of completion-less supervisor continuations reaches the configured bound
-- **THEN** the backend marks the goal blocked with a durable reason instead of continuing indefinitely
+- **WHEN** the number of completion-less supervisor continuations reaches the goal's effective continuation bound
+- **THEN** the backend records a durable `continuation_exhausted` input request and moves the goal to `waiting_user` instead of continuing or terminally blocking
+
+#### Scenario: Granted continuations extend the bound
+- **WHEN** a caller's accepted response grants additional continuations and the goal resumes
+- **THEN** subsequent continuation checks use the extended effective bound and the continuation history reflects the pre-escalation cycles
 
 ### Requirement: Explicit supervisor completion signal
 The system SHALL treat a valid `managed_delegation.complete` control block as a completion request and SHALL complete the managed goal only when the backend completion evaluator verifies the durable task, criterion, review, delivery, and change-plan gates.
