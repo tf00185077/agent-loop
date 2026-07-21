@@ -14,6 +14,7 @@ export default function CreateGoalForm({ onCreated }: Props) {
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Goal["priority"]>("normal");
   const [agentType, setAgentType] = useState<Goal["agentType"]>("general");
+  const [confirmationPolicy, setConfirmationPolicy] = useState<Goal["confirmationPolicy"]>("off");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,11 +23,12 @@ export default function CreateGoalForm({ onCreated }: Props) {
     setSubmitting(true);
     setError(null);
     try {
-      await createGoal({ title, description, priority, agentType });
+      await createGoal({ title, description, priority, agentType, confirmationPolicy });
       setTitle("");
       setDescription("");
       setPriority("normal");
       setAgentType("general");
+      setConfirmationPolicy("off");
       setOpen(false);
       onCreated();
     } catch (err) {
@@ -94,6 +96,18 @@ export default function CreateGoalForm({ onCreated }: Props) {
           </select>
         </label>
       </div>
+
+      <label style={labelStyle}>
+        Confirmation
+        <select
+          value={confirmationPolicy}
+          onChange={(e) => setConfirmationPolicy(e.target.value as Goal["confirmationPolicy"])}
+          style={inputStyle}
+        >
+          <option value="off">off — the agent works autonomously (asks only when it chooses)</option>
+          <option value="required">required — the agent must propose a plan and get your confirmation before any work</option>
+        </select>
+      </label>
 
       {error && <p style={{ color: "red", margin: "8px 0" }}>{error}</p>}
 

@@ -14,6 +14,7 @@ export interface Goal {
   description: string;
   priority: "low" | "normal" | "high";
   agentType: "general";
+  confirmationPolicy: "off" | "required";
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -230,6 +231,7 @@ export async function createGoal(body: {
   description: string;
   priority: Goal["priority"];
   agentType: Goal["agentType"];
+  confirmationPolicy?: Goal["confirmationPolicy"];
 }): Promise<Goal> {
   const res = await fetch(`${BASE}/goals`, {
     method: "POST",

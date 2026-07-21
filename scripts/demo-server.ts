@@ -31,7 +31,10 @@ const PORT = Number(process.env.PORT ?? 3001);
 const dbPath = join(mkdtempSync(join(tmpdir(), "auto-agent-demo-server-")), "demo.sqlite");
 
 function scriptedSupervisor(): AgentRuntimeAdapter {
-  let turn = 0;
+  // Per-GOAL turn count, so every goal (the seeded one AND any you create in
+  // the dashboard) proposes a plan on its own first bootstrap turn. A shared
+  // counter would only ever work for the first goal.
+  const turns = new Map<string, number>();
   const block = (i: { sessionId: string; goalId: string; runId: string }, b: Record<string, unknown>): AgentRuntimeEvent => ({
     type: "progress", sessionId: i.sessionId, goalId: i.goalId, runId: i.runId,
     message: "control", occurredAt: new Date().toISOString(), metadata: { delegationControlEvent: b },
@@ -42,7 +45,8 @@ function scriptedSupervisor(): AgentRuntimeAdapter {
       return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
     },
     async startSession(input) {
-      turn += 1;
+      const turn = (turns.get(input.goalId) ?? 0) + 1;
+      if (!input.parent?.sessionId) turns.set(input.goalId, turn);
       const events: AgentRuntimeEvent[] = [];
       const conversing = /READ-ONLY clarification/.test(input.prompt);
       const resumed = /conversation resolved/i.test(input.prompt);
