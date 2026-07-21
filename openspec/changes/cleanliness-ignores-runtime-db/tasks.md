@@ -22,6 +22,6 @@
 
 ## 4. Verification and archive
 
-- [ ] 4.1 `npm test` and `npm run typecheck` green
-- [ ] 4.2 Live smoke: in a temp git repo containing a committed `data/auto-agent.sqlite`-shaped file, dirty only that file and assert the delivery/review-merge cleanliness gate now passes, while dirtying an unrelated file still fails; record evidence in `verification.md`
-- [ ] 4.3 Update README (a goal may run inside the auto-agent repo; the runtime DB is excluded from cleanliness); commit per task group throughout
+- [x] 4.1 `npm test` and `npm run typecheck` green
+- [x] 4.2 Live smoke: in a temp git repo containing a committed `data/auto-agent.sqlite`-shaped file, dirty only that file and assert the delivery/review-merge cleanliness gate now passes, while dirtying an unrelated file still fails; record evidence in `verification.md`
+- [x] 4.3 Update README (a goal may run inside the auto-agent repo; the runtime DB is excluded from cleanliness); commit per task group throughout

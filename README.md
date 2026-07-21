@@ -387,8 +387,11 @@ The first slice exposes only the endpoints the demo path needs:
 - `POST /api/goals` — create a goal. Optional `confirmationPolicy` (`off` |
   `required`) and `workspace` (an absolute path to an existing directory the
   supervisor and its workers run in; validated at creation, defaults to the
-  server's working directory). Point a goal at a clean scratch repo to avoid the
-  agent working on the auto-agent repo itself.
+  server's working directory). A goal may also run inside the auto-agent repo
+  itself: every workspace-cleanliness gate (delivery, integration, review-merge,
+  OpenSpec archive, recovery) ignores the runtime's own `data/auto-agent.sqlite`
+  (and its `-wal`/`-shm`/`-journal` sidecars), so the runtime's live DB writes are
+  not seen as a dirty workspace — any other change still is.
 - `GET /api/goals` — list goals.
 - `GET /api/goals/:id` — goal detail snapshot.
 - `POST /api/goals/:id/start` — start the mock runtime for a draft goal.
