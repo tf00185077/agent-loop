@@ -164,3 +164,16 @@ test("an awaiting-supervisor phase shows the supervisor is responding", () => {
   );
   assert.match(html, /supervisor is responding/i);
 });
+
+test("goal detail shows the goal's workspace and the server default", () => {
+  const scoped = renderToStaticMarkup(
+    <GoalDetailPanel goal={{ ...goal("running"), workspace: "C:\Users\dev\scratch-repo" }} latestMetadata={null} starting={false} onStart={() => undefined} />,
+  );
+  assert.match(scoped, /Workspace/);
+  assert.match(scoped, /scratch-repo/);
+
+  const defaulted = renderToStaticMarkup(
+    <GoalDetailPanel goal={{ ...goal("running"), workspace: null }} latestMetadata={null} starting={false} onStart={() => undefined} />,
+  );
+  assert.match(defaulted, /server default/);
+});

@@ -15,6 +15,7 @@ export default function CreateGoalForm({ onCreated }: Props) {
   const [priority, setPriority] = useState<Goal["priority"]>("normal");
   const [agentType, setAgentType] = useState<Goal["agentType"]>("general");
   const [confirmationPolicy, setConfirmationPolicy] = useState<Goal["confirmationPolicy"]>("off");
+  const [workspace, setWorkspace] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,12 +24,16 @@ export default function CreateGoalForm({ onCreated }: Props) {
     setSubmitting(true);
     setError(null);
     try {
-      await createGoal({ title, description, priority, agentType, confirmationPolicy });
+      await createGoal({
+        title, description, priority, agentType, confirmationPolicy,
+        workspace: workspace.trim() || undefined,
+      });
       setTitle("");
       setDescription("");
       setPriority("normal");
       setAgentType("general");
       setConfirmationPolicy("off");
+      setWorkspace("");
       setOpen(false);
       onCreated();
     } catch (err) {
@@ -107,6 +112,16 @@ export default function CreateGoalForm({ onCreated }: Props) {
           <option value="off">off — the agent works autonomously (asks only when it chooses)</option>
           <option value="required">required — the agent must propose a plan and get your confirmation before any work</option>
         </select>
+      </label>
+
+      <label style={labelStyle}>
+        Workspace (optional)
+        <input
+          value={workspace}
+          onChange={(e) => setWorkspace(e.target.value)}
+          placeholder="Absolute path to the directory the agent works in (blank = server default)"
+          style={inputStyle}
+        />
       </label>
 
       {error && <p style={{ color: "red", margin: "8px 0" }}>{error}</p>}

@@ -15,6 +15,7 @@ export interface Goal {
   priority: "low" | "normal" | "high";
   agentType: "general";
   confirmationPolicy: "off" | "required";
+  workspace: string | null;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -232,13 +233,17 @@ export async function createGoal(body: {
   priority: Goal["priority"];
   agentType: Goal["agentType"];
   confirmationPolicy?: Goal["confirmationPolicy"];
+  workspace?: string;
 }): Promise<Goal> {
   const res = await fetch(`${BASE}/goals`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`createGoal: ${res.status}`);
+  if (!res.ok) {
+    const message = await res.json().then((b) => (b as { error?: string }).error).catch(() => undefined);
+    throw new Error(message ?? `createGoal: ${res.status}`);
+  }
   return res.json();
 }
 

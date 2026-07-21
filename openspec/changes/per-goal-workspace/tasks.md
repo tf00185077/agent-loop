@@ -21,9 +21,9 @@
 
 ## 4. Dashboard
 
-- [ ] 4.1 Add a Workspace field to the create-goal form; thread `workspace` through the `createGoal` api client and the `Goal` type
-- [ ] 4.2 Show the resolved workspace on the goal detail view; rendering test
-- [ ] 4.3 Surface a create-time validation error (invalid workspace) in the form
+- [x] 4.1 Add a Workspace field to the create-goal form; thread `workspace` through the `createGoal` api client and the `Goal` type
+- [x] 4.2 Show the resolved workspace on the goal detail view; rendering test
+- [x] 4.3 Surface a create-time validation error (invalid workspace) in the form
 
 ## 5. Verification and archive
 

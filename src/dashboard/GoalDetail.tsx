@@ -212,6 +212,7 @@ export function GoalDetailPanel({
         <tbody>
           <Row label="Priority" value={goal.priority} />
           <Row label="Agent type" value={goal.agentType} />
+          <Row label="Workspace" value={goal.workspace ?? "(server default)"} />
           <Row label="Created" value={fmt(goal.createdAt)} />
           {goal.startedAt && <Row label="Started" value={fmt(goal.startedAt)} />}
           {goal.completedAt && <Row label="Completed" value={fmt(goal.completedAt)} />}
