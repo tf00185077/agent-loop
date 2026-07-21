@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
 
 import type { AgentRuntimeReviewMergeCheckpoint } from "../../domain/index.js";
+import { filteredStatusSummary, isWorkspaceStatusClean } from "./workspace-cleanliness.js";
 
 export interface ReviewMergeWorkspaceService {
-  prepareReviewMerge(cwd: string): Promise<ReviewMergePrepareResult>;
+  prepareReviewMerge(cwd: string, ignoredWorkspacePaths?: string[]): Promise<ReviewMergePrepareResult>;
 }
 
 export type ReviewMergePrepareResult =
@@ -22,14 +23,13 @@ export function createGitReviewMergeWorkspaceService(
   const runGit = options.runGit ?? defaultGitRunner;
 
   return {
-    async prepareReviewMerge(cwd) {
+    async prepareReviewMerge(cwd, ignoredWorkspacePaths = []) {
       const status = runGit({ cwd, args: ["status", "--porcelain"] });
       if (status.status !== 0) {
         return { ok: false, safeReason: `Unable to verify supervisor workspace cleanliness: ${safeGitSummary(status.stderr)}` };
       }
-      const statusSummary = safeGitSummary(status.stdout);
-      if (statusSummary.length > 0) {
-        return { ok: false, safeReason: `Supervisor workspace is dirty: ${statusSummary}` };
+      if (!isWorkspaceStatusClean(status.stdout, cwd, ignoredWorkspacePaths)) {
+        return { ok: false, safeReason: `Supervisor workspace is dirty: ${filteredStatusSummary(status.stdout, cwd, ignoredWorkspacePaths)}` };
       }
 
       const head = runGit({ cwd, args: ["rev-parse", "HEAD"] });

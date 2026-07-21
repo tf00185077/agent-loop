@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 
 import type { AgentRuntimeReviewMergeCheckpoint } from "../../domain/index.js";
+import { isWorkspaceStatusClean } from "./workspace-cleanliness.js";
 
 export interface ReviewMergeVerificationService {
   verifyMerged(input: VerifyMergedInput): ReviewMergeVerificationResult;
@@ -9,6 +10,7 @@ export interface ReviewMergeVerificationService {
 export interface VerifyMergedInput {
   cwd: string;
   checkpoint: AgentRuntimeReviewMergeCheckpoint;
+  ignoredWorkspacePaths?: string[];
 }
 
 export interface ReviewMergeVerificationResult {
@@ -79,7 +81,7 @@ export function createReviewMergeVerificationService(
         reset.status === 0 &&
         clean.status === 0 &&
         status.status === 0 &&
-        safeSummary(status.stdout).length === 0 &&
+        isWorkspaceStatusClean(status.stdout, input.cwd, input.ignoredWorkspacePaths ?? []) &&
         head.status === 0 &&
         safeSummary(head.stdout) === input.checkpoint.head;
 

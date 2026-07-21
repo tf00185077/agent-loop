@@ -8,17 +8,17 @@
 
 ## 2. Thread ignored paths from the manager
 
-- [ ] 2.1 Manager: compute the ignored set once from `deps.database?.name` (via `runtimeDatabaseIgnorePaths`) and pass `ignoredWorkspacePaths` into the delivery, integration, review-merge (workspace + verification), OpenSpec, and recovery calls
-- [ ] 2.2 Add optional `ignoredWorkspacePaths?: string[]` to each of those service inputs; default empty preserves current behavior
+- [x] 2.1 Manager: compute the ignored set once from `deps.database?.name` (via `runtimeDatabaseIgnorePaths`) and pass `ignoredWorkspacePaths` into the delivery, integration, review-merge (workspace + verification), OpenSpec, and recovery calls
+- [x] 2.2 Add optional `ignoredWorkspacePaths?: string[]` to each of those service inputs; default empty preserves current behavior
 
 ## 3. Apply the helper at each supervisor-workspace check
 
-- [ ] 3.1 `managed-delivery-service.ts`: replace the supervisor-workspace `status.stdout` emptiness judgments with `isWorkspaceStatusClean(...)`; dirty safe reasons use `filteredStatusSummary`
-- [ ] 3.2 `managed-integration-service.ts`: same for the supervisor-workspace check
-- [ ] 3.3 `review-merge-workspace-service.ts` and `review-merge-verification-service.ts`: same
-- [ ] 3.4 `openspec-workspace-service.ts`: same for its scaffold/archive cleanliness checks
-- [ ] 3.5 `managed-goal-recovery.ts`: same for the recovery workspace-dirty blocker
-- [ ] 3.6 Confirm worktree-scoped checks (worker/integration worktrees) are unaffected — the DB is never inside them, so the filter is a no-op there
+- [x] 3.1 `managed-delivery-service.ts`: replace the supervisor-workspace `status.stdout` emptiness judgments with `isWorkspaceStatusClean(...)`; dirty safe reasons use `filteredStatusSummary`
+- [x] 3.2 `managed-integration-service.ts`: same for the supervisor-workspace check
+- [x] 3.3 `review-merge-workspace-service.ts` and `review-merge-verification-service.ts`: same
+- [x] 3.4 `openspec-workspace-service.ts`: same for its scaffold/archive cleanliness checks
+- [x] 3.5 `managed-goal-recovery.ts`: same for the recovery workspace-dirty blocker
+- [x] 3.6 Confirm worktree-scoped checks (worker/integration worktrees) are unaffected — the DB is never inside them, so the filter is a no-op there
 
 ## 4. Verification and archive
 

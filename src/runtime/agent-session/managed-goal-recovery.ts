@@ -5,6 +5,7 @@ import { join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 import type { AppDatabase } from "../../persistence/database.js";
+import { isWorkspaceStatusClean, runtimeDatabaseIgnorePaths } from "./workspace-cleanliness.js";
 import {
   computeArchiveCommitTreeManifestDigest,
   computeArchiveManifestDigest,
@@ -332,7 +333,7 @@ function proveLegacyArchive(
   const artifactFailures = validateArchivedArtifacts(targetPath);
   if (artifactFailures.length > 0) blockers.push(`invalid_archive_artifacts:${artifactFailures.join("|")}`);
   const manifestDigest = existsSync(targetPath) ? computeArchiveManifestDigest(targetPath) : "";
-  const gitProof = proveArchiveGit(workspacePath, candidate.sourcePath, targetPath);
+  const gitProof = proveArchiveGit(workspacePath, candidate.sourcePath, targetPath, runtimeDatabaseIgnorePaths(db.name));
   blockers.push(...gitProof.blockers);
   if (gitProof.treeManifestDigest && gitProof.treeManifestDigest !== manifestDigest) {
     blockers.push("archive_manifest_digest_mismatch");
@@ -400,7 +401,7 @@ function plannedChanges(db: AppDatabase, goalId: string): string[] {
   return ids;
 }
 
-function proveArchiveGit(workspacePath: string, sourcePath: string, targetPath: string): {
+function proveArchiveGit(workspacePath: string, sourcePath: string, targetPath: string, ignoredAbsPaths: string[] = []): {
   archiveCommitSha: string | null;
   preArchiveHead: string | null;
   treeManifestDigest: string | null;
@@ -409,7 +410,7 @@ function proveArchiveGit(workspacePath: string, sourcePath: string, targetPath: 
   const source = relative(workspacePath, sourcePath).replace(/\\/g, "/");
   const target = relative(workspacePath, targetPath).replace(/\\/g, "/");
   const status = git(workspacePath, ["status", "--porcelain", "-uall"]);
-  const blockers = !status.ok || status.stdout.trim() ? ["workspace_not_clean"] : [];
+  const blockers = !status.ok || !isWorkspaceStatusClean(status.stdout, workspacePath, ignoredAbsPaths) ? ["workspace_not_clean"] : [];
   const trackedTarget = git(workspacePath, ["cat-file", "-e", `HEAD:${target}`]);
   const trackedSource = git(workspacePath, ["cat-file", "-e", `HEAD:${source}`]);
   if (!trackedTarget.ok || trackedSource.ok) {
@@ -629,7 +630,7 @@ function validateRecoveryReplayPostconditions(
   } finally {
     db.close();
   }
-  blockers.push(...validateRecoveryReplayWorkspace(workspacePath, action, replay));
+  blockers.push(...validateRecoveryReplayWorkspace(workspacePath, action, replay, runtimeDatabaseIgnorePaths(databasePath)));
   return boundedUnique(blockers);
 }
 
@@ -637,6 +638,7 @@ function validateRecoveryReplayWorkspace(
   workspacePath: string,
   action: ManagedGoalRecoveryAction,
   replay: PriorRecoveryAuthorization,
+  ignoredAbsPaths: string[] = [],
 ): string[] {
   if (
     !action.changeId
@@ -675,7 +677,7 @@ function validateRecoveryReplayWorkspace(
   }
 
   const status = git(workspacePath, ["status", "--porcelain", "-uall"]);
-  if (!status.ok || status.stdout.trim()) blockers.push("recovery_archive_workspace_dirty");
+  if (!status.ok || !isWorkspaceStatusClean(status.stdout, workspacePath, ignoredAbsPaths)) blockers.push("recovery_archive_workspace_dirty");
 
   if (existsSync(targetPath)) {
     try {
@@ -687,7 +689,7 @@ function validateRecoveryReplayWorkspace(
     }
   }
 
-  const proof = proveArchiveGit(workspacePath, sourcePath, targetPath);
+  const proof = proveArchiveGit(workspacePath, sourcePath, targetPath, ignoredAbsPaths);
   const proofBlockers = proof.blockers.filter((blocker) => blocker !== "workspace_not_clean");
   const manifestProof = proof.archiveCommitSha
     ? proveArchiveManifestIdentity({

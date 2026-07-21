@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { isWorkspaceStatusClean } from "./workspace-cleanliness.js";
 
 import type { AgentRuntimeWorktreeMetadata } from "../../domain/index.js";
 import type { WorktreeService } from "./worktree-service.js";
@@ -26,6 +27,7 @@ export interface ManagedIntegrationService {
     checkpointHead: string;
     originalCandidateCommitSha: string;
     candidateFiles: string[];
+    ignoredWorkspacePaths?: string[];
   }): Promise<IntegrationPreparationResult>;
   verifyAndCreateCandidate(input: {
     integrationCwd: string;
@@ -54,7 +56,8 @@ export function createManagedIntegrationService(options: ManagedIntegrationServi
       const supervisorHead = runGit({ cwd: input.supervisorCwd, args: ["rev-parse", "HEAD"] });
       const supervisorStatus = runGit({ cwd: input.supervisorCwd, args: ["status", "--porcelain", "-uall"] });
       if (supervisorHead.status !== 0 || supervisorStatus.status !== 0 ||
-          normalize(supervisorHead.stdout) !== input.checkpointHead || normalize(supervisorStatus.stdout)) {
+          normalize(supervisorHead.stdout) !== input.checkpointHead ||
+          !isWorkspaceStatusClean(supervisorStatus.stdout, input.supervisorCwd, input.ignoredWorkspacePaths ?? [])) {
         return { ok: false, status: "git_failure", safeSummary: "Supervisor checkpoint is not clean for integration recovery." };
       }
       let worktree: AgentRuntimeWorktreeMetadata;

@@ -45,6 +45,8 @@ export interface DelegationCoordinatorDeps {
   reviewMergeWorkspaceService?: ReviewMergeWorkspaceService;
   reviewMergeVerificationService?: ReviewMergeVerificationService;
   supervisorCwd?: string;
+  /** Absolute paths (the runtime DB + sidecars) excluded from cleanliness. */
+  ignoredWorkspacePaths?: string[];
   managedTaskRepo?: ManagedTaskRepository;
   /**
    * Live session handles keyed by session id. When provided, child handles
@@ -127,7 +129,7 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
       const workerResult = input.role === "review_merge" ? requireWorkerResult(deps, parent, input.workerDelegationRequestId) : null;
       const checkpoint =
         input.role === "review_merge" && !deps.managedTaskRepo
-          ? await prepareReviewMerge(reviewMergeWorkspaceService, supervisorCwd)
+          ? await prepareReviewMerge(reviewMergeWorkspaceService, supervisorCwd, deps.ignoredWorkspacePaths ?? [])
           : null;
       const childEventData = {
         ...input.eventData,
@@ -322,8 +324,9 @@ export function createDelegationCoordinator(deps: DelegationCoordinatorDeps): De
 async function prepareReviewMerge(
   reviewMergeWorkspaceService: ReviewMergeWorkspaceService,
   supervisorCwd: string,
+  ignoredWorkspacePaths: string[] = [],
 ): Promise<AgentRuntimeReviewMergeCheckpoint> {
-  const preparation = await reviewMergeWorkspaceService.prepareReviewMerge(supervisorCwd);
+  const preparation = await reviewMergeWorkspaceService.prepareReviewMerge(supervisorCwd, ignoredWorkspacePaths);
   if (!preparation.ok) {
     throw new Error(preparation.safeReason);
   }
@@ -633,6 +636,7 @@ function recordReviewMergeApplyOutcome(
       ? input.reviewMergeVerificationService.verifyMerged({
           cwd: input.supervisorCwd ?? process.cwd(),
           checkpoint,
+          ignoredWorkspacePaths: deps.ignoredWorkspacePaths ?? [],
         })
       : null;
   const finalOutcome = verification?.outcome ?? outcome.status;

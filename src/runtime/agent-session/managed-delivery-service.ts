@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 
 import type { ManagedDeliveryOutcome } from "../../domain/index.js";
+import { filteredStatusSummary, isWorkspaceStatusClean } from "./workspace-cleanliness.js";
 
 export interface ManagedDeliveryInput {
   workerCwd: string;
@@ -9,6 +10,8 @@ export interface ManagedDeliveryInput {
   safeSummary: string;
   /** Active OpenSpec change whose artifacts may be edited but not deleted by a provider candidate. */
   activeChangeId?: string | null;
+  /** Absolute paths (the runtime DB + sidecars) excluded from cleanliness. */
+  ignoredWorkspacePaths?: string[];
 }
 
 export interface ManagedCandidateDeliveryInput {
@@ -16,6 +19,7 @@ export interface ManagedCandidateDeliveryInput {
   checkpointHead: string;
   candidateCommitSha: string;
   safeSummary: string;
+  ignoredWorkspacePaths?: string[];
 }
 
 export interface ManagedDeliveryResult {
@@ -56,6 +60,7 @@ export type PrepareCandidateResult =
 export interface ReconcilePendingDeliveryInput {
   supervisorCwd: string;
   checkpointHead: string;
+  ignoredWorkspacePaths?: string[];
 }
 
 export interface ReconcilePendingDeliveryResult {
@@ -110,8 +115,9 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
     if (supervisorStatus.status !== 0) {
       return { ok: false, result: outcome("verification_failed", `Unable to verify supervisor workspace: ${safe(supervisorStatus.stderr)}`) };
     }
-    if (safe(supervisorStatus.stdout).length > 0) {
-      return { ok: false, result: outcome("verification_failed", `Supervisor workspace is dirty: ${safe(supervisorStatus.stdout)}`) };
+    const ignoredPaths = input.ignoredWorkspacePaths ?? [];
+    if (!isWorkspaceStatusClean(supervisorStatus.stdout, input.supervisorCwd, ignoredPaths)) {
+      return { ok: false, result: outcome("verification_failed", `Supervisor workspace is dirty: ${filteredStatusSummary(supervisorStatus.stdout, input.supervisorCwd, ignoredPaths)}`) };
     }
     const checkpointResult = runGit({ cwd: input.supervisorCwd, args: ["rev-parse", "HEAD"] });
     if (checkpointResult.status !== 0) {
@@ -149,11 +155,11 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
     }
     if (
       head.status === 0 && safe(head.stdout) === input.checkpointHead &&
-      status.status === 0 && safe(status.stdout).length === 0
+      status.status === 0 && isWorkspaceStatusClean(status.stdout, input.supervisorCwd, input.ignoredWorkspacePaths ?? [])
     ) {
       return { status: "at_checkpoint", reset: false, safeSummary: "Supervisor workspace already at the recorded checkpoint." };
     }
-    const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, true);
+    const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, true, input.ignoredWorkspacePaths ?? []);
     return restored.ok
       ? { status: "reset", reset: true, safeSummary: restored.summary }
       : { status: "reset_failed", reset: false, safeSummary: restored.summary };
@@ -162,7 +168,9 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
   function deliverCandidate(input: ManagedCandidateDeliveryInput): ManagedDeliveryResult {
       const status = runGit({ cwd: input.supervisorCwd, args: ["status", "--porcelain", "-uall"] });
       const head = runGit({ cwd: input.supervisorCwd, args: ["rev-parse", "HEAD"] });
-      if (status.status !== 0 || head.status !== 0 || safe(status.stdout) || safe(head.stdout) !== input.checkpointHead) {
+      if (status.status !== 0 || head.status !== 0 ||
+        !isWorkspaceStatusClean(status.stdout, input.supervisorCwd, input.ignoredWorkspacePaths ?? []) ||
+        safe(head.stdout) !== input.checkpointHead) {
         return withCheckpoint(outcome("verification_failed", "Supervisor checkpoint changed before resolved delivery."), input.checkpointHead);
       }
       const candidateFiles = nameOnly(runGit, input.supervisorCwd,
@@ -170,7 +178,7 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
       const apply = runGit({ cwd: input.supervisorCwd, args: ["cherry-pick", input.candidateCommitSha] });
       if (apply.status !== 0) {
         const conflictFiles = nameOnly(runGit, input.supervisorCwd, ["diff", "--name-only", "--diff-filter=U"]);
-        const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, true);
+        const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, true, input.ignoredWorkspacePaths ?? []);
         return {
           ...withCheckpoint(outcome(restored.ok ? "conflict" : "revert_failed", restored.ok
             ? "Resolved candidate conflicted again; the supervisor checkpoint was restored."
@@ -185,7 +193,7 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
       const validation = runCommand({ cwd: input.supervisorCwd, command: fixedValidationCommand });
       const validationSummary = safe(`${validation.stdout ?? ""} ${validation.stderr ?? ""}`);
       if (validation.status !== 0) {
-        const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, false);
+        const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, false, input.ignoredWorkspacePaths ?? []);
         return {
           ...withCheckpoint(outcome(
             restored.ok ? (validation.status === null ? "verification_failed" : "test_failed_reverted") : "revert_failed",
@@ -203,7 +211,7 @@ export function createManagedDeliveryService(options: ManagedDeliveryServiceOpti
       const deliveredHead = runGit({ cwd: input.supervisorCwd, args: ["rev-parse", "HEAD"] });
       const finalStatus = runGit({ cwd: input.supervisorCwd, args: ["status", "--porcelain", "-uall"] });
       if (deliveredHead.status !== 0 || finalStatus.status !== 0 || safe(finalStatus.stdout)) {
-        const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, false);
+        const restored = restoreCheckpoint(runGit, input.supervisorCwd, input.checkpointHead, false, input.ignoredWorkspacePaths ?? []);
         return {
           ...withCheckpoint(outcome(restored.ok ? "verification_failed" : "revert_failed",
             "Resolved delivery workspace state could not be verified."), input.checkpointHead),
@@ -280,7 +288,7 @@ function reservedCandidateMutation(
   return deleted?.path ?? null;
 }
 
-function restoreCheckpoint(runGit: GitRunner, cwd: string, checkpoint: string, abortCherryPick: boolean): { ok: boolean; summary: string } {
+function restoreCheckpoint(runGit: GitRunner, cwd: string, checkpoint: string, abortCherryPick: boolean, ignoredAbsPaths: string[] = []): { ok: boolean; summary: string } {
   if (abortCherryPick) runGit({ cwd, args: ["cherry-pick", "--abort"] });
   const reset = runGit({ cwd, args: ["reset", "--hard", checkpoint] });
   const clean = runGit({ cwd, args: ["clean", "-fd"] });
@@ -288,7 +296,7 @@ function restoreCheckpoint(runGit: GitRunner, cwd: string, checkpoint: string, a
   const status = runGit({ cwd, args: ["status", "--porcelain", "-uall"] });
   const ignored = verifyIgnoredWorkspaceArtifacts(runGit, cwd);
   const ok = reset.status === 0 && clean.status === 0 && head.status === 0 && status.status === 0 &&
-    safe(head.stdout) === checkpoint && safe(status.stdout).length === 0 && ignored.ok;
+    safe(head.stdout) === checkpoint && isWorkspaceStatusClean(status.stdout, cwd, ignoredAbsPaths) && ignored.ok;
   return {
     ok,
     summary: ok ? "Supervisor workspace restored to its clean checkpoint." :

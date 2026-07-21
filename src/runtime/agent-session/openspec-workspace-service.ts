@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import { join, relative, resolve } from "node:path";
 
 import type { ManagedChangePlanEntry } from "../../domain/index.js";
+import { isWorkspaceStatusClean } from "./workspace-cleanliness.js";
 import { detectCliCommand } from "../cli/cli-command-detection.js";
 import {
   computeArchiveManifestDigest,
@@ -49,6 +50,7 @@ export interface ArchiveChangeInput {
   cwd: string;
   changeId: string;
   date: string;
+  ignoredWorkspacePaths?: string[];
   sourcePath?: string;
   targetPath?: string;
   manifestDigest?: string;
@@ -200,7 +202,7 @@ export function createOpenSpecWorkspaceService(
         const targetRelative = gitRelativePath(input.cwd, identity.targetPath);
         let idempotent = !sourceExists && targetExists;
         if (sourceExists) {
-          const clean = requireCleanGitWorkspace(runGit, input.cwd, input.changeId);
+          const clean = requireCleanGitWorkspace(runGit, input.cwd, input.changeId, input.ignoredWorkspacePaths ?? []);
           if (!clean.ok) return clean;
           const head = runGit(["rev-parse", "HEAD"], input.cwd);
           if (head.status !== 0 || head.stdout.trim() !== identity.preArchiveHead) {
@@ -215,7 +217,7 @@ export function createOpenSpecWorkspaceService(
           return { ok: false, safeReason: `Could not inspect archive Git state: ${trimmedOutput(status)}` };
         }
         if (status.stdout.trim()) {
-          const scoped = changedGitPaths(runGit, input.cwd);
+          const scoped = changedGitPaths(runGit, input.cwd, input.ignoredWorkspacePaths ?? []);
           if (!scoped.ok) return scoped;
           if (scoped.paths.length === 0 || scoped.paths.some((path) =>
             !isWithinGitPath(path, sourceRelative) && !isWithinGitPath(path, targetRelative)
@@ -292,7 +294,7 @@ function prepareArchiveIdentity(
   if (head.status !== 0 || !head.stdout.trim()) {
     return { ok: false, safeReason: `Could not record pre-archive workspace HEAD: ${trimmedOutput(head)}` };
   }
-  const clean = requireCleanGitWorkspace(runGit, input.cwd, input.changeId);
+  const clean = requireCleanGitWorkspace(runGit, input.cwd, input.changeId, input.ignoredWorkspacePaths ?? []);
   if (!clean.ok) return clean;
   return {
     ok: true,
@@ -307,12 +309,13 @@ function requireCleanGitWorkspace(
   runGit: (args: string[], cwd: string) => CommandResult,
   cwd: string,
   changeId: string,
+  ignoredAbsPaths: string[] = [],
 ): PrepareArchiveResult | { ok: true } {
   const status = runGit(["status", "--porcelain", "-uall"], cwd);
   if (status.status !== 0) {
     return { ok: false, safeReason: `Could not inspect archive Git state: ${trimmedOutput(status)}` };
   }
-  if (status.stdout.trim()) {
+  if (!isWorkspaceStatusClean(status.stdout, cwd, ignoredAbsPaths)) {
     return { ok: false, safeReason: `Archive requires a clean workspace; unrelated or staged changes exist for ${changeId}.` };
   }
   return { ok: true };
@@ -321,6 +324,7 @@ function requireCleanGitWorkspace(
 function changedGitPaths(
   runGit: (args: string[], cwd: string) => CommandResult,
   cwd: string,
+  ignoredAbsPaths: string[] = [],
 ): { ok: true; paths: string[] } | { ok: false; safeReason: string } {
   const commands = [
     ["diff", "--name-only"],

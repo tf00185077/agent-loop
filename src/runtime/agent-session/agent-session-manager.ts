@@ -16,6 +16,7 @@ import type {
 } from "../../domain/index.js";
 import { allowedDecisionsForReason, isConversationReason } from "../../domain/index.js";
 import { validateGoalInputResponse } from "./goal-input-response.js";
+import { runtimeDatabaseIgnorePaths } from "./workspace-cleanliness.js";
 import type { GoalRepository } from "../../persistence/goal-repository.js";
 import type { GoalInputRequestRepository } from "../../persistence/goal-input-request-repository.js";
 import type { AppDatabase } from "../../persistence/database.js";
@@ -959,6 +960,7 @@ function reconcileInterruptedGoal(
     const reconciled = deliveryService.reconcilePendingDelivery({
       supervisorCwd: resolveGoalWorkspace(deps, state, goalId),
       checkpointHead: delivery.checkpointHead,
+      ignoredWorkspacePaths: runtimeDatabaseIgnorePaths(deps.database?.name),
     });
     if (reconciled.status === "reset_failed") {
       const safeReason = sanitizeArchiveReason(reconciled.safeSummary, resolveGoalWorkspace(deps, state, goalId));
@@ -2067,7 +2069,7 @@ async function persistDelegationControlEvent(
   const childAgent = await resolveChildAgent(deps, input, validation.request.role);
 
   try {
-    await createDelegationCoordinator({ ...deps, supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId), activeHandles: input.activeHandles }).acceptAndStartWorker({
+    await createDelegationCoordinator({ ...deps, supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId), ignoredWorkspacePaths: runtimeDatabaseIgnorePaths(deps.database?.name), activeHandles: input.activeHandles }).acceptAndStartWorker({
       parentSessionId: input.sessionId,
       providerId: childAgent.providerId,
       modelLabel: childAgent.modelLabel,
@@ -2393,6 +2395,7 @@ async function recordDurableChildOutcome(
       attestedFiles,
       safeSummary: review.safeSummary,
       activeChangeId: getChangeRegistry(input.state, input.goalId).findChangeByTask(outcome.workerTaskId)?.id ?? null,
+      ignoredWorkspacePaths: runtimeDatabaseIgnorePaths(deps.database?.name),
     });
     if (!prepared.ok) {
       tasks.recordDelivery({
@@ -2421,6 +2424,7 @@ async function recordDurableChildOutcome(
       checkpointHead: prepared.checkpointHead,
       candidateCommitSha: prepared.candidateCommitSha,
       safeSummary: review.safeSummary,
+      ignoredWorkspacePaths: runtimeDatabaseIgnorePaths(deps.database?.name),
     });
     tasks.recordDelivery({
       goalId: input.goalId,
@@ -2484,6 +2488,7 @@ async function startConditionalIntegrationRecovery(
     checkpointHead: integration.checkpointHead,
     originalCandidateCommitSha: integration.originalCandidateCommitSha,
     candidateFiles: integration.allowedFiles,
+    ignoredWorkspacePaths: runtimeDatabaseIgnorePaths(deps.database?.name),
   });
   if (!prepared.ok) {
     tasks.transitionIntegration(integration.id, "resolution_failed", {
@@ -2537,7 +2542,7 @@ async function startConditionalIntegrationRecovery(
 
   const integratorAgent = await resolveChildAgent(deps, input, "integrator");
   try {
-    await createDelegationCoordinator({ ...deps, supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId), activeHandles: input.activeHandles }).acceptAndStartWorker({
+    await createDelegationCoordinator({ ...deps, supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId), ignoredWorkspacePaths: runtimeDatabaseIgnorePaths(deps.database?.name), activeHandles: input.activeHandles }).acceptAndStartWorker({
       parentSessionId: judgeOutcome.parentSessionId,
       providerId: integratorAgent.providerId,
       modelLabel: integratorAgent.modelLabel,
@@ -2588,7 +2593,7 @@ async function startConditionalIntegrationRecovery(
         });
 
         const judgeAgent = await resolveChildAgent(deps, input, "review_merge");
-        await createDelegationCoordinator({ ...deps, supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId), activeHandles: input.activeHandles }).acceptAndStartWorker({
+        await createDelegationCoordinator({ ...deps, supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId), ignoredWorkspacePaths: runtimeDatabaseIgnorePaths(deps.database?.name), activeHandles: input.activeHandles }).acceptAndStartWorker({
           parentSessionId: judgeOutcome.parentSessionId,
           providerId: judgeAgent.providerId,
           modelLabel: judgeAgent.modelLabel,
@@ -3312,6 +3317,7 @@ function completeDurableArchive(
         cwd: resolveGoalWorkspace(deps, input.state, input.goalId),
         changeId,
         date,
+        ignoredWorkspacePaths: runtimeDatabaseIgnorePaths(deps.database?.name),
       });
     } catch (error) {
       recordArchiveOutcome(deps, input, {
@@ -3540,6 +3546,7 @@ function reconcileDurableArchivesBeforeResume(
       cwd: resolveGoalWorkspace(deps, state, goalId),
       changeId: active.id,
       date: new Date().toISOString().slice(0, 10),
+      ignoredWorkspacePaths: runtimeDatabaseIgnorePaths(deps.database?.name),
     });
   } catch (error) {
     prepared = {
