@@ -39,6 +39,6 @@
 
 ## 7. Verification and archive
 
-- [ ] 7.1 `npm test` and `npm run typecheck` green
-- [ ] 7.2 Live smoke: a `required`-policy goal whose supervisor's first delegation is rejected → it emits `propose_plan` → caller replies twice (multi-turn) → supervisor `ready_to_proceed` → work proceeds; then a work block in a conversational turn is shown rejected read-only; record evidence in `verification.md`
-- [ ] 7.3 Update README escalation section; commit per task group throughout
+- [x] 7.1 `npm test` and `npm run typecheck` green
+- [x] 7.2 Live smoke: a `required`-policy goal whose supervisor's first delegation is rejected → it emits `propose_plan` → caller replies twice (multi-turn) → supervisor `ready_to_proceed` → work proceeds; then a work block in a conversational turn is shown rejected read-only; record evidence in `verification.md`
+- [x] 7.3 Update README escalation section; commit per task group throughout

@@ -343,9 +343,22 @@ when a decision is genuinely the caller's — an ambiguous requirement, a missin
 preference — instead of guessing and being second-guessed a loop later. Backend
 gates enforce it: no pending request already open, no in-flight child delegation,
 a bounded question, and a per-goal question budget (default 3) whose exhaustion
-rejects with "decide autonomously and proceed". The answer travels as
-`provide_guidance` and resumes the goal with the question and answer in the
-continuation prompt; a question grants no budget.
+rejects with "decide autonomously and proceed". A question grants no budget.
+
+**Multi-turn conversations and confirmation.** A caller reply to a question or a
+plan proposal opens a **read-only conversation**: the backend runs the supervisor
+in a turn that may only ask again, revise its proposal (`managed_goal.propose_plan`),
+or signal `managed_goal.ready_to_proceed` — work-producing blocks are rejected until
+it signals ready. The exchange is one durable message thread on the `waiting_user`
+state, so it survives restarts; a conversation-turn budget bounds it. The loop
+resumes only when the supervisor is ready (mutual confirmation), though the caller
+can `proceed` (force-resume) or `abandon` at any point. Separately, a **caller-owned
+`confirmationPolicy`** (per goal, default `off`, opt-in `required`, unreadable and
+unchangeable by the supervisor) makes the checkpoint mandatory: under `required` a
+worker delegation is rejected unless a standing confirmation exists, forcing the
+supervisor to propose and reach `ready_to_proceed` first. A new `managed_change.plan`
+clears the confirmation, so each epoch's plan is re-confirmed. The dashboard renders
+the thread as a chat with a persistent reply box.
 
 ### Post-MVP Priority Todo
 
