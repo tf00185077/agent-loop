@@ -59,12 +59,16 @@ function questioningAdapter(
         });
         return createHandle(input.sessionId, events);
       }
-      return createHandle(input.sessionId, [
-        {
-          type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
-          message: "Later turn ended.", occurredAt: at,
-        },
-      ]);
+      // A read-only conversational turn: signal ready so the goal resumes.
+      const events: AgentRuntimeEvent[] = [];
+      if (/READ-ONLY clarification/.test(input.prompt)) {
+        events.push(questionBlockEvent(input, { type: "managed_goal.ready_to_proceed", summary: "Understood." }, `${at.slice(0, -5)}5.000Z`));
+      }
+      events.push({
+        type: "session.completed", sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+        message: "Later turn ended.", occurredAt: at,
+      });
+      return createHandle(input.sessionId, events);
     },
   };
 }
@@ -99,7 +103,7 @@ test("a valid question parks the goal as a supervisor_question request", async (
   fixture.db.close();
 });
 
-test("answering a question resumes with the question and answer in the observation", async () => {
+test("answering a question runs a read-only conversational turn carrying the thread", async () => {
   const fixture = createManagerFixture("question answer resume");
   const prompts: string[] = [];
   const adapter = questioningAdapter(prompts, [QUESTION]);
@@ -116,8 +120,12 @@ test("answering a question resumes with the question and answer in the observati
     runtime: { providerId: "codex-local", modelLabel: "gpt-5-codex", adapter },
   });
   assert.equal(result.ok, true);
+  // The supervisor's conversational turn signalled ready, resuming the goal.
   assert.equal(result.ok && result.outcome, "resumed");
-  assert.match(prompts[1]!, /Caller answered the supervisor's question\. Q: Should the export default to CSV or JSON\? A: Use CSV\./);
+  // The conversational-turn prompt carried the read-only instruction and the thread.
+  assert.match(prompts[1]!, /READ-ONLY clarification/);
+  assert.match(prompts[1]!, /Should the export default to CSV or JSON\?/);
+  assert.match(prompts[1]!, /Caller: Use CSV\./);
   // A question grants no budget.
   assert.equal(fixture.goalInputRequestRepo.sumAcceptedExtensions(fixture.goal.id, "supervisor_continuations"), 0);
   fixture.db.close();

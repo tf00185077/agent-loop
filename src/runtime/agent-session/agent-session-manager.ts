@@ -31,7 +31,7 @@ import type {
 } from "../../persistence/runtime-repositories.js";
 import { GoalChangeRegistry, specTaskAcceptance, specTaskId, specValidationVerdict } from "./change-registry.js";
 import { createDelegationCoordinator, type SupervisorContinuationInput } from "./delegation-coordinator.js";
-import { validateManagedControlEvent } from "./delegation-control-event.js";
+import { validateManagedControlEvent, type ManagedControlEventValidationResult } from "./delegation-control-event.js";
 import { evaluateManagedCompletion } from "./managed-completion-evaluator.js";
 import {
   evaluateDurableManagedTaskLineage,
@@ -101,6 +101,12 @@ export interface AgentSessionManagerDeps {
    */
   maxSupervisorQuestions?: number;
   /**
+   * Maximum supervisor conversational turns per goal (thread messages from the
+   * supervisor). Exhaustion resolves the open conversation with autonomy
+   * guidance so a clarification cannot loop forever.
+   */
+  maxSupervisorConversationTurns?: number;
+  /**
    * Resolves user-configured role→agent assignments for child dispatch.
    * Returning null keeps the goal's default adapter.
    */
@@ -149,7 +155,11 @@ export interface RespondToGoalInputRequestInput {
 }
 
 export type RespondToGoalInputRequestResult =
-  | { ok: true; request: GoalInputRequest; outcome: "resumed" | "resume_deferred" | "abandoned" }
+  | {
+      ok: true;
+      request: GoalInputRequest;
+      outcome: "resumed" | "resume_deferred" | "abandoned" | "conversation_continued";
+    }
   | { ok: false; code: "not_found" | "conflict" | "invalid"; safeReason: string; standing?: GoalInputRequest };
 
 export interface AgentSessionManager {
@@ -187,6 +197,9 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     maxSupervisorContinuations: deps.maxSupervisorContinuations ?? 10,
     maxPlanningEpochs: deps.maxPlanningEpochs ?? 5,
     maxSupervisorQuestions: deps.maxSupervisorQuestions ?? 3,
+    maxSupervisorConversationTurns: deps.maxSupervisorConversationTurns ?? 6,
+    closedConversationSessions: new Set(),
+    standingConfirmations: new Set(),
     openSpec: deps.openSpecWorkspaceService ?? createOpenSpecWorkspaceService(),
     supervisorCwd: deps.supervisorCwd ?? process.cwd(),
   };
@@ -398,6 +411,86 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
         return { ok: true, request: resolved, outcome: "abandoned" };
       }
 
+      // Conversation reasons: a guidance reply is a thread message that runs a
+      // read-only supervisor turn rather than resuming work; `proceed`
+      // force-closes the conversation and resumes.
+      if (isConversationReason(request.reasonCode) && response.decision !== "extend_budget") {
+        if (response.decision === "provide_guidance") {
+          const afterCaller = repo.appendMessage(
+            request.id,
+            { role: "caller", text: response.guidance, at: new Date().toISOString() },
+            "awaiting_supervisor",
+          );
+          deps.eventRepo.create({
+            goalId: input.goalId,
+            type: "goal.input_response",
+            message: "Caller replied in the conversation.",
+            data: {
+              runtimeEventType: "conversation.caller_replied",
+              inputRequestId: request.id,
+              reasonCode: request.reasonCode,
+            },
+          });
+          if (!input.runtime) {
+            // Without an adapter the reply is durable but the supervisor cannot
+            // respond now; leave the goal waiting for a later boot's resume.
+            return { ok: true, request: afterCaller, outcome: "conversation_continued" };
+          }
+          await runConversationalTurn(input.goalId, input.runtime, afterCaller);
+          return {
+            ok: true,
+            request: repo.getById(request.id) ?? afterCaller,
+            outcome: repo.getById(request.id)?.status === "pending" ? "conversation_continued" : "resumed",
+          };
+        }
+        // proceed: caller force-closes the conversation and resumes the loop.
+        const afterCaller = repo.appendMessage(
+          request.id,
+          { role: "caller", text: response.note ?? "Proceed.", at: new Date().toISOString() },
+          "resolved",
+        );
+        const forced = repo.resolve(request.id, "accepted", response);
+        if (request.reasonCode === "plan_confirmation") {
+          recordStandingConfirmation(deps, state, input.goalId, request.id, "caller_forced");
+        }
+        deps.eventRepo.create({
+          goalId: input.goalId,
+          type: "goal.input_response",
+          message: "Caller directed the goal to proceed; conversation resolved.",
+          data: {
+            runtimeEventType: "conversation.resolved",
+            inputRequestId: request.id,
+            reasonCode: request.reasonCode,
+            resolution: "caller_forced",
+          },
+        });
+        if (!input.runtime) {
+          deps.goalRepo.updateStatus(input.goalId, "interrupted");
+          deps.eventRepo.create({
+            goalId: input.goalId,
+            type: "agent.progress",
+            message: "Caller proceed accepted; resume deferred until a provider adapter is available.",
+            data: { runtimeEventType: "escalation.resume_deferred", inputRequestId: request.id },
+          });
+          return { ok: true, request: forced, outcome: "resume_deferred" };
+        }
+        await resumeGoalFromDurableProjection(
+          {
+            goalId: input.goalId,
+            providerId: input.runtime.providerId,
+            modelLabel: input.runtime.modelLabel,
+            adapter: input.runtime.adapter,
+          },
+          {
+            observation: renderResolvedConversationObservation(afterCaller),
+            resumedEventMessage: "Goal resumed after the caller directed it to proceed.",
+            resumedRuntimeEventType: "conversation.resumed",
+            extraEventData: { inputRequestId: request.id },
+          },
+        );
+        return { ok: true, request: forced, outcome: "resumed" };
+      }
+
       const resolved = repo.resolve(request.id, "accepted", response);
       // Supervisor questions carry no budget; skip the effective-budget math.
       const budgetName = request.payload.budgetName;
@@ -590,12 +683,119 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     }
   }
 
+  /**
+   * Start a read-only conversational turn: the goal stays `waiting_user` with a
+   * pending request in phase `awaiting_supervisor`, and a fresh supervisor
+   * session runs prompted only to answer the caller. Its control blocks are
+   * gated to the conversation whitelist in `persistDelegationControlEvent`.
+   */
+  async function runConversationalTurn(
+    goalId: string,
+    runtime: { providerId: string; modelLabel: string | null; adapter: AgentRuntimeAdapter },
+    request: GoalInputRequest,
+  ): Promise<void> {
+    const goal = deps.goalRepo.getById(goalId);
+    if (!goal) return;
+    if (deps.managedTaskRepo) {
+      rehydrateTaskRegistry(getTaskRegistry(state, goalId), deps.managedTaskRepo, goalId);
+      rehydrateChangeRegistry(
+        getChangeRegistry(state, goalId),
+        deps.managedTaskRepo,
+        goalId,
+        deps.eventRepo.listForGoal(goalId),
+      );
+    }
+    const prompt = buildSupervisorPrompt({
+      goal,
+      phase: { kind: "continuation", observation: renderConversationObservation(request) },
+      taskHistory: getTaskRegistry(state, goalId).listTasks(),
+      managedTaskContext: deps.managedTaskRepo ? projectManagedTaskContext(deps.managedTaskRepo, goalId) : undefined,
+      changeHistory: getChangeRegistry(state, goalId).listChanges(),
+      epochHistory: getChangeRegistry(state, goalId).listEpochs(),
+    });
+    deps.eventRepo.create({
+      goalId,
+      type: "agent.progress",
+      message: "Caller replied; running a read-only conversational turn.",
+      data: {
+        runtimeEventType: "conversation.turn_started",
+        inputRequestId: request.id,
+        provider: runtime.providerId,
+        model: runtime.modelLabel,
+      },
+    });
+    try {
+      await manager.startManagedSession({
+        goalId,
+        providerId: runtime.providerId,
+        modelLabel: runtime.modelLabel,
+        adapter: runtime.adapter,
+        prompt,
+      });
+    } catch (error) {
+      deps.eventRepo.create({
+        goalId,
+        type: "agent.progress",
+        message: "Conversational turn failed to start; goal stays waiting for caller input.",
+        data: {
+          runtimeEventType: "conversation.turn_failed",
+          inputRequestId: request.id,
+          safeReason: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
   return manager;
 }
 
 /** Human-readable name of a goal-level budget for observations and events. */
 function budgetLabel(name: GoalInputBudgetName): string {
   return name === "planning_epochs" ? "planning epochs" : "supervisor continuations";
+}
+
+/** Render a conversation thread as prompt text. */
+function renderThread(request: GoalInputRequest): string {
+  return (request.payload.thread ?? [])
+    .map((message) => `${message.role === "supervisor" ? "You" : "Caller"}: ${message.text}`)
+    .join("\n");
+}
+
+/** Read-only conversational-turn prompt observation. */
+function renderConversationObservation(request: GoalInputRequest): string {
+  return (
+    "You are in a READ-ONLY clarification with the caller about this goal. " +
+    "You may ONLY ask another question (managed_goal.request_input), revise your proposal " +
+    "(managed_goal.propose_plan), or signal you are ready (managed_goal.ready_to_proceed). " +
+    "You may NOT delegate, plan, run work, or complete until you signal ready_to_proceed. " +
+    `Conversation so far:\n${renderThread(request)}\n` +
+    "Respond to the latest caller message."
+  );
+}
+
+/** Working-resume observation carrying the full resolved conversation. */
+function renderResolvedConversationObservation(request: GoalInputRequest): string {
+  return `The caller conversation resolved. Full exchange:\n${renderThread(request)}\nProceed with the goal.`;
+}
+
+/**
+ * Record a standing caller confirmation for the goal (durable event + working
+ * state). Cleared later by any plan-restatement block.
+ */
+function recordStandingConfirmation(
+  deps: AgentSessionManagerDeps,
+  state: SupervisorState,
+  goalId: string,
+  inputRequestId: string,
+  resolution: "supervisor_ready" | "caller_forced" | "budget_forced",
+): void {
+  state.standingConfirmations.add(goalId);
+  deps.eventRepo.create({
+    goalId,
+    type: "agent.progress",
+    message: "Standing caller confirmation recorded for the current plan.",
+    data: { runtimeEventType: "goal.plan_confirmed", inputRequestId, resolution },
+  });
 }
 
 /**
@@ -814,6 +1014,12 @@ interface SupervisorState {
   maxSupervisorContinuations: number;
   maxPlanningEpochs: number;
   maxSupervisorQuestions: number;
+  maxSupervisorConversationTurns: number;
+  /** Sessions closed out by a conversational-turn resolution; their late
+   * session.completed must not start a continuation. */
+  closedConversationSessions: Set<string>;
+  /** Goals holding a standing caller confirmation (cleared on plan restatement). */
+  standingConfirmations: Set<string>;
   openSpec: OpenSpecWorkspaceService;
   supervisorCwd: string;
 }
@@ -997,6 +1203,13 @@ async function persistRuntimeEvent(deps: AgentSessionManagerDeps, input: Persist
   }
 
   if (input.event.type === "session.completed") {
+    // A conversational-turn session that already resolved into a working resume
+    // is superseded; its late completion must not start a continuation.
+    if (input.state.closedConversationSessions.has(input.sessionId)) {
+      input.state.closedConversationSessions.delete(input.sessionId);
+      deps.runRepo.updateStatus(input.runId, "completed", { finishedAt: new Date().toISOString() });
+      return;
+    }
     const finishedAt = new Date().toISOString();
     const session = deps.agentSessionRepo.getSession(input.sessionId);
     // Delegation-capable supervisors complete the goal only through an
@@ -1105,10 +1318,15 @@ async function persistDelegationControlEvent(
     return;
   }
 
-  // A goal parked on a pending caller input request accepts no further
-  // control blocks: the asking supervisor's turn is over, and any trailing
-  // blocks from the ending session must not mutate goal state.
+  // A goal parked on a pending caller input request accepts no ordinary
+  // control blocks. During a read-only conversational turn (phase
+  // awaiting_supervisor) the conversation whitelist applies instead.
   if (deps.goalRepo.getById(input.goalId)?.status === "waiting_user") {
+    const pending = deps.goalInputRequestRepo?.getPending(input.goalId);
+    if (pending && pending.payload.phase === "awaiting_supervisor") {
+      await handleConversationalTurnBlock(deps, input, data, pending, validation);
+      return;
+    }
     recordControlRejection(
       deps, input, data,
       "The goal is waiting for caller input; no control blocks are accepted until the caller responds. End your turn.",
@@ -3574,6 +3792,168 @@ function handleSupervisorRequestInput(
     evidence: context,
     remainingGaps: [],
   });
+}
+
+/**
+ * Route a control block emitted during a read-only conversational turn. Only
+ * the conversation whitelist mutates state: the supervisor may ask again,
+ * revise its proposal, or signal ready; any work-producing block is rejected
+ * read-only. This runs inside the conversational session's event pump.
+ */
+async function handleConversationalTurnBlock(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  data: Record<string, unknown>,
+  request: GoalInputRequest,
+  validation: ManagedControlEventValidationResult,
+): Promise<void> {
+  if (!validation.ok) return;
+  const repo = deps.goalInputRequestRepo!;
+
+  if (validation.kind === "request_input" || validation.kind === "propose_plan") {
+    const supervisorTurns = (request.payload.thread ?? []).filter((m) => m.role === "supervisor").length;
+    if (supervisorTurns >= input.state.maxSupervisorConversationTurns) {
+      await resolveConversationByBudget(deps, input, request);
+      return;
+    }
+    const text = validation.kind === "request_input" ? validation.question : validation.summary;
+    repo.appendMessage(request.id, { role: "supervisor", text, at: new Date().toISOString() }, "awaiting_caller");
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "goal.input_requested",
+      message: text,
+      data: {
+        ...data,
+        delegationControlEvent: undefined,
+        runtimeEventType: "conversation.supervisor_replied",
+        inputRequestId: request.id,
+        reasonCode: request.reasonCode,
+      },
+    });
+    return;
+  }
+
+  if (validation.kind === "ready_to_proceed") {
+    repo.appendMessage(
+      request.id,
+      { role: "supervisor", text: validation.summary ?? "Ready to proceed.", at: new Date().toISOString() },
+      "resolved",
+    );
+    repo.resolve(request.id, "accepted", { decision: "proceed", note: validation.summary });
+    if (request.reasonCode === "plan_confirmation") {
+      recordStandingConfirmation(deps, input.state, input.goalId, request.id, "supervisor_ready");
+    }
+    deps.eventRepo.create({
+      goalId: input.goalId,
+      runId: input.runId,
+      type: "goal.input_response",
+      message: "Supervisor signalled ready to proceed; conversation resolved.",
+      data: {
+        runtimeEventType: "conversation.resolved",
+        inputRequestId: request.id,
+        reasonCode: request.reasonCode,
+        resolution: "supervisor_ready",
+      },
+    });
+    await resumeWorkingAfterConversation(deps, input, repo.getById(request.id) ?? request);
+    return;
+  }
+
+  // A work-producing block during a read-only turn.
+  recordControlRejection(
+    deps, input, data,
+    "You are in a read-only clarification turn; you may only ask again, revise your proposal, or emit " +
+      "managed_goal.ready_to_proceed. Finish clarifying before doing any work.",
+  );
+}
+
+/** Exhausted conversation-turn budget: resolve and let the loop proceed. */
+async function resolveConversationByBudget(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  request: GoalInputRequest,
+): Promise<void> {
+  const repo = deps.goalInputRequestRepo!;
+  repo.appendMessage(
+    request.id,
+    { role: "supervisor", text: "Conversation-turn budget exhausted; proceeding on best understanding.", at: new Date().toISOString() },
+    "resolved",
+  );
+  repo.resolve(request.id, "accepted", { decision: "proceed", note: null });
+  if (request.reasonCode === "plan_confirmation") {
+    recordStandingConfirmation(deps, input.state, input.goalId, request.id, "budget_forced");
+  }
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: input.runId,
+    type: "goal.input_response",
+    message: "Conversation-turn budget exhausted; resolving and proceeding.",
+    data: {
+      runtimeEventType: "conversation.resolved",
+      inputRequestId: request.id,
+      reasonCode: request.reasonCode,
+      resolution: "budget_forced",
+    },
+  });
+  await resumeWorkingAfterConversation(deps, input, repo.getById(request.id) ?? request);
+}
+
+/**
+ * Start a fresh working session after a conversation resolves, superseding the
+ * conversational session so its late completion starts no continuation.
+ */
+async function resumeWorkingAfterConversation(
+  deps: AgentSessionManagerDeps,
+  input: PersistRuntimeEventInput,
+  request: GoalInputRequest,
+): Promise<void> {
+  input.state.closedConversationSessions.add(input.sessionId);
+  deps.agentSessionRepo.updateLifecycleState(input.sessionId, "completed");
+  deps.goalRepo.updateStatus(input.goalId, "running");
+  const goal = deps.goalRepo.getById(input.goalId);
+  if (!goal) return;
+  const prompt = buildSupervisorPrompt({
+    goal,
+    phase: { kind: "continuation", observation: renderResolvedConversationObservation(request) },
+    taskHistory: getTaskRegistry(input.state, input.goalId).listTasks(),
+    managedTaskContext: deps.managedTaskRepo ? projectManagedTaskContext(deps.managedTaskRepo, input.goalId) : undefined,
+    changeHistory: getChangeRegistry(input.state, input.goalId).listChanges(),
+    epochHistory: getChangeRegistry(input.state, input.goalId).listEpochs(),
+  });
+  const run = deps.runRepo.create({ goalId: input.goalId, provider: input.providerId, model: input.modelLabel ?? "unknown" });
+  const session = deps.agentSessionRepo.createSession({
+    goalId: input.goalId,
+    runId: run.id,
+    providerId: input.providerId,
+    modelLabel: input.modelLabel,
+    lifecycleState: "starting",
+    capabilities: await input.adapter.detectCapabilities(),
+  });
+  const handle = await input.adapter.startSession({
+    sessionId: session.id,
+    goalId: input.goalId,
+    runId: run.id,
+    providerId: input.providerId,
+    modelLabel: input.modelLabel,
+    prompt,
+  });
+  input.activeHandles.set(session.id, handle);
+  deps.agentSessionRepo.updateLifecycleState(session.id, "running");
+  deps.eventRepo.create({
+    goalId: input.goalId,
+    runId: run.id,
+    type: "agent.progress",
+    message: "Goal resumed after the caller conversation resolved.",
+    data: {
+      sessionId: session.id,
+      provider: input.providerId,
+      model: input.modelLabel,
+      runtimeEventType: "conversation.resumed",
+      inputRequestId: request.id,
+    },
+  });
+  void runSessionEvents(deps, { ...input, runId: run.id, sessionId: session.id, handle });
 }
 
 function handleSupervisorProposePlan(

@@ -14,11 +14,11 @@
 
 ## 3. Read-only conversational turns
 
-- [ ] 3.1 Failing tests: a caller `provide_guidance` reply to a conversation appends to the thread, sets `awaiting_supervisor`, and runs a conversational turn; a work-producing block (delegation/task_list/change_plan/complete) in that turn is rejected read-only; another question/proposal continues the thread (`conversation_continued`, still `waiting_user`)
-- [ ] 3.2 Implement the conversational-turn path: whitelist enforcement in `persistDelegationControlEvent` keyed on phase `awaiting_supervisor`; reuse `resumeGoalFromDurableProjection` with a conversational prompt; new `respondToGoalInputRequest` outcome `conversation_continued`
-- [ ] 3.3 Failing test + implementation: `ready_to_proceed` resolves the conversation and resumes a fresh working session whose prompt carries the whole thread
-- [ ] 3.4 Failing test + implementation: caller `proceed` force-closes and resumes; `abandon` blocks terminally
-- [ ] 3.5 Failing test + implementation: conversation-turn budget (`maxSupervisorConversationTurns` deps option) exhaustion resolves the conversation with autonomy guidance and, under `required`, records a forced standing confirmation
+- [x] 3.1 Failing tests: a caller `provide_guidance` reply to a conversation appends to the thread, sets `awaiting_supervisor`, and runs a conversational turn; a work-producing block (delegation/task_list/change_plan/complete) in that turn is rejected read-only; another question/proposal continues the thread (`conversation_continued`, still `waiting_user`)
+- [x] 3.2 Implement the conversational-turn path: whitelist enforcement in `persistDelegationControlEvent` keyed on phase `awaiting_supervisor`; reuse `resumeGoalFromDurableProjection` with a conversational prompt; new `respondToGoalInputRequest` outcome `conversation_continued`
+- [x] 3.3 Failing test + implementation: `ready_to_proceed` resolves the conversation and resumes a fresh working session whose prompt carries the whole thread
+- [x] 3.4 Failing test + implementation: caller `proceed` force-closes and resumes; `abandon` blocks terminally
+- [x] 3.5 Failing test + implementation: conversation-turn budget (`maxSupervisorConversationTurns` deps option) exhaustion resolves the conversation with autonomy guidance and, under `required`, records a forced standing confirmation
 
 ## 4. Confirm-before-work checkpoint
 
