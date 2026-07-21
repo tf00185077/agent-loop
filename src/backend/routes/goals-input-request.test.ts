@@ -145,3 +145,83 @@ test("POST respond applies a valid decision and maps invalid and resolved respon
     fixture.db.close();
   }
 });
+
+/** Supervisor that proposes a plan on bootstrap and signals ready on the turn. */
+function proposingAdapter(): AgentRuntimeAdapter {
+  let turn = 0;
+  return {
+    providerId: "codex-local",
+    async detectCapabilities() {
+      return { eventStreaming: true, approval: false, cancellation: true, resume: false, childSessions: true };
+    },
+    async startSession(input) {
+      turn += 1;
+      const block = turn === 1
+        ? { type: "managed_goal.propose_plan", summary: "Plan: build then ship.", items: ["Build"] }
+        : /READ-ONLY clarification/.test(input.prompt)
+          ? { type: "managed_goal.ready_to_proceed", summary: "Ready." }
+          : null;
+      const events = [];
+      if (block) {
+        events.push({
+          type: "progress" as const, sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+          message: "block", occurredAt: `2026-07-20T00:0${turn}:00.000Z`,
+          metadata: { delegationControlEvent: block },
+        });
+      }
+      events.push({
+        type: "session.completed" as const, sessionId: input.sessionId, goalId: input.goalId, runId: input.runId,
+        message: "ended", occurredAt: `2026-07-20T00:0${turn}:09.000Z`,
+      });
+      return createHandle(input.sessionId, events);
+    },
+  };
+}
+
+test("a conversation request exposes its thread and accepts a guidance reply", async () => {
+  const fixture = createManagerFixture("conversation routes");
+  const adapter = proposingAdapter();
+  const manager = createAgentSessionManager({ ...fixture });
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(fixture.goal.id)?.status === "waiting_user");
+
+  const app = express();
+  app.use(express.json());
+  app.use("/api/goals", createGoalRouter({
+    goalRepo: fixture.goalRepo, eventRepo: fixture.eventRepo, eventBus: createEventBus(),
+    agentSessionRepo: fixture.agentSessionRepo, goalInputRequestRepo: fixture.goalInputRequestRepo,
+    runtime: {
+      run: async () => undefined,
+      respondToInput: (goalId, requestId, body) => manager.respondToGoalInputRequest({
+        goalId, requestId, body, runtime: { providerId: "codex-local", modelLabel: "gpt-5-codex", adapter },
+      }),
+    },
+  }));
+  const server = createServer(app);
+  const url = await new Promise<string>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
+  });
+  try {
+    const pending = fixture.goalInputRequestRepo.getPending(fixture.goal.id)!;
+    const get = await fetch(`${url}/api/goals/${fixture.goal.id}/input-request`);
+    const body = (await get.json()) as Record<string, any>;
+    assert.equal(body.reasonCode, "plan_confirmation");
+    assert.equal(body.payload.phase, "awaiting_caller");
+    assert.equal(body.payload.thread.length, 1);
+    assert.deepEqual(body.payload.allowedDecisions, ["provide_guidance", "proceed", "abandon"]);
+
+    // A guidance reply runs the conversational turn, which signals ready → resumed.
+    const respond = await fetch(`${url}/api/goals/${fixture.goal.id}/input-request/${pending.id}/respond`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: "provide_guidance", guidance: "Looks good." }),
+    });
+    assert.equal(respond.status, 200);
+    const outcome = ((await respond.json()) as { outcome: string }).outcome;
+    assert.ok(["resumed", "conversation_continued"].includes(outcome));
+  } finally {
+    await new Promise<void>((res, rej) => server.close((err) => (err ? rej(err) : res())));
+    fixture.db.close();
+  }
+});

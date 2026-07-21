@@ -28,8 +28,8 @@
 
 ## 5. Prompt contract and API
 
-- [ ] 5.1 Document in `supervisor-prompt.ts`: propose→confirm before work under a required policy, how to converse and when to signal `ready_to_proceed`, the read-only nature of a conversation, and the turn budget; prompt test asserting the contract
-- [ ] 5.2 API: `GET /api/goals/:id/input-request` returns the thread; respond endpoint accepts `proceed` and returns `conversation_continued`/`resumed`/`abandoned`; route tests for each outcome and the read-only rejection surfacing
+- [x] 5.1 Document in `supervisor-prompt.ts`: propose→confirm before work under a required policy, how to converse and when to signal `ready_to_proceed`, the read-only nature of a conversation, and the turn budget; prompt test asserting the contract
+- [x] 5.2 API: `GET /api/goals/:id/input-request` returns the thread; respond endpoint accepts `proceed` and returns `conversation_continued`/`resumed`/`abandoned`; route tests for each outcome and the read-only rejection surfacing
 
 ## 6. Dashboard
 

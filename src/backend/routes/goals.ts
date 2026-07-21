@@ -60,7 +60,7 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
   // POST /api/goals
   router.post("/", (req, res, next) => {
     try {
-      const { title, description, priority, agentType } = req.body as Record<
+      const { title, description, priority, agentType, confirmationPolicy } = req.body as Record<
         string,
         unknown
       >;
@@ -72,12 +72,17 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
         res.status(400).json({ error: "description is required" });
         return;
       }
+      if (confirmationPolicy !== undefined && confirmationPolicy !== "off" && confirmationPolicy !== "required") {
+        res.status(400).json({ error: "confirmationPolicy must be 'off' or 'required'" });
+        return;
+      }
 
       const goal = goalRepo.create({
         title: title.trim(),
         description: description.trim(),
         priority: (priority as never) ?? undefined,
         agentType: (agentType as never) ?? undefined,
+        confirmationPolicy: (confirmationPolicy as never) ?? undefined,
       });
 
       eventRepo.create({
@@ -407,6 +412,15 @@ function sanitizeGoalInputRequest(request: GoalInputRequest): GoalInputRequest {
         refs: gap.refs,
         summary: sanitizeControlPlaneText(gap.summary) ?? "",
       })),
+      ...(request.payload.thread
+        ? {
+            thread: request.payload.thread.map((message) => ({
+              role: message.role,
+              text: sanitizeControlPlaneText(message.text) ?? "",
+              at: message.at,
+            })),
+          }
+        : {}),
     },
   };
 }

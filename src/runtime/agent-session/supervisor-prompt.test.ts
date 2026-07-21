@@ -104,6 +104,16 @@ test("bootstrap prompt documents the caller-question contract and its limits", (
   assert.match(prompt, /proceed autonomously|decide and moving on|prefer deciding/i);
 });
 
+test("bootstrap prompt documents the conversation and confirmation contract", () => {
+  const prompt = buildSupervisorPrompt({ goal, phase: { kind: "bootstrap" } });
+
+  assert.match(prompt, /managed_goal\.propose_plan/);
+  assert.match(prompt, /managed_goal\.ready_to_proceed/);
+  assert.match(prompt, /READ-ONLY conversation/);
+  assert.match(prompt, /require caller confirmation before any work/i);
+  assert.match(prompt, /clears the\s+confirmation/i);
+});
+
 test("continuation prompt carries the child observation and the full contract", () => {
   const prompt = buildSupervisorPrompt({
     goal,
