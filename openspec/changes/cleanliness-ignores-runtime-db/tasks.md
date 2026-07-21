@@ -2,9 +2,9 @@
 
 ## 1. Shared cleanliness helper
 
-- [ ] 1.1 Add `src/runtime/agent-session/workspace-cleanliness.ts` with a pure `isWorkspaceStatusClean(porcelainStdout, cwd, ignoredAbsPaths)` and a `filteredStatusSummary(...)` for safe reasons; parse porcelain lines (2 status chars + path, rename `->` target), resolve to absolute against cwd, drop ignored, judge empty (TDD: failing tests first)
-- [ ] 1.2 Tests: clean when only the DB file/`-wal`/`-shm` changed; dirty when a real path changed (alone or alongside the DB); empty ignored set == raw emptiness; subdirectory cwd resolves paths correctly; rename lines handled
-- [ ] 1.3 Add `runtimeDatabaseIgnorePaths(dbPath | undefined)` helper: returns [] for undefined/`:memory:`, else the resolved absolute DB path plus `-wal`/`-shm`/`-journal`
+- [x] 1.1 Add `src/runtime/agent-session/workspace-cleanliness.ts` with a pure `isWorkspaceStatusClean(porcelainStdout, cwd, ignoredAbsPaths)` and a `filteredStatusSummary(...)` for safe reasons; parse porcelain lines (2 status chars + path, rename `->` target), resolve to absolute against cwd, drop ignored, judge empty (TDD: failing tests first)
+- [x] 1.2 Tests: clean when only the DB file/`-wal`/`-shm` changed; dirty when a real path changed (alone or alongside the DB); empty ignored set == raw emptiness; subdirectory cwd resolves paths correctly; rename lines handled
+- [x] 1.3 Add `runtimeDatabaseIgnorePaths(dbPath | undefined)` helper: returns [] for undefined/`:memory:`, else the resolved absolute DB path plus `-wal`/`-shm`/`-journal`
 
 ## 2. Thread ignored paths from the manager
 
