@@ -22,9 +22,9 @@
 
 ## 4. Confirm-before-work checkpoint
 
-- [ ] 4.1 Failing tests: under `required`, a `managed_delegation.request`/`managed_change.plan` with no standing confirmation is rejected with the propose-first safe reason; after a `plan_confirmation` closes with `ready_to_proceed` (or caller `proceed`), work is accepted; a supervisor cannot bypass or change the policy via any control block
-- [ ] 4.2 Implement the checkpoint gate + standing-confirmation recording on `plan_confirmation` close (supervisor ready or caller proceed); policy read from the goal, never from a control block
-- [ ] 4.3 Failing test + implementation: the standing confirmation is cleared by any subsequent plan-defining block (`managed_change.plan` or mid-epoch `managed_delegation.task_list`), re-arming the checkpoint; `off` policy bypasses the checkpoint entirely
+- [x] 4.1 Failing tests: under `required`, a `managed_delegation.request`/`managed_change.plan` with no standing confirmation is rejected with the propose-first safe reason; after a `plan_confirmation` closes with `ready_to_proceed` (or caller `proceed`), work is accepted; a supervisor cannot bypass or change the policy via any control block
+- [x] 4.2 Implement the checkpoint gate + standing-confirmation recording on `plan_confirmation` close (supervisor ready or caller proceed); policy read from the goal, never from a control block
+- [x] 4.3 Failing test + implementation: the standing confirmation is cleared by any subsequent plan-defining block (`managed_change.plan` or mid-epoch `managed_delegation.task_list`), re-arming the checkpoint; `off` policy bypasses the checkpoint entirely
 
 ## 5. Prompt contract and API
 

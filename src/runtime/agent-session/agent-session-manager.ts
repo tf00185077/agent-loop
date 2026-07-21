@@ -199,7 +199,6 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     maxSupervisorQuestions: deps.maxSupervisorQuestions ?? 3,
     maxSupervisorConversationTurns: deps.maxSupervisorConversationTurns ?? 6,
     closedConversationSessions: new Set(),
-    standingConfirmations: new Set(),
     openSpec: deps.openSpecWorkspaceService ?? createOpenSpecWorkspaceService(),
     supervisorCwd: deps.supervisorCwd ?? process.cwd(),
   };
@@ -779,23 +778,38 @@ function renderResolvedConversationObservation(request: GoalInputRequest): strin
 }
 
 /**
- * Record a standing caller confirmation for the goal (durable event + working
- * state). Cleared later by any plan-restatement block.
+ * Record a standing caller confirmation for the goal as a durable event. The
+ * confirmation is a projection over durable events (set here, cleared by a
+ * later `managed_change.plan`), so it survives restart with no in-memory state.
  */
 function recordStandingConfirmation(
   deps: AgentSessionManagerDeps,
-  state: SupervisorState,
+  _state: SupervisorState,
   goalId: string,
   inputRequestId: string,
   resolution: "supervisor_ready" | "caller_forced" | "budget_forced",
 ): void {
-  state.standingConfirmations.add(goalId);
   deps.eventRepo.create({
     goalId,
     type: "agent.progress",
     message: "Standing caller confirmation recorded for the current plan.",
     data: { runtimeEventType: "goal.plan_confirmed", inputRequestId, resolution },
   });
+}
+
+/**
+ * A standing caller confirmation holds when the goal's latest confirmation
+ * event is more recent than its latest epoch-defining `managed_change.plan`.
+ * Derived from durable events, so it is restart-safe.
+ */
+function hasStandingConfirmation(deps: AgentSessionManagerDeps, goalId: string): boolean {
+  let confirmed = false;
+  for (const event of deps.eventRepo.listForGoal(goalId)) {
+    const type = event.data.runtimeEventType;
+    if (type === "goal.plan_confirmed") confirmed = true;
+    else if (type === "supervisor.change_plan") confirmed = false;
+  }
+  return confirmed;
 }
 
 /**
@@ -1018,8 +1032,6 @@ interface SupervisorState {
   /** Sessions closed out by a conversational-turn resolution; their late
    * session.completed must not start a continuation. */
   closedConversationSessions: Set<string>;
-  /** Goals holding a standing caller confirmation (cleared on plan restatement). */
-  standingConfirmations: Set<string>;
   openSpec: OpenSpecWorkspaceService;
   supervisorCwd: string;
 }
@@ -1844,6 +1856,21 @@ async function persistDelegationControlEvent(
         safeSummary: review.summary,
       },
     });
+    return;
+  }
+
+  // Confirm-before-work checkpoint: under a caller-owned `required` policy the
+  // supervisor may not dispatch work without a standing confirmation. The
+  // policy lives on the goal and is unreadable/unwritable by any control block.
+  if (
+    deps.goalRepo.getById(input.goalId)?.confirmationPolicy === "required" &&
+    !hasStandingConfirmation(deps, input.goalId)
+  ) {
+    recordControlRejection(
+      deps, input, data,
+      "This goal requires caller confirmation before work. Emit a managed_goal.propose_plan describing your " +
+        "plan, converse with the caller, and reach managed_goal.ready_to_proceed before requesting any delegation.",
+    );
     return;
   }
 

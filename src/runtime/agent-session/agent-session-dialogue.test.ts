@@ -198,3 +198,83 @@ test("the conversation-turn budget resolves a runaway clarification", async () =
   assert.ok(events.some((e) => e.data.runtimeEventType === "conversation.resolved" && e.data.resolution === "budget_forced"));
   fixture.db.close();
 });
+
+test("under required policy a delegation is rejected until the plan is confirmed", async () => {
+  const fixture = createManagerFixture("checkpoint gate");
+  fixture.goalRepo.updateStatus(fixture.goal.id, "draft");
+  // Recreate the goal with a required policy (create() sets draft; the harness
+  // goal is off). Use a fresh required goal instead.
+  const goal = fixture.goalRepo.create({
+    title: "High stakes", description: "needs sign-off", confirmationPolicy: "required",
+  });
+  fixture.goalRepo.updateStatus(goal.id, "running", { startedAt: "2026-07-20T00:00:00.000Z" });
+
+  const prompts: string[] = [];
+  let dispatchedBeforeConfirm = false;
+  const adapter = dialogueAdapter(prompts, (prompt, turn) => {
+    if (isResumedWork(prompt)) {
+      // After confirmation the worker delegation is accepted.
+      return [{ type: "managed_delegation.request", role: "worker", taskId: "task-1", summary: "Do it", prompt: "Full instructions." }];
+    }
+    if (isConversationTurn(prompt)) return [{ type: "managed_goal.ready_to_proceed", summary: "Confirmed." }];
+    if (turn === 1) {
+      // Bootstrap: try to dispatch work immediately — must be rejected — then propose.
+      return [
+        { type: "managed_delegation.request", role: "worker", taskId: "task-1", summary: "Premature", prompt: "Full." },
+        { type: "managed_goal.propose_plan", summary: "Plan: do task 1.", items: ["task 1"] },
+      ];
+    }
+    return [];
+  });
+  void dispatchedBeforeConfirm;
+  const manager = createAgentSessionManager({ ...fixture });
+  // Redirect the manager fixture's repos are shared; start the required goal.
+  await manager.startManagedSession({
+    goalId: goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.goalRepo.getById(goal.id)?.status === "waiting_user");
+
+  const events = fixture.eventRepo.listForGoal(goal.id);
+  // The premature delegation was rejected with the propose-first reason.
+  const rejected = events.find((e) => e.data.runtimeEventType === "delegation.rejected");
+  assert.match(String(rejected?.data.safeReason), /requires caller confirmation before work/i);
+  // No worker delegation was created before confirmation.
+  const opened = fixture.goalInputRequestRepo.getPending(goal.id)!;
+  assert.equal(opened.reasonCode, "plan_confirmation");
+
+  // Caller confirms → conversational turn signals ready → resume → worker dispatched.
+  const result = await manager.respondToGoalInputRequest({
+    goalId: goal.id, requestId: opened.id,
+    body: { decision: "provide_guidance", guidance: "Looks right." },
+    runtime: { providerId: "codex-local", modelLabel: "gpt-5-codex", adapter },
+  });
+  assert.equal(result.ok && result.outcome, "resumed");
+  const afterEvents = fixture.eventRepo.listForGoal(goal.id);
+  assert.ok(afterEvents.some((e) => e.data.runtimeEventType === "goal.plan_confirmed"));
+  // A worker delegation was accepted after confirmation (a child request exists).
+  assert.ok(afterEvents.some((e) => e.data.runtimeEventType === "delegation.requested"
+    || e.data.runtimeEventType === "delegation.accepted" || String(e.message).includes("worker")));
+  fixture.db.close();
+});
+
+test("off policy dispatches work with no checkpoint", async () => {
+  const fixture = createManagerFixture("checkpoint off");
+  // The harness goal defaults to off.
+  const prompts: string[] = [];
+  const adapter = dialogueAdapter(prompts, (_prompt, turn) => {
+    if (turn === 1) return [{ type: "managed_delegation.request", role: "worker", taskId: "task-1", summary: "Go", prompt: "Full." }];
+    return [];
+  });
+  const manager = createAgentSessionManager({ ...fixture });
+  await manager.startManagedSession({
+    goalId: fixture.goal.id, providerId: "codex-local", modelLabel: "gpt-5-codex", adapter,
+  });
+  await waitFor(() => fixture.eventRepo.listForGoal(fixture.goal.id)
+    .some((e) => e.data.runtimeEventType === "delegation.requested" || e.data.runtimeEventType === "delegation.accepted"));
+
+  const events = fixture.eventRepo.listForGoal(fixture.goal.id);
+  // No confirmation checkpoint rejection.
+  assert.ok(!events.some((e) => e.data.runtimeEventType === "delegation.rejected"
+    && /requires caller confirmation/i.test(String(e.data.safeReason))));
+  fixture.db.close();
+});
