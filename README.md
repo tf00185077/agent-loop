@@ -384,7 +384,11 @@ these items in roughly this order:
 
 The first slice exposes only the endpoints the demo path needs:
 
-- `POST /api/goals` — create a goal.
+- `POST /api/goals` — create a goal. Optional `confirmationPolicy` (`off` |
+  `required`) and `workspace` (an absolute path to an existing directory the
+  supervisor and its workers run in; validated at creation, defaults to the
+  server's working directory). Point a goal at a clean scratch repo to avoid the
+  agent working on the auto-agent repo itself.
 - `GET /api/goals` — list goals.
 - `GET /api/goals/:id` — goal detail snapshot.
 - `POST /api/goals/:id/start` — start the mock runtime for a draft goal.

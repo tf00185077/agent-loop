@@ -27,6 +27,6 @@
 
 ## 5. Verification and archive
 
-- [ ] 5.1 `npm test` and `npm run typecheck` green
-- [ ] 5.2 Live smoke: create a goal via the API with a temp scratch directory as workspace, start it (mock or scripted adapter), and confirm work resolves to that directory (worktree/command cwd) rather than the server cwd; record evidence in `verification.md`
-- [ ] 5.3 Update README (goal creation now takes a workspace); commit per task group throughout
+- [x] 5.1 `npm test` and `npm run typecheck` green
+- [x] 5.2 Live smoke: create a goal via the API with a temp scratch directory as workspace, start it (mock or scripted adapter), and confirm work resolves to that directory (worktree/command cwd) rather than the server cwd; record evidence in `verification.md`
+- [x] 5.3 Update README (goal creation now takes a workspace); commit per task group throughout
