@@ -8,10 +8,10 @@
 
 ## 2. Backend resolution and validation
 
-- [ ] 2.1 Failing tests: create endpoint accepts a valid absolute existing-directory workspace; rejects (400, safe reason) a relative path, a non-existent path, and a path that is a file
-- [ ] 2.2 Implement workspace validation in `goals.ts` create route (absolute + `statSync().isDirectory()`); persist it via `createGoal`
-- [ ] 2.3 Manager: rename `state.supervisorCwd` → `state.defaultWorkspace`; add `resolveGoalWorkspace(deps, state, goalId)` = goal.workspace ?? defaultWorkspace
-- [ ] 2.4 Replace every `state.supervisorCwd` / `input.state.supervisorCwd` read (~30 sites: worktree parentCwd, openspec cwd, command cwd, sanitizeArchiveReason, recovery/reconciliation) with `resolveGoalWorkspace(...)`; keep behavior identical for null-workspace goals
+- [x] 2.1 Failing tests: create endpoint accepts a valid absolute existing-directory workspace; rejects (400, safe reason) a relative path, a non-existent path, and a path that is a file
+- [x] 2.2 Implement workspace validation in `goals.ts` create route (absolute + `statSync().isDirectory()`); persist it via `createGoal`
+- [x] 2.3 Manager: rename `state.supervisorCwd` → `state.defaultWorkspace`; add `resolveGoalWorkspace(deps, state, goalId)` = goal.workspace ?? defaultWorkspace
+- [x] 2.4 Replace every `state.supervisorCwd` / `input.state.supervisorCwd` read (~30 sites: worktree parentCwd, openspec cwd, command cwd, sanitizeArchiveReason, recovery/reconciliation) with `resolveGoalWorkspace(...)`; keep behavior identical for null-workspace goals
 
 ## 3. Runtime tests
 

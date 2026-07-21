@@ -200,13 +200,17 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
     maxSupervisorConversationTurns: deps.maxSupervisorConversationTurns ?? 6,
     closedConversationSessions: new Set(),
     openSpec: deps.openSpecWorkspaceService ?? createOpenSpecWorkspaceService(),
-    supervisorCwd: deps.supervisorCwd ?? process.cwd(),
+    defaultWorkspace: deps.supervisorCwd ?? process.cwd(),
+    goalWorkspaces: new Map(),
   };
 
   const manager: AgentSessionManager = {
     async startManagedSession(input) {
       const goal = deps.goalRepo.getById(input.goalId);
       if (!goal) throw new Error(`Goal not found: ${input.goalId}`);
+      // Warm the immutable per-goal workspace cache once at session start so
+      // every later resolution (including async continuations) is a cache hit.
+      resolveGoalWorkspace(deps, state, goal.id);
 
       const capabilities = await input.adapter.detectCapabilities();
       const run = deps.runRepo.create({
@@ -299,7 +303,7 @@ export function createAgentSessionManager(deps: AgentSessionManagerDeps): AgentS
         const path = record.worktree?.path;
         if (!path) continue;
         try {
-          await worktreeService.removeWorktree({ parentCwd: state.supervisorCwd, path });
+          await worktreeService.removeWorktree({ parentCwd: resolveGoalWorkspace(deps, state, record.goalId), path });
           deps.eventRepo.create({
             goalId: record.goalId,
             type: "agent.progress",
@@ -953,11 +957,11 @@ function reconcileInterruptedGoal(
       return;
     }
     const reconciled = deliveryService.reconcilePendingDelivery({
-      supervisorCwd: state.supervisorCwd,
+      supervisorCwd: resolveGoalWorkspace(deps, state, goalId),
       checkpointHead: delivery.checkpointHead,
     });
     if (reconciled.status === "reset_failed") {
-      const safeReason = sanitizeArchiveReason(reconciled.safeSummary, state.supervisorCwd);
+      const safeReason = sanitizeArchiveReason(reconciled.safeSummary, resolveGoalWorkspace(deps, state, goalId));
       blockPendingDeliveryRecovery(delivery.id, "pending_delivery_reset_failed", safeReason);
       return;
     }
@@ -978,7 +982,7 @@ function reconcileInterruptedGoal(
       tasksReset += 1;
     }
     const path = attempt.worktree?.path;
-    if (path) void worktreeService.removeWorktree({ parentCwd: state.supervisorCwd, path }).catch(() => undefined);
+    if (path) void worktreeService.removeWorktree({ parentCwd: resolveGoalWorkspace(deps, state, goalId), path }).catch(() => undefined);
   }
 
   // 3. Interrupt non-terminal integrations (existing recovery behavior).
@@ -1033,7 +1037,24 @@ interface SupervisorState {
    * session.completed must not start a continuation. */
   closedConversationSessions: Set<string>;
   openSpec: OpenSpecWorkspaceService;
-  supervisorCwd: string;
+  /** Fallback workspace for goals with no per-goal workspace set. */
+  defaultWorkspace: string;
+  /** Resolved per-goal workspace cache (a goal's workspace is immutable). */
+  goalWorkspaces: Map<string, string>;
+}
+
+/**
+ * The directory a goal's supervisor and workers run in: the caller-set
+ * per-goal workspace, or the server default. A goal's workspace is immutable,
+ * so the first resolution is cached and reused — one durable read per goal,
+ * correct across restart and recovery.
+ */
+function resolveGoalWorkspace(deps: AgentSessionManagerDeps, state: SupervisorState, goalId: string): string {
+  const cached = state.goalWorkspaces.get(goalId);
+  if (cached !== undefined) return cached;
+  const resolved = deps.goalRepo.getById(goalId)?.workspace ?? state.defaultWorkspace;
+  state.goalWorkspaces.set(goalId, resolved);
+  return resolved;
 }
 
 function getTaskRegistry(state: SupervisorState, goalId: string): GoalTaskRegistry {
@@ -1107,7 +1128,7 @@ function recordEventPumpFailure(
   error: unknown,
 ): void {
   const finishedAt = new Date().toISOString();
-  const safeReason = sanitizeArchiveReason(safeErrorMessage(error), input.state.supervisorCwd);
+  const safeReason = sanitizeArchiveReason(safeErrorMessage(error), resolveGoalWorkspace(deps, input.state, input.goalId));
   try {
     deps.agentSessionRepo.updateLifecycleState(input.sessionId, "failed");
     deps.runRepo.updateStatus(input.runId, "failed", { finishedAt, error: safeReason });
@@ -1638,7 +1659,7 @@ async function persistDelegationControlEvent(
 
     const scaffolds = orderedChanges.map((change) => {
       const scaffold = input.state.openSpec.scaffoldChange({
-        cwd: input.state.supervisorCwd,
+        cwd: resolveGoalWorkspace(deps, input.state, input.goalId),
         change: {
           id: change.id,
           title: change.title,
@@ -1729,7 +1750,7 @@ async function persistDelegationControlEvent(
       }
     }
     if (!validation.reassessment.goalSatisfied) {
-      const refRejection = resolveReassessmentGapRefs(input, validation.reassessment, changeRegistry);
+      const refRejection = resolveReassessmentGapRefs(deps, input, validation.reassessment, changeRegistry);
       if (refRejection) {
         recordControlRejection(deps, input, data, refRejection);
         return;
@@ -2368,7 +2389,7 @@ async function recordDurableChildOutcome(
     const deliveryService = deps.managedDeliveryService ?? createManagedDeliveryService();
     const prepared = deliveryService.prepareCandidate({
       workerCwd: outcome.worktreePath,
-      supervisorCwd: input.state.supervisorCwd,
+      supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId),
       attestedFiles,
       safeSummary: review.safeSummary,
       activeChangeId: getChangeRegistry(input.state, input.goalId).findChangeByTask(outcome.workerTaskId)?.id ?? null,
@@ -2396,7 +2417,7 @@ async function recordDurableChildOutcome(
       runId: input.runId,
     });
     const delivered = deliveryService.deliverCandidate({
-      supervisorCwd: input.state.supervisorCwd,
+      supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId),
       checkpointHead: prepared.checkpointHead,
       candidateCommitSha: prepared.candidateCommitSha,
       safeSummary: review.safeSummary,
@@ -2458,7 +2479,7 @@ async function startConditionalIntegrationRecovery(
     worktreeService: deps.worktreeService ?? createGitWorktreeService(),
   });
   const prepared = await integrationService.prepare({
-    supervisorCwd: input.state.supervisorCwd,
+    supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId),
     integrationAttemptId: integration.id,
     checkpointHead: integration.checkpointHead,
     originalCandidateCommitSha: integration.originalCandidateCommitSha,
@@ -2475,7 +2496,7 @@ async function startConditionalIntegrationRecovery(
   const cleanup = async () => {
     try {
       await integrationService.cleanup({
-        supervisorCwd: input.state.supervisorCwd,
+        supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId),
         integrationCwd: prepared.worktree.path,
       });
     } catch (error) {
@@ -2633,7 +2654,7 @@ async function startConditionalIntegrationRecovery(
               runId: input.runId,
             });
             const delivered = deliveryService.deliverCandidate?.({
-              supervisorCwd: input.state.supervisorCwd,
+              supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId),
               checkpointHead: integration.checkpointHead,
               candidateCommitSha: candidate.resolvedCandidateCommitSha,
               safeSummary: reviewed.safeSummary,
@@ -2765,7 +2786,7 @@ async function executeAcceptanceChecks(
   if (needsBaseline) {
     try {
       const baseline = await worktreeService.createChildWorktree({
-        parentCwd: input.state.supervisorCwd,
+        parentCwd: resolveGoalWorkspace(deps, input.state, input.goalId),
         childSessionId: `check-baseline-${worker.id}`,
       });
       baselinePath = baseline.path;
@@ -2793,7 +2814,7 @@ async function executeAcceptanceChecks(
       command: check.command,
       exitCode: result.exitCode,
       durationMs: result.durationMs,
-      outputSummary: sanitizeArchiveReason(result.outputSummary || "(no output)", input.state.supervisorCwd).slice(0, 2000),
+      outputSummary: sanitizeArchiveReason(result.outputSummary || "(no output)", resolveGoalWorkspace(deps, input.state, input.goalId)).slice(0, 2000),
       failedToRun: result.failedToRun,
     });
     deps.eventRepo.create({
@@ -2872,7 +2893,7 @@ async function executeAcceptanceChecks(
   } finally {
     if (baselinePath) {
       void worktreeService
-        .removeWorktree({ parentCwd: input.state.supervisorCwd, path: baselinePath })
+        .removeWorktree({ parentCwd: resolveGoalWorkspace(deps, input.state, input.goalId), path: baselinePath })
         .catch(() => undefined);
     }
   }
@@ -3027,7 +3048,7 @@ function rejectInvalidSpecResult(
     return null;
   }
   const validated = input.state.openSpec.validateChange({
-    cwd: outcome.worktreePath ?? input.state.supervisorCwd,
+    cwd: outcome.worktreePath ?? resolveGoalWorkspace(deps, input.state, input.goalId),
     changeId: change.id,
   });
   if (validated.ok) {
@@ -3100,7 +3121,7 @@ function completeSpecMergeAfterValidation(
     return true;
   }
   const validated = input.state.openSpec.validateChange({
-    cwd: input.state.supervisorCwd,
+    cwd: resolveGoalWorkspace(deps, input.state, input.goalId),
     changeId: change.id,
   });
   if (!validated.ok) {
@@ -3230,14 +3251,14 @@ function tryArchiveActiveChange(deps: AgentSessionManagerDeps, input: PersistRun
   let archived;
   try {
     archived = input.state.openSpec.archiveChange({
-      cwd: input.state.supervisorCwd,
+      cwd: resolveGoalWorkspace(deps, input.state, input.goalId),
       changeId: active.id,
       date: new Date().toISOString().slice(0, 10),
     });
   } catch (error) {
     archived = {
       ok: false as const,
-      safeReason: sanitizeArchiveReason(safeErrorMessage(error), input.state.supervisorCwd),
+      safeReason: sanitizeArchiveReason(safeErrorMessage(error), resolveGoalWorkspace(deps, input.state, input.goalId)),
     };
   }
   if (!archived.ok) {
@@ -3288,7 +3309,7 @@ function completeDurableArchive(
     let prepared;
     try {
       prepared = input.state.openSpec.prepareArchive!({
-        cwd: input.state.supervisorCwd,
+        cwd: resolveGoalWorkspace(deps, input.state, input.goalId),
         changeId,
         date,
       });
@@ -3297,7 +3318,7 @@ function completeDurableArchive(
         changeId,
         runtimeEventType: "change.archive_failed",
         blockerType: "archive_operation_failed",
-        safeReason: sanitizeArchiveReason(safeErrorMessage(error), input.state.supervisorCwd),
+        safeReason: sanitizeArchiveReason(safeErrorMessage(error), resolveGoalWorkspace(deps, input.state, input.goalId)),
       });
       return;
     }
@@ -3306,7 +3327,7 @@ function completeDurableArchive(
         changeId,
         runtimeEventType: "change.archive_blocked",
         blockerType: "archive_state_ambiguous",
-        safeReason: sanitizeArchiveReason(prepared.safeReason, input.state.supervisorCwd),
+        safeReason: sanitizeArchiveReason(prepared.safeReason, resolveGoalWorkspace(deps, input.state, input.goalId)),
       });
       return;
     }
@@ -3320,7 +3341,7 @@ function completeDurableArchive(
   let archived;
   try {
     archived = input.state.openSpec.archiveChange({
-      cwd: input.state.supervisorCwd,
+      cwd: resolveGoalWorkspace(deps, input.state, input.goalId),
       changeId,
       date: archiveDateFromTarget(operation.targetPath, changeId),
       sourcePath: operation.sourcePath,
@@ -3329,7 +3350,7 @@ function completeDurableArchive(
       preArchiveHead: operation.preArchiveHead,
     });
   } catch (error) {
-    const safeReason = sanitizeArchiveReason(safeErrorMessage(error), input.state.supervisorCwd);
+    const safeReason = sanitizeArchiveReason(safeErrorMessage(error), resolveGoalWorkspace(deps, input.state, input.goalId));
     archiveRepo.markBlocked(input.goalId, changeId, [safeReason]);
     recordArchiveOutcome(deps, input, {
       changeId,
@@ -3342,7 +3363,7 @@ function completeDurableArchive(
   if (!archived.ok || !archived.archiveCommitSha) {
     const safeReason = sanitizeArchiveReason(
       archived.safeReason ?? "Archive result did not include a verified Git commit.",
-      input.state.supervisorCwd,
+      resolveGoalWorkspace(deps, input.state, input.goalId),
     );
     archiveRepo.markBlocked(input.goalId, changeId, [safeReason]);
     recordArchiveOutcome(deps, input, {
@@ -3367,7 +3388,7 @@ function completeDurableArchive(
       safeSummary: `Change ${changeId} archived by the backend.`,
     });
   } catch (error) {
-    const safeReason = sanitizeArchiveReason(safeErrorMessage(error), input.state.supervisorCwd);
+    const safeReason = sanitizeArchiveReason(safeErrorMessage(error), resolveGoalWorkspace(deps, input.state, input.goalId));
     archiveRepo.markBlocked(input.goalId, changeId, [safeReason]);
     recordArchiveOutcome(deps, input, {
       changeId,
@@ -3421,7 +3442,7 @@ function reconcileDurableArchivesBeforeResume(
     let archived;
     try {
       archived = state.openSpec.archiveChange({
-        cwd: state.supervisorCwd,
+        cwd: resolveGoalWorkspace(deps, state, goalId),
         changeId: operation.changeId,
         date: archiveDateFromTarget(operation.targetPath, operation.changeId),
         sourcePath: operation.sourcePath,
@@ -3433,7 +3454,7 @@ function reconcileDurableArchivesBeforeResume(
     } catch (error) {
       archived = {
         ok: false as const,
-        safeReason: sanitizeArchiveReason(safeErrorMessage(error), state.supervisorCwd),
+        safeReason: sanitizeArchiveReason(safeErrorMessage(error), resolveGoalWorkspace(deps, state, goalId)),
       };
     }
     const archiveSha = archived.archiveCommitSha;
@@ -3445,7 +3466,7 @@ function reconcileDurableArchivesBeforeResume(
           : operation.status === "committed" && operation.archiveCommitSha !== archiveSha
             ? `Committed archive SHA mismatch for change ${operation.changeId}.`
             : "Archive reconciliation did not verify a Git commit.",
-        state.supervisorCwd,
+        resolveGoalWorkspace(deps, state, goalId),
       );
       if (operation.status !== "committed") {
         archiveRepo.markBlocked(goalId, operation.changeId, [safeReason]);
@@ -3516,18 +3537,18 @@ function reconcileDurableArchivesBeforeResume(
   let prepared;
   try {
     prepared = state.openSpec.prepareArchive({
-      cwd: state.supervisorCwd,
+      cwd: resolveGoalWorkspace(deps, state, goalId),
       changeId: active.id,
       date: new Date().toISOString().slice(0, 10),
     });
   } catch (error) {
     prepared = {
       ok: false as const,
-      safeReason: sanitizeArchiveReason(safeErrorMessage(error), state.supervisorCwd),
+      safeReason: sanitizeArchiveReason(safeErrorMessage(error), resolveGoalWorkspace(deps, state, goalId)),
     };
   }
   if (prepared.ok) return true;
-  const safeReason = sanitizeArchiveReason(prepared.safeReason, state.supervisorCwd);
+  const safeReason = sanitizeArchiveReason(prepared.safeReason, resolveGoalWorkspace(deps, state, goalId));
   deps.eventRepo.create({
     goalId,
     type: "agent.progress",
@@ -3667,6 +3688,7 @@ const NEW_SCOPE_REF = /^new:[a-z0-9]+(?:-[a-z0-9]+)*$/;
  * forgotten. Returns a teaching rejection reason, or null when valid.
  */
 function resolveReassessmentGapRefs(
+  deps: AgentSessionManagerDeps,
   input: PersistRuntimeEventInput,
   reassessment: GoalReassessment,
   changeRegistry: GoalChangeRegistry,
@@ -3676,7 +3698,7 @@ function resolveReassessmentGapRefs(
     ...getTaskRegistry(input.state, input.goalId).listTasks().map((task) => task.id),
     ...changeRegistry.listChanges().flatMap((change) => change.taskIds),
   ]);
-  const specsRoot = resolvePath(input.state.supervisorCwd, "openspec", "specs");
+  const specsRoot = resolvePath(resolveGoalWorkspace(deps, input.state, input.goalId), "openspec", "specs");
   const capabilities = new Set(
     existsSync(specsRoot)
       ? readdirSync(specsRoot, { withFileTypes: true })

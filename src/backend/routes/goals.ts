@@ -1,4 +1,6 @@
 import { Router } from "express";
+import { statSync } from "node:fs";
+import { isAbsolute } from "node:path";
 
 import {
   sanitizeStartGoalProviderOverride,
@@ -60,7 +62,7 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
   // POST /api/goals
   router.post("/", (req, res, next) => {
     try {
-      const { title, description, priority, agentType, confirmationPolicy } = req.body as Record<
+      const { title, description, priority, agentType, confirmationPolicy, workspace } = req.body as Record<
         string,
         unknown
       >;
@@ -76,6 +78,11 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
         res.status(400).json({ error: "confirmationPolicy must be 'off' or 'required'" });
         return;
       }
+      const workspaceCheck = validateWorkspace(workspace);
+      if (!workspaceCheck.ok) {
+        res.status(400).json({ error: workspaceCheck.error });
+        return;
+      }
 
       const goal = goalRepo.create({
         title: title.trim(),
@@ -83,6 +90,7 @@ export function createGoalRouter(deps: GoalRouterDeps): Router {
         priority: (priority as never) ?? undefined,
         agentType: (agentType as never) ?? undefined,
         confirmationPolicy: (confirmationPolicy as never) ?? undefined,
+        workspace: workspaceCheck.workspace,
       });
 
       eventRepo.create({
@@ -383,6 +391,36 @@ function parseProviderOverride(value: unknown): ParseProviderOverrideResult {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/**
+ * A per-goal workspace must be an absolute path to an existing directory. This
+ * runs at the create boundary (deterministic validation, not prompt); omitting
+ * it keeps the server default.
+ */
+function validateWorkspace(
+  value: unknown,
+): { ok: true; workspace: string | null } | { ok: false; error: string } {
+  if (value === undefined || value === null || value === "") {
+    return { ok: true, workspace: null };
+  }
+  if (typeof value !== "string") {
+    return { ok: false, error: "workspace must be a string path" };
+  }
+  const trimmed = value.trim();
+  if (!isAbsolute(trimmed)) {
+    return { ok: false, error: "workspace must be an absolute directory path" };
+  }
+  let stat;
+  try {
+    stat = statSync(trimmed);
+  } catch {
+    return { ok: false, error: `workspace directory does not exist: ${trimmed}` };
+  }
+  if (!stat.isDirectory()) {
+    return { ok: false, error: `workspace is not a directory: ${trimmed}` };
+  }
+  return { ok: true, workspace: trimmed };
 }
 
 function stringValue(value: unknown): string {

@@ -1,4 +1,7 @@
 import { createServer } from "node:http";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -220,6 +223,53 @@ test("a conversation request exposes its thread and accepts a guidance reply", a
     assert.equal(respond.status, 200);
     const outcome = ((await respond.json()) as { outcome: string }).outcome;
     assert.ok(["resumed", "conversation_continued"].includes(outcome));
+  } finally {
+    await new Promise<void>((res, rej) => server.close((err) => (err ? rej(err) : res())));
+    fixture.db.close();
+  }
+});
+
+test("goal creation validates the workspace", async () => {
+  const fixture = createManagerFixture("workspace validation");
+  const app = express();
+  app.use(express.json());
+  app.use("/api/goals", createGoalRouter({
+    goalRepo: fixture.goalRepo, eventRepo: fixture.eventRepo, eventBus: createEventBus(),
+    agentSessionRepo: fixture.agentSessionRepo, goalInputRequestRepo: fixture.goalInputRequestRepo,
+    runtime: { run: async () => undefined },
+  }));
+  const server = createServer(app);
+  const url = await new Promise<string>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
+  });
+  const create = (body: Record<string, unknown>) => fetch(`${url}/api/goals`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  try {
+    // Valid: an existing absolute directory (the OS temp dir).
+    const okRes = await create({ title: "ws goal", description: "d", workspace: tmpdir() });
+    assert.equal(okRes.status, 201);
+    assert.equal((await okRes.json() as { workspace: string }).workspace, tmpdir());
+
+    // Omitted → null (server default).
+    const noneRes = await create({ title: "no ws", description: "d" });
+    assert.equal((await noneRes.json() as { workspace: string | null }).workspace, null);
+
+    for (const [ws, pat] of [
+      ["relative/path", /absolute/i],
+      [join(tmpdir(), "does-not-exist-" + Date.now()), /does not exist/i],
+    ] as const) {
+      const bad = await create({ title: "bad", description: "d", workspace: ws });
+      assert.equal(bad.status, 400, `expected 400 for ${ws}`);
+      assert.match((await bad.json() as { error: string }).error, pat);
+    }
+
+    // A path that is a file, not a directory.
+    const filePath = join(mkdtempSync(join(tmpdir(), "ws-file-")), "afile.txt");
+    writeFileSync(filePath, "x");
+    const fileRes = await create({ title: "file", description: "d", workspace: filePath });
+    assert.equal(fileRes.status, 400);
+    assert.match((await fileRes.json() as { error: string }).error, /not a directory/i);
   } finally {
     await new Promise<void>((res, rej) => server.close((err) => (err ? rej(err) : res())));
     fixture.db.close();
