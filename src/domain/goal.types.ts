@@ -17,6 +17,12 @@ export interface Goal {
   priority: GoalPriority;
   agentType: AgentType;
   confirmationPolicy: ConfirmationPolicy;
+  /**
+   * Caller-owned working directory the supervisor and its workers run in.
+   * Null means "use the server default workspace". Never set by any control
+   * block.
+   */
+  workspace: string | null;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
@@ -31,6 +37,7 @@ export interface CreateGoalInput {
   priority?: GoalPriority;
   agentType?: AgentType;
   confirmationPolicy?: ConfirmationPolicy;
+  workspace?: string | null;
 }
 
 export interface UpdateGoalInput {

@@ -57,6 +57,7 @@ test("initializes lifecycle and provider settings tables", () => {
     "priority",
     "agent_type",
     "confirmation_policy",
+    "workspace",
     "created_at",
     "updated_at",
     "started_at",
@@ -314,7 +315,7 @@ test("backfills non-terminal historical task contracts fail-closed", () => {
   const dbPath = join(mkdtempSync(join(tmpdir(), "auto-agent-db-")), "backfill.sqlite");
   let db = openDatabase({ path: dbPath });
   db.exec(`
-    INSERT INTO goals VALUES ('live', 'Live', 'Historical', 'running', 'normal', 'managed', 'off', 't0', 't0', 't0', NULL);
+    INSERT INTO goals VALUES ('live', 'Live', 'Historical', 'running', 'normal', 'managed', 'off', NULL, 't0', 't0', 't0', NULL);
     INSERT INTO runs VALUES ('run-live', 'live', 'running', 'mock', 'mock', 't0', NULL, NULL);
     INSERT INTO agent_sessions VALUES (
       'session-live', 'live', 'run-live', 'mock', 'mock', 'completed',
@@ -389,7 +390,7 @@ test("records an initialized clean ledger without changing its authoritative row
   const dbPath = join(mkdtempSync(join(tmpdir(), "auto-agent-db-")), "initialized-clean.sqlite");
   let db = openDatabase({ path: dbPath });
   db.exec(`
-    INSERT INTO goals VALUES ('clean-goal', 'Clean', 'Initialized', 'running', 'normal', 'managed', 'off', 't0', 't0', 't0', NULL);
+    INSERT INTO goals VALUES ('clean-goal', 'Clean', 'Initialized', 'running', 'normal', 'managed', 'off', NULL, 't0', 't0', 't0', NULL);
     INSERT INTO managed_tasks VALUES (
       'clean-task-db-id', 'clean-goal', 'clean-task', NULL, NULL, 'Clean task', 'registered', 0, 0, '[]', NULL, 't0', 't0'
     );
@@ -429,7 +430,7 @@ test("migration preserves completed, failed, cancelled, and blocked Goal lifecyc
   let db = openDatabase({ path: dbPath });
   for (const status of ["completed", "failed", "cancelled", "blocked"]) {
     db.prepare(`
-      INSERT INTO goals VALUES (?, ?, 'Terminal', ?, 'normal', 'managed', 'off', 't0', 't9', 't1', 't9')
+      INSERT INTO goals VALUES (?, ?, 'Terminal', ?, 'normal', 'managed', 'off', NULL, 't0', 't9', 't1', 't9')
     `).run(`goal-${status}`, status, status);
     db.prepare("INSERT INTO runs VALUES (?, ?, ?, 'mock', 'mock', 't1', 't9', ?)")
       .run(`run-${status}`, `goal-${status}`, status === "completed" ? "completed" : "failed", status);
@@ -536,8 +537,8 @@ test("keeps complete frozen-contract enforcement identity beyond bounded migrati
   let db = openDatabase({ path });
   db.prepare(`
     INSERT INTO goals (
-      id, title, description, status, priority, agent_type, confirmation_policy, created_at, updated_at, started_at, completed_at
-    ) VALUES (?, 'Bounded diagnostic', 'Complete enforcement identity', 'running', 'normal', 'managed', 'off',
+      id, title, description, status, priority, agent_type, confirmation_policy, workspace, created_at, updated_at, started_at, completed_at
+    ) VALUES (?, 'Bounded diagnostic', 'Complete enforcement identity', 'running', 'normal', 'managed', 'off', NULL,
       't0', 't0', 't0', NULL)
   `).run(goalId);
   const insertTask = db.prepare(`
@@ -761,7 +762,7 @@ function createFrozenContractFixture(options: { blocked?: boolean; ambiguous?: b
   const db = openDatabase({ path });
   db.exec(`
     INSERT INTO goals VALUES (
-      'repair-goal', 'Repair', 'Historical', '${options.blocked ? "blocked" : "running"}', 'normal', 'managed', 'off',
+      'repair-goal', 'Repair', 'Historical', '${options.blocked ? "blocked" : "running"}', 'normal', 'managed', 'off', NULL,
       't0', 't9', 't1', ${options.blocked ? "'t9'" : "NULL"}
     );
     INSERT INTO runs VALUES ('repair-run', 'repair-goal', '${options.blocked ? "failed" : "running"}', 'mock', 'mock', 't1', ${options.blocked ? "'t9'" : "NULL"}, ${options.blocked ? "'continuations exhausted'" : "NULL"});
@@ -843,7 +844,7 @@ function createSplitLineageMigrationFixture(): { path: string } {
   const path = join(mkdtempSync(join(tmpdir(), "auto-agent-db-lineage-repair-")), "repair.sqlite");
   const db = openDatabase({ path });
   const insertGoal = db.prepare(`
-    INSERT INTO goals VALUES (?, ?, 'Historical lineage', ?, 'normal', 'managed', 'off', 't0', 't9', 't1', ?)
+    INSERT INTO goals VALUES (?, ?, 'Historical lineage', ?, 'normal', 'managed', 'off', NULL, 't0', 't9', 't1', ?)
   `);
   const insertTask = db.prepare(`
     INSERT INTO managed_tasks (

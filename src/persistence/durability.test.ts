@@ -25,6 +25,7 @@ test("created goals and events survive database reopen", () => {
       priority: "high",
       agentType: "general",
       confirmationPolicy: "off",
+      workspace: null,
     });
     const run = runs.create({ goalId: goal.id, provider: "mock", model: "mock-agent-v1" });
     const step = steps.create({

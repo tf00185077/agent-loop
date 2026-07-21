@@ -38,6 +38,7 @@ export function createGoalRepository(
         priority: input.priority ?? "normal",
         agentType: input.agentType ?? "general",
         confirmationPolicy: input.confirmationPolicy ?? "off",
+        workspace: input.workspace ?? null,
         createdAt: now,
         updatedAt: now,
         startedAt: null,
@@ -53,6 +54,7 @@ export function createGoalRepository(
           priority,
           agent_type,
           confirmation_policy,
+          workspace,
           created_at,
           updated_at,
           started_at,
@@ -66,6 +68,7 @@ export function createGoalRepository(
           @priority,
           @agentType,
           @confirmationPolicy,
+          @workspace,
           @createdAt,
           @updatedAt,
           @startedAt,
@@ -127,6 +130,8 @@ function mapGoalRow(row: unknown): Goal {
     agentType: value.agent_type as Goal["agentType"],
     // Default off for rows created before the column existed.
     confirmationPolicy: (value.confirmation_policy as Goal["confirmationPolicy"]) ?? "off",
+    // Null resolves to the server default workspace at run time.
+    workspace: value.workspace ?? null,
     createdAt: value.created_at!,
     updatedAt: value.updated_at!,
     startedAt: value.started_at,

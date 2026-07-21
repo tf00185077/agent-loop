@@ -68,6 +68,7 @@ function initializeSchema(
       priority TEXT NOT NULL,
       agent_type TEXT NOT NULL,
       confirmation_policy TEXT,
+      workspace TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       started_at TEXT,
@@ -381,6 +382,8 @@ function initializeSchema(
   ensureColumn(db, "provider_settings", "role_assignments", "TEXT");
   // Caller-owned confirmation policy; default off keeps existing goals autonomous.
   ensureColumn(db, "goals", "confirmation_policy", "TEXT");
+  // Caller-owned per-goal workspace; null resolves to the server default.
+  ensureColumn(db, "goals", "workspace", "TEXT");
   ensureColumn(db, "managed_task_reviews", "integration_attempt_id", "TEXT");
   ensureColumn(db, "managed_task_criteria", "check_json", "TEXT");
   ensureColumn(db, "managed_task_reviews", "reviewed_candidate_commit_sha", "TEXT");

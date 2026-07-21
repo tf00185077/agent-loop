@@ -60,6 +60,25 @@ test("confirmation policy defaults to off and honors an explicit required opt-in
   db.close();
 });
 
+test("workspace defaults to null and round-trips an explicit path", () => {
+  const db = openDatabase({ path: testDatabasePath() });
+  const goals = createGoalRepository(db);
+
+  const defaulted = goals.create({ title: "Default ws", description: "no workspace" });
+  assert.equal(defaulted.workspace, null);
+  assert.equal(goals.getById(defaulted.id)?.workspace, null);
+
+  const scoped = goals.create({
+    title: "Scoped ws",
+    description: "explicit workspace",
+    workspace: "C:\\Users\\dev\\my scratch repo",
+  });
+  assert.equal(scoped.workspace, "C:\\Users\\dev\\my scratch repo");
+  assert.equal(goals.getById(scoped.id)?.workspace, "C:\\Users\\dev\\my scratch repo");
+
+  db.close();
+});
+
 test("updates goal lifecycle status and timestamps", () => {
   const db = openDatabase({ path: testDatabasePath() });
   // Deterministic, strictly increasing clock so updatedAt is guaranteed to

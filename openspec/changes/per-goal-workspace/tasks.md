@@ -2,9 +2,9 @@
 
 ## 1. Domain and persistence
 
-- [ ] 1.1 Add `workspace: string | null` to `Goal` and `workspace?: string` to `CreateGoalInput`; export unchanged (TDD: type/contract)
-- [ ] 1.2 Add nullable `workspace` column to the `goals` table (CREATE + additive `ensureColumn` migration); repo create/read round-trip; column-order + migration tests
-- [ ] 1.3 Repository test: a goal created without a workspace reads back null; with one reads back the stored path
+- [x] 1.1 Add `workspace: string | null` to `Goal` and `workspace?: string` to `CreateGoalInput`; export unchanged (TDD: type/contract)
+- [x] 1.2 Add nullable `workspace` column to the `goals` table (CREATE + additive `ensureColumn` migration); repo create/read round-trip; column-order + migration tests
+- [x] 1.3 Repository test: a goal created without a workspace reads back null; with one reads back the stored path
 
 ## 2. Backend resolution and validation
 

@@ -171,6 +171,7 @@ function goal(overrides: Partial<Goal> = {}): Goal {
   return {
     id: "goal-1", title: "Goal", description: "", status: "running", priority: "normal", agentType: "general",
  confirmationPolicy: "off",
+ workspace: null,
     createdAt: "2026-07-14T01:00:00Z", updatedAt: "2026-07-14T01:01:00Z", startedAt: "2026-07-14T01:00:00Z", completedAt: null,
     ...overrides,
   };

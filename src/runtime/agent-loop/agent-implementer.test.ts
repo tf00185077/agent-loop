@@ -13,6 +13,7 @@ const goal = {
   priority: "normal",
   agentType: "general",
   confirmationPolicy: "off",
+  workspace: null,
   createdAt: "2026-06-22T00:00:00.000Z",
   updatedAt: "2026-06-22T00:00:00.000Z",
   startedAt: "2026-06-22T00:00:00.000Z",
