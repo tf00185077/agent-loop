@@ -2067,7 +2067,7 @@ async function persistDelegationControlEvent(
   const childAgent = await resolveChildAgent(deps, input, validation.request.role);
 
   try {
-    await createDelegationCoordinator({ ...deps, activeHandles: input.activeHandles }).acceptAndStartWorker({
+    await createDelegationCoordinator({ ...deps, supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId), activeHandles: input.activeHandles }).acceptAndStartWorker({
       parentSessionId: input.sessionId,
       providerId: childAgent.providerId,
       modelLabel: childAgent.modelLabel,
@@ -2537,7 +2537,7 @@ async function startConditionalIntegrationRecovery(
 
   const integratorAgent = await resolveChildAgent(deps, input, "integrator");
   try {
-    await createDelegationCoordinator({ ...deps, activeHandles: input.activeHandles }).acceptAndStartWorker({
+    await createDelegationCoordinator({ ...deps, supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId), activeHandles: input.activeHandles }).acceptAndStartWorker({
       parentSessionId: judgeOutcome.parentSessionId,
       providerId: integratorAgent.providerId,
       modelLabel: integratorAgent.modelLabel,
@@ -2588,7 +2588,7 @@ async function startConditionalIntegrationRecovery(
         });
 
         const judgeAgent = await resolveChildAgent(deps, input, "review_merge");
-        await createDelegationCoordinator({ ...deps, activeHandles: input.activeHandles }).acceptAndStartWorker({
+        await createDelegationCoordinator({ ...deps, supervisorCwd: resolveGoalWorkspace(deps, input.state, input.goalId), activeHandles: input.activeHandles }).acceptAndStartWorker({
           parentSessionId: judgeOutcome.parentSessionId,
           providerId: judgeAgent.providerId,
           modelLabel: judgeAgent.modelLabel,

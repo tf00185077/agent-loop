@@ -15,9 +15,9 @@
 
 ## 3. Runtime tests
 
-- [ ] 3.1 Failing test: a goal with a workspace creates its worker worktree with that workspace as `parentCwd` (assert via the memory worktree service), and a null-workspace goal uses the default — covers the resolution swap
-- [ ] 3.2 Failing test: recovery/reconciliation of a workspace goal resolves to the same workspace (session.goalId path)
-- [ ] 3.3 Windows path with spaces round-trips through create → persist → resolve without corruption
+- [x] 3.1 Failing test: a goal with a workspace creates its worker worktree with that workspace as `parentCwd` (assert via the memory worktree service), and a null-workspace goal uses the default — covers the resolution swap
+- [x] 3.2 Failing test: recovery/reconciliation of a workspace goal resolves to the same workspace (session.goalId path)
+- [x] 3.3 Windows path with spaces round-trips through create → persist → resolve without corruption
 
 ## 4. Dashboard
 
