@@ -2,7 +2,7 @@
 
 ## MODIFIED Requirements
 
-### Requirement: Clean supervisor workspace and checkpoint
+### Requirement: Supervisor workspace checkpoint
 The system SHALL require a clean supervisor workspace and checkpoint before review merge applies changes. In judging cleanliness the system SHALL disregard changes to the runtime's own database file and its `-wal`/`-shm`/`-journal` sidecars, so a workspace whose only pending changes are those files is clean; any other uncommitted or untracked path SHALL still make the workspace dirty.
 
 #### Scenario: Workspace is clean

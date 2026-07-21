@@ -31,7 +31,7 @@ The system SHALL use the existing `review_merge` transport role as an independen
 - **THEN** the backend records the worker attempt without automatically accepting the task or treating the worker's claims as a judge decision
 
 ### Requirement: Supervisor workspace checkpoint
-The system SHALL require a clean supervisor workspace and checkpoint before review merge applies changes.
+The system SHALL require a clean supervisor workspace and checkpoint before review merge applies changes. In judging cleanliness the system SHALL disregard changes to the runtime's own database file and its `-wal`/`-shm`/`-journal` sidecars, so a workspace whose only pending changes are those files is clean; any other uncommitted or untracked path SHALL still make the workspace dirty.
 
 #### Scenario: Workspace is clean
 - **WHEN** review merge starts and the supervisor workspace is clean
@@ -40,6 +40,10 @@ The system SHALL require a clean supervisor workspace and checkpoint before revi
 #### Scenario: Workspace is dirty
 - **WHEN** review merge starts and the supervisor workspace has uncommitted or untracked changes outside the accepted checkpoint policy
 - **THEN** the backend rejects or fails review merge before applying worker changes
+
+#### Scenario: Only the runtime database changed
+- **WHEN** review merge starts and the supervisor workspace's only pending changes are the runtime database file and its sidecars
+- **THEN** the backend treats the workspace as clean, records the checkpoint, and the dirty safe reason (if any later) never lists those files
 
 ### Requirement: Merge outcome validation
 The system SHALL derive delivery outcomes from backend-controlled apply, conditional integration recovery, validation, commit, and rollback operations and SHALL persist `committed`, `rejected`, `conflict`, `integration_failed`, `test_failed_reverted`, `revert_failed`, `failed`, or `verification_failed` as typed outcomes.
