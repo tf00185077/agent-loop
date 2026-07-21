@@ -33,9 +33,9 @@
 
 ## 6. Dashboard
 
-- [ ] 6.1 Render the input request as a thread (supervisor/caller messages) with a persistent reply box while `phase !== resolved`
-- [ ] 6.2 Affordances by reason: confirm/revise + proceed + abandon for `plan_confirmation`, reply + proceed + abandon for `supervisor_question`; component tests following the existing rendering test
-- [ ] 6.3 `waiting_user` badge already exists — verify the thread panel replaces the single-summary panel without regressing budget-escalation rendering
+- [x] 6.1 Render the input request as a thread (supervisor/caller messages) with a persistent reply box while `phase !== resolved`
+- [x] 6.2 Affordances by reason: confirm/revise + proceed + abandon for `plan_confirmation`, reply + proceed + abandon for `supervisor_question`; component tests following the existing rendering test
+- [x] 6.3 `waiting_user` badge already exists — verify the thread panel replaces the single-summary panel without regressing budget-escalation rendering
 
 ## 7. Verification and archive
 

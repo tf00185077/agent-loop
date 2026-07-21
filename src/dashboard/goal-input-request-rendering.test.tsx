@@ -101,7 +101,8 @@ test("a supervisor question renders its text with guidance and abandon only", ()
   assert.match(html, /The supervisor is asking a question/);
   assert.match(html, /Should the export default to CSV or JSON\?/);
   assert.doesNotMatch(html, /Extend budget/);
-  assert.match(html, /Send guidance/);
+  // A supervisor question is a conversation, so the reply affordance is labelled accordingly.
+  assert.match(html, /Send reply/);
   assert.match(html, /Abandon goal/);
 });
 
@@ -111,4 +112,55 @@ test("a standing-resolution notice renders without a pending request", () => {
   );
   assert.match(html, /Already resolved: accepted\./);
   assert.doesNotMatch(html, /Abandon goal/);
+});
+
+test("a plan-confirmation conversation renders the thread with a reply box and proceed", () => {
+  const html = renderToStaticMarkup(
+    <GoalInputRequestPanel
+      request={{
+        ...inputRequest({
+          budgetName: null,
+          budgetValue: null,
+          evidence: [],
+          remainingGaps: [],
+          allowedDecisions: ["provide_guidance", "proceed", "abandon"],
+          thread: [
+            { role: "supervisor", text: "Plan: ingest then report.", at: "2026-07-20T00:00:00.000Z" },
+            { role: "caller", text: "Report weekly please.", at: "2026-07-20T00:01:00.000Z" },
+          ],
+          phase: "awaiting_caller",
+        }),
+        reasonCode: "plan_confirmation",
+        safeSummary: "Plan: ingest then report.",
+      }}
+      notice={null}
+    />,
+  );
+
+  assert.match(html, /The supervisor wants you to confirm its plan/);
+  assert.match(html, /Plan: ingest then report\./);
+  assert.match(html, /Report weekly please\./);
+  assert.match(html, /Supervisor/);
+  assert.match(html, /Send reply/);
+  assert.match(html, /Proceed now/);
+  assert.match(html, /Abandon goal/);
+  assert.doesNotMatch(html, /Extend budget/);
+});
+
+test("an awaiting-supervisor phase shows the supervisor is responding", () => {
+  const html = renderToStaticMarkup(
+    <GoalInputRequestPanel
+      request={{
+        ...inputRequest({
+          budgetName: null, budgetValue: null, evidence: [], remainingGaps: [],
+          allowedDecisions: ["provide_guidance", "proceed", "abandon"],
+          thread: [{ role: "supervisor", text: "Q?", at: "t0" }, { role: "caller", text: "A.", at: "t1" }],
+          phase: "awaiting_supervisor",
+        }),
+        reasonCode: "supervisor_question",
+      }}
+      notice={null}
+    />,
+  );
+  assert.match(html, /supervisor is responding/i);
 });

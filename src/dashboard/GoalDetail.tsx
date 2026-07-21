@@ -409,11 +409,16 @@ function PlanningEpochBoard({ epochs }: { epochs: PlanningEpochReadModel[] }) {
   );
 }
 
+function isConversationReason(reason: GoalInputRequestView["reasonCode"]): boolean {
+  return reason === "supervisor_question" || reason === "plan_confirmation";
+}
+
 const INPUT_REASON_LABELS: Record<GoalInputRequestView["reasonCode"], string> = {
   epoch_budget_exhausted: "Planning-epoch budget exhausted",
   reassessment_circuit_breaker: "Reassessment loop is not converging",
   continuation_exhausted: "Supervisor continuation budget exhausted",
   supervisor_question: "The supervisor is asking a question",
+  plan_confirmation: "The supervisor wants you to confirm its plan",
 };
 
 export function GoalInputRequestPanel({
@@ -434,8 +439,32 @@ export function GoalInputRequestPanel({
       {request && (
         <>
           <div style={{ fontWeight: 600 }}>{INPUT_REASON_LABELS[request.reasonCode]}</div>
-          <p style={{ margin: "6px 0" }}>{request.safeSummary}</p>
-          {request.payload.evidence.length > 0 && (
+          {(request.payload.thread?.length ?? 0) > 0 ? (
+            <div style={{ margin: "8px 0", display: "flex", flexDirection: "column", gap: 4 }}>
+              {request.payload.thread!.map((message, index) => (
+                <div
+                  key={`${index}:${message.at}`}
+                  style={{
+                    alignSelf: message.role === "caller" ? "flex-end" : "flex-start",
+                    maxWidth: "85%",
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    fontSize: 13,
+                    background: message.role === "caller" ? "#e3f2fd" : "#f5f5f5",
+                  }}
+                >
+                  <div style={{ color: "#888", fontSize: 11 }}>{message.role === "caller" ? "You" : "Supervisor"}</div>
+                  {message.text}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ margin: "6px 0" }}>{request.safeSummary}</p>
+          )}
+          {request.payload.phase === "awaiting_supervisor" && (
+            <p style={{ margin: "4px 0", color: "#8a5a00", fontSize: 13 }}>The supervisor is responding…</p>
+          )}
+          {request.payload.evidence.length > 0 && (request.payload.thread?.length ?? 0) === 0 && (
             <ul style={{ margin: "4px 0 8px 18px", fontSize: 13 }}>
               {request.payload.evidence.map((entry) => (
                 <li key={entry}>{entry}</li>
@@ -480,7 +509,7 @@ export function GoalInputRequestPanel({
                 <textarea
                   value={guidance}
                   onChange={(event) => setGuidance(event.target.value)}
-                  placeholder="Guidance for the resumed supervisor"
+                  placeholder={isConversationReason(request.reasonCode) ? "Reply to the supervisor" : "Guidance for the resumed supervisor"}
                   rows={2}
                   style={{ width: "100%", maxWidth: 480, display: "block", marginBottom: 4 }}
                   aria-label="Guidance"
@@ -491,7 +520,18 @@ export function GoalInputRequestPanel({
                   disabled={guidance.trim().length === 0}
                   onClick={() => onRespond?.({ decision: "provide_guidance", guidance: guidance.trim() })}
                 >
-                  Send guidance
+                  {isConversationReason(request.reasonCode) ? "Send reply" : "Send guidance"}
+                </button>
+              </div>
+            )}
+            {request.payload.allowedDecisions.includes("proceed") && (
+              <div>
+                <button
+                  type="button"
+                  style={{ padding: "4px 10px" }}
+                  onClick={() => onRespond?.({ decision: "proceed" })}
+                >
+                  Proceed now
                 </button>
               </div>
             )}

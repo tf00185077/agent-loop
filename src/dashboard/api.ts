@@ -305,7 +305,9 @@ export interface GoalInputRequestView {
     budgetValue: number | null;
     evidence: string[];
     remainingGaps: Array<{ refs: string[]; summary: string }>;
-    allowedDecisions: Array<"extend_budget" | "provide_guidance" | "abandon">;
+    allowedDecisions: Array<"extend_budget" | "provide_guidance" | "proceed" | "abandon">;
+    thread?: Array<{ role: "supervisor" | "caller"; text: string; at: string }>;
+    phase?: "awaiting_caller" | "awaiting_supervisor" | "resolved";
   };
   status: "pending" | "accepted" | "abandoned" | "cancelled";
   createdAt: string;
@@ -315,10 +317,11 @@ export interface GoalInputRequestView {
 export type RespondToGoalInputBody =
   | { decision: "extend_budget"; extension: number }
   | { decision: "provide_guidance"; guidance: string }
+  | { decision: "proceed"; note?: string }
   | { decision: "abandon"; reason?: string };
 
 export type RespondToGoalInputResult =
-  | { ok: true; outcome: "resumed" | "resume_deferred" | "abandoned" }
+  | { ok: true; outcome: "resumed" | "resume_deferred" | "abandoned" | "conversation_continued" }
   | { ok: false; error: string; standing?: GoalInputRequestView };
 
 export async function getGoalInputRequest(goalId: string): Promise<GoalInputRequestView | null> {
@@ -340,7 +343,10 @@ export async function respondToGoalInputRequest(
   });
   const payload = (await res.json()) as Record<string, unknown>;
   if (res.ok) {
-    return { ok: true, outcome: payload.outcome as "resumed" | "resume_deferred" | "abandoned" };
+    return {
+      ok: true,
+      outcome: payload.outcome as "resumed" | "resume_deferred" | "abandoned" | "conversation_continued",
+    };
   }
   return {
     ok: false,
